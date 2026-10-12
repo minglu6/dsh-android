@@ -46,12 +46,19 @@ echo "building pocket-ffi → $OUT (${ABIS[*]}) with NDK $ANDROID_NDK_HOME"
   cargo ndk "${NDK_ARGS[@]}" -o "$OUT" build --release -p pocket-ffi
 )
 
-# cargo-ndk writes libpocket_iroh.so under each ABI dir.
+# cargo-ndk may also copy hashed cdylibs from dependency crates (e.g. libiroh-*.so).
+# libpocket_iroh.so is self-contained (only needs libc/libm/libdl) — drop the extras.
+STRIP="$(find "${ANDROID_NDK_HOME}" -name 'llvm-strip' -type f 2>/dev/null | head -1 || true)"
 for abi in "${ABIS[@]}"; do
-  so="$OUT/$abi/libpocket_iroh.so"
+  dir="$OUT/$abi"
+  so="$dir/libpocket_iroh.so"
   if [[ ! -f "$so" ]]; then
     echo "missing $so" >&2
     exit 1
+  fi
+  find "$dir" -type f -name '*.so' ! -name 'libpocket_iroh.so' -delete
+  if [[ -n "$STRIP" ]]; then
+    "$STRIP" --strip-unneeded "$so"
   fi
   ls -lh "$so"
 done
