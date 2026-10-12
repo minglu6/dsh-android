@@ -77,6 +77,12 @@ class ScreenshotTest {
 
     @Test fun s01_newChat() = show("01-new-chat") { ChatRoot(onMenu = {}) }
     @Test fun s02_chat() { Pocket.chat.value = chatState(); show("02-chat") { ChatRoot(onMenu = {}) } }
+    @Test fun s13_firstMessage() {
+        Pocket.sessions.value = emptyList()
+        Pocket.chat.value = ChatState("s9", title = null, running = true, loaded = true, runStartedAt = System.currentTimeMillis() - 11_000,
+            usage = Usage(1, 0, 0, 0, 0), items = listOf(Item.User("local-0", "你好", pending = true)))
+        show("13-first-message") { ChatRoot(onMenu = {}) }
+    }
     @Test fun s03_approval() {
         Pocket.chat.value = chatState()
         Pocket.approvals.value = listOf(Approval("a1", "s1", "bash", "c4", "escalate sandbox"))

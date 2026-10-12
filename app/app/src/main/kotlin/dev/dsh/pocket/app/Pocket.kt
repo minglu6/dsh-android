@@ -115,7 +115,8 @@ object Pocket {
                 "added" -> SessionSummary.parse(m["summary"])?.let { s -> sessions.value = listOf(s) + sessions.value.filter { it.sessionId != s.sessionId } }
                 "removed" -> sessions.value = sessions.value.filter { it.sessionId != m["sessionId"].str() }
                 "status" -> { val id = m["sessionId"].str(); val r = m["running"].bool() ?: false
-                    sessions.value = sessions.value.map { if (it.sessionId == id) it.copy(running = r) else it } }
+                    sessions.value = sessions.value.map { if (it.sessionId == id) it.copy(running = r) else it }
+                    client?.let { c -> main.launch { refreshTitles(c); if (!r) { delay(4000); refreshTitles(c) } } } }
                 "activity" -> { val id = m["sessionId"].str(); val t = m["updatedAt"].long() ?: 0
                     sessions.value = sessions.value.map { if (it.sessionId == id) it.copy(updatedAt = t) else it }.sortedByDescending { it.updatedAt } }
                 "error" -> m["message"].str()?.let { errors.tryEmit(it) }
@@ -160,14 +161,26 @@ object Pocket {
             pendingModel?.let { m -> c.selectModel(id, m.provider, m.model, m.effort); model.value = model.value + (id to m) }
             pendingPermission?.let { p -> if ("permissions.set" in ops.value) c.setPermission(id, p)?.let { permission.value = permission.value + (id to it) } }
             openSession(id).join()
-            if (text.isNotBlank()) c.prompt(id, text, "queue")
+            if (text.isNotBlank()) { echo(text); c.prompt(id, text, "queue") }
         } catch (e: Exception) { errors.tryEmit(e.message ?: e.toString()) }
     }
 
     fun send(text: String) = main.launch {
         val c = client ?: return@launch; val st = chat.value ?: return@launch
         val mode = if (st.running) prefs.busySend.mode else "queue"
+        echo(text)
         runCatching { c.prompt(st.sessionId, text, mode) }.onFailure { errors.tryEmit(it.message ?: "发送失败") }
+    }
+
+    private fun echo(text: String) {
+        reducer.echo(text)
+        chat.value?.let { chat.value = it.copy(items = reducer.items()) }
+    }
+
+    /** dsh titles a session asynchronously after the first turn; the list is the source of truth. */
+    private suspend fun refreshTitles(c: PocketClient) = runCatching {
+        sessions.value = c.listSessions().sortedByDescending { it.updatedAt }
+        chat.value?.let { st -> sessions.value.firstOrNull { it.sessionId == st.sessionId }?.title?.let { t -> chat.value = st.copy(title = t) } }
     }
 
     fun cancel() = main.launch { val st = chat.value ?: return@launch; runCatching { client?.cancel(st.sessionId) } }

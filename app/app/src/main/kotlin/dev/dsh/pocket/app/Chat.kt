@@ -65,7 +65,7 @@ fun ChatRoot(onMenu: () -> Unit) {
     val workspaces = sessions.mapNotNull { it.cwd }.distinct()
 
     Column(Modifier.fillMaxSize().background(Color.White).systemBarsPadding().imePadding()) {
-        TopBar(chat?.title ?: summary?.title, sid != null, dot, chat?.running == true, onMenu, onMore = { sheet = Sheet.More }, onPanel = { sheet = Sheet.Panel },
+        TopBar(summary?.title ?: chat?.title, sid != null, dot, chat?.running == true, onMenu, onMore = { sheet = Sheet.More }, onPanel = { sheet = Sheet.Panel },
             onTeam = { sheet = Sheet.Team }, onPreset = { sheet = Sheet.Preset }, preset = "standard", onNew = { Pocket.closeChat() })
         if (chat == null) {
             Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) { Hero() }
@@ -118,8 +118,8 @@ private fun TopBar(title: String?, inChat: Boolean, dot: Dot?, running: Boolean,
             if (inChat) {
                 Text(title ?: "新会话", style = MaterialTheme.typography.titleMedium, color = T.Ink, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
                 Spacer(Modifier.width(10.dp))
+                // Icon-only on phones: the session title must never be squeezed to "…".
                 GrayLink(D.users, "智能体团队", onTeam)
-                Spacer(Modifier.width(8.dp))
                 GrayLink(D.agentPreset, presetLabel(preset), onPreset)
             }
         }
@@ -133,9 +133,8 @@ private fun TopBar(title: String?, inChat: Boolean, dot: Dot?, running: Boolean,
 
 @Composable
 private fun GrayLink(icon: androidx.compose.ui.graphics.vector.ImageVector, text: String, onClick: () -> Unit) {
-    Row(Modifier.clip(T.R8).clickable(onClick = onClick).padding(vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-        Icon(icon, null, tint = T.Text3, modifier = Modifier.size(16.dp)); Spacer(Modifier.width(3.dp))
-        Text(text, fontSize = 13.sp, color = T.Text3, maxLines = 1)
+    Box(Modifier.size(32.dp).clip(T.R8).clickable(onClick = onClick), contentAlignment = Alignment.Center) {
+        Icon(icon, text, tint = T.Text3, modifier = Modifier.size(18.dp))
     }
 }
 
@@ -202,7 +201,7 @@ private fun Transcript(st: ChatState, onTool: (Item.Tool) -> Unit) {
         items(st.items, key = { it.key }) { item ->
             when (item) {
                 is Item.User -> Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-                    Text(item.text, style = MaterialTheme.typography.bodyLarge, modifier = Modifier.padding(start = 56.dp).clip(T.R20).background(T.Fill).padding(horizontal = 16.dp, vertical = 10.dp))
+                    Text(item.text, style = MaterialTheme.typography.bodyLarge, color = T.Ink.copy(alpha = if (item.pending) 0.6f else 1f), modifier = Modifier.padding(start = 56.dp).clip(T.R20).background(T.Fill).padding(horizontal = 16.dp, vertical = 10.dp))
                 }
                 is Item.Reasoning -> ReasoningRow(item)
                 is Item.Text -> Markdownish(item.text)

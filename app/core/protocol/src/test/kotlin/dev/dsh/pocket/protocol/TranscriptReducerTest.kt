@@ -69,6 +69,33 @@ class TranscriptReducerTest {
         assertEquals(90, r.usage.cacheHitPercent)
     }
 
+    /** Real event order from DeepSeek Harness desktop (Mac mini session-576f1e04): prompt sits in the inbox ~24s before user/message. */
+    @Test fun firstMessageInNewSessionShowsImmediately() {
+        val r = TranscriptReducer()
+        r.apply(j("""{"type":"snapshot","cursor":2,"records":[],"projections":{}}"""))
+        r.echo("你好")                                   // optimistic, before any server event
+        assertEquals(listOf(true), r.items().map { (it as Item.User).pending })
+        r.apply(ev(3, "agent/inbox/spliced", """{"target":"next-turn","start":0,"inserted":[{"content":[{"type":"text","text":"你好"}],"source":{"kind":"user","rpcId":"R1"},"role":"user"}]}"""))
+        r.apply(ev(4, "turn/start", """{"turn":1}"""))
+        r.apply(ev(5, "agent/inbox/spliced", """{"target":"next-turn","start":0,"removedCount":1,"inserted":[]}"""))
+        assertEquals(1, r.items().size)
+        r.apply(ev(8, "user/message", """{"content":[{"type":"text","text":"你好"}],"source":{"kind":"user","rpcId":"R1"},"role":"user","id":"x"}"""))
+        r.apply(ev(9, "user/message", """{"content":[{"type":"text","text":"Current runtime context."}],"source":{"kind":"runtime-context"},"role":"user"}"""))
+        r.apply(ev(11, "user/message", """{"id":"h","role":"user","content":[{"type":"text","text":"<hindsight_knowledge>\nmemory"}]}"""))
+        val users = r.items().filterIsInstance<Item.User>()
+        assertEquals(listOf("你好"), users.map { it.text })
+        assertFalse(users.single().pending)
+    }
+
+    @Test fun echoSurvivesLateSnapshot() {
+        val r = TranscriptReducer()
+        r.echo("hi")
+        r.apply(j("""{"type":"snapshot","cursor":0,"records":[],"projections":{}}"""))
+        assertEquals(listOf("hi"), r.items().map { (it as Item.User).text })
+        r.apply(j("""{"type":"snapshot","cursor":1,"records":[{"type":"event","event":{"type":"user/message","seq":1,"time":1,"data":{"content":[{"type":"text","text":"hi"}],"source":{"kind":"user"}}}}],"projections":{}}"""))
+        assertEquals(1, r.items().size)
+    }
+
     @Test fun pairingLink() {
         assertEquals(PairingLink("100.106.128.87", 7690, "482913"), PairingLink.parse("dshpocket://pair?h=100.106.128.87:7690&c=482913"))
         assertEquals(PairingLink("::1", 7691, "000001"), PairingLink.parse("dshpocket://pair?h=[::1]:7691&c=000001"))
