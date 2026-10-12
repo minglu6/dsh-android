@@ -12,7 +12,6 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
@@ -55,19 +54,22 @@ fun PocketSheet(onDismiss: () -> Unit, content: @Composable ColumnScope.() -> Un
 
 @Composable
 fun OptionRow(title: String, desc: String? = null, icon: ImageVector? = null, selected: Boolean = false, enabled: Boolean = true, trailing: String? = null, code: String? = null, onClick: () -> Unit = {}) {
+    // Disabled = 0.45 via *color* alpha — not Modifier.alpha. Modifier.alpha creates a graphics layer
+    // that some OEM GPUs (e.g. ColorOS without GMS) fail to composite, leaving an empty-looking sheet.
+    val a = if (enabled) 1f else 0.45f
     Row(Modifier.padding(horizontal = 12.dp).fillMaxWidth().clip(T.R12).background(if (selected) T.Fill2 else Color.Transparent)
-        .clickable(enabled = enabled, onClick = onClick).alpha(if (enabled) 1f else 0.45f).padding(horizontal = 10.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
-        icon?.let { Icon(it, null, tint = T.Ink, modifier = Modifier.size(18.dp)); Spacer(Modifier.width(14.dp)) }
+        .clickable(enabled = enabled, onClick = onClick).padding(horizontal = 10.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+        icon?.let { Icon(it, null, tint = T.Ink.copy(alpha = a), modifier = Modifier.size(18.dp)); Spacer(Modifier.width(14.dp)) }
         Column(Modifier.weight(1f)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(title, fontSize = 16.sp, color = T.Ink)
-                code?.let { Spacer(Modifier.width(10.dp)); Text(it, style = T.Mono.copy(color = T.Caption)) }
+                Text(title, fontSize = 16.sp, color = T.Ink.copy(alpha = a))
+                code?.let { Spacer(Modifier.width(10.dp)); Text(it, style = T.Mono.copy(color = T.Caption.copy(alpha = a))) }
                 Spacer(Modifier.weight(1f))
-                trailing?.let { Text(it, fontSize = 13.sp, color = T.Text3, maxLines = 1, overflow = TextOverflow.Ellipsis) }
+                trailing?.let { Text(it, fontSize = 13.sp, color = T.Text3.copy(alpha = a), maxLines = 1, overflow = TextOverflow.Ellipsis) }
             }
-            desc?.let { Text(it, fontSize = 13.sp, color = T.Text3, lineHeight = 19.sp, modifier = Modifier.padding(top = 2.dp)) }
+            desc?.let { Text(it, fontSize = 13.sp, color = T.Text3.copy(alpha = a), lineHeight = 19.sp, modifier = Modifier.padding(top = 2.dp)) }
         }
-        if (selected) { Spacer(Modifier.width(10.dp)); Icon(D.check, null, tint = T.Ink, modifier = Modifier.size(18.dp)) }
+        if (selected) { Spacer(Modifier.width(10.dp)); Icon(D.check, null, tint = T.Ink.copy(alpha = a), modifier = Modifier.size(18.dp)) }
     }
 }
 
@@ -210,6 +212,7 @@ fun MoreSheet(chat: ChatState?, onDismiss: () -> Unit, onFeedback: () -> Unit, o
     var renaming by remember { mutableStateOf(false) }
     val export = "session.export" in Pocket.ops.value
     val cmds = "commands.execute" in Pocket.ops.value
+    val inChat = chat != null
     PocketSheet(onDismiss) {
         if (renaming && chat != null) {
             var t by remember { mutableStateOf(chat.title.orEmpty()) }
@@ -219,6 +222,7 @@ fun MoreSheet(chat: ChatState?, onDismiss: () -> Unit, onFeedback: () -> Unit, o
                 colors = PrimaryColors()) { Text("保存") }
             return@PocketSheet
         }
+        // Session-only extras (mobile keeps rename here; desktop puts it on the sidebar row menu).
         if (chat != null) {
             OptionRow("重命名", icon = D.edit) { renaming = true }
             SectionLabel("会话统计")
@@ -228,8 +232,10 @@ fun MoreSheet(chat: ChatState?, onDismiss: () -> Unit, onFeedback: () -> Unit, o
             }
             Spacer(Modifier.height(8.dp))
         }
-        if (export && chat != null) OptionRow("下载 Session 日志", icon = D.download) { onExport(); onDismiss() }
-        if (cmds && chat != null) OptionRow("反馈", icon = D.send) { onFeedback() }
+        // Official dsh Session Header ⋯ (dsh-session-log-export HeaderAction): download always listed;
+        // feedback when that path is available. Need a session → disable (never hide into an empty sheet).
+        OptionRow("下载 Session 日志", icon = D.download, enabled = export && inChat) { onExport(); onDismiss() }
+        if (cmds) OptionRow("反馈", icon = D.send, enabled = inChat) { onFeedback() }
     }
 }
 
