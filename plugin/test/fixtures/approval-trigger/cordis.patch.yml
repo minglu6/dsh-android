@@ -1,0 +1,3 @@
+- insert:
+    - id: pocket-approval-trigger
+      name: dsh-pocket-test-approval-trigger
