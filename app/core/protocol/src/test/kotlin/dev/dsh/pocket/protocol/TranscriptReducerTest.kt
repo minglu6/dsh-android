@@ -146,7 +146,7 @@ class TranscriptReducerTest {
         assertEquals(2L, r.firstSeq)
     }
 
-    @Test fun hidesInjectedContextAndMarksToolErrors() {
+    @Test fun keepsInjectedContextForTrajectoryAndMarksToolErrors() {
         val r = TranscriptReducer()
         r.apply(j("""{"type":"snapshot","cursor":0,"records":[],"projections":{}}"""))
         r.apply(ev(1, "user/message", """{"role":"user","source":{"kind":"user"},"content":[{"type":"text","text":"hi"}]}"""))
@@ -155,6 +155,7 @@ class TranscriptReducerTest {
         r.apply(ev(4, "tool/result", """{"message":{"toolCallId":"c","isError":true,"content":[{"type":"text","text":"Error: rejected"}]}}"""))
         r.apply(ev(5, "assistant/message", """{"usage":{"inputTokens":100,"cacheReadTokens":900,"outputTokens":5},"message":{"content":[]}}"""))
         assertEquals(1, r.items().count { it is Item.User })
+        assertEquals(1, r.items().count { it is Item.Context && (it as Item.Context).sourceKind == "runtime-context" })
         assertEquals(ToolStatus.Error, (r.items().last() as Item.Tool).status)
         assertEquals(90, r.usage.cacheHitPercent)
     }
@@ -175,6 +176,20 @@ class TranscriptReducerTest {
         val users = r.items().filterIsInstance<Item.User>()
         assertEquals(listOf("你好"), users.map { it.text })
         assertFalse(users.single().pending)
+        val contexts = r.items().filterIsInstance<Item.Context>()
+        assertEquals(2, contexts.size)
+        assertEquals("runtime-context", contexts[0].sourceKind)
+        assertTrue(contexts[1].text.startsWith("<hindsight_knowledge>"))
+    }
+
+    @Test fun systemMessageBecomesInitialThenUpdatedLabels() {
+        val r = TranscriptReducer()
+        r.apply(j("""{"type":"snapshot","cursor":0,"records":[],"projections":{}}"""))
+        r.apply(ev(1, "system/message", """{"message":{"content":[{"type":"text","text":"You are helpful."}],"role":"system"}}"""))
+        r.apply(ev(2, "system/message", """{"message":{"content":[{"type":"text","text":"Updated prompt."}],"role":"system"}}"""))
+        val systems = r.items().filterIsInstance<Item.System>()
+        assertEquals(listOf("初始系统提示词", "系统提示词已更新"), systems.map { it.label })
+        assertEquals("You are helpful.", systems[0].text)
     }
 
     @Test fun echoSurvivesLateSnapshot() {

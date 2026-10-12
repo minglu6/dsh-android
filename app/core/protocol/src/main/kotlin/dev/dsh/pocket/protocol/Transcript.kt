@@ -10,7 +10,14 @@ import kotlinx.serialization.json.buildJsonObject
 sealed interface Item {
     val key: String
     /** [pending]: echoed locally or still in dsh's inbox (dsh writes user/message only when the step starts). */
-    data class User(override val key: String, val text: String, val images: Int = 0, val pending: Boolean = false) : Item
+    data class User(
+        override val key: String,
+        val text: String,
+        val images: Int = 0,
+        val pending: Boolean = false,
+        /** Session-event time (ms), for trajectory swimlane. */
+        val at: Long? = null,
+    ) : Item
     data class Reasoning(override val key: String, val text: String, val durationMs: Long?, val live: Boolean) : Item
     data class Text(override val key: String, val text: String, val live: Boolean) : Item
     data class Tool(
@@ -19,6 +26,26 @@ sealed interface Item {
         val startedAt: Long? = null, val endedAt: Long? = null,
     ) : Item
     data class Notice(override val key: String, val text: String) : Item
+    /**
+     * Injected user-role / developer context (runtime-context, skills, memory, time sampled, …).
+     * Shown on the Trajectory tab as 上下文; omitted from the chat transcript.
+     */
+    data class Context(
+        override val key: String,
+        val text: String,
+        val sourceKind: String? = null,
+        val at: Long? = null,
+    ) : Item
+    /**
+     * `system/message` surface prompt for the Trajectory 系统 row
+     * (desktop `layout.initialSystemPrompt` / `layout.systemPromptUpdated`).
+     */
+    data class System(
+        override val key: String,
+        val label: String,
+        val text: String,
+        val at: Long? = null,
+    ) : Item
 }
 
 enum class ToolStatus { Running, AwaitingApproval, Ok, Error }
@@ -66,6 +93,8 @@ class TranscriptReducer {
     private val localEchoes = ArrayList<Pair<Int, String>>()
     private val stepStartTimes = HashMap<String, Long>()
     private val settledSteps = ArrayList<StepRecord>()
+    /** Whether a trajectory 系统 row has already been emitted (initial vs updated label). */
+    private var systemPromptSeen = false
     private var live: LiveAttempt? = null
     var cursor: Long = -1; private set
     /** Lowest event seq currently folded (for history.page beforeSeq). */
@@ -169,7 +198,7 @@ class TranscriptReducer {
 
     private fun reset() {
         committed.clear(); toolIndex.clear(); approvalCall.clear(); userByRpc.clear(); localEchoes.clear()
-        stepStartTimes.clear(); settledSteps.clear(); live = null
+        stepStartTimes.clear(); settledSteps.clear(); systemPromptSeen = false; live = null
         cursor = -1; firstSeq = -1; hasMore = false
         turns = 0; steps = 0; inputTokens = 0; cacheRead = 0; outputTokens = 0; running = false
     }
@@ -210,11 +239,18 @@ class TranscriptReducer {
             }
             "user/message" -> {
                 val msg = if (data["content"] != null) data else data["message"]
-                if (!isTyped(msg)) return
-                upsertUser(msg, "u$seq", pending = false)
+                if (isTyped(msg)) upsertUser(msg, "u$seq", pending = false, at = e["time"].long())
+                else upsertContext(msg, "x$seq", at = e["time"].long())
             }
+            "developer/message" -> {
+                val msg = data["message"] ?: data
+                upsertContext(msg, "d$seq", at = e["time"].long())
+            }
+            "system/message" -> upsertSystemPrompt(e, data, seq)
             // A prompt enters the agent inbox (seq ~3) long before its user/message (written at step start).
-            "agent/inbox/spliced" -> data["inserted"].arr().orEmpty().forEach { m -> if (isTyped(m)) upsertUser(m, "q$seq.${m["source"]["rpcId"].str()}", pending = true) }
+            "agent/inbox/spliced" -> data["inserted"].arr().orEmpty().forEach { m ->
+                if (isTyped(m)) upsertUser(m, "q$seq.${m["source"]["rpcId"].str()}", pending = true, at = e["time"].long())
+            }
             "assistant/message" -> {
                 steps++
                 live = null
@@ -306,20 +342,51 @@ class TranscriptReducer {
         return msg["source"] == null && !text.trimStart().startsWith("<")
     }
 
-    private fun upsertUser(msg: JsonElement?, key: String, pending: Boolean) {
+    private fun messageText(msg: JsonElement?): String {
+        val blocks = msg["content"].arr().orEmpty()
+        return blocks.filter { it["type"].str() == "text" }.joinToString("\n") { it["text"].str().orEmpty() }
+    }
+
+    private fun upsertContext(msg: JsonElement?, key: String, at: Long?) {
+        val text = messageText(msg)
+        if (text.isBlank()) return
+        committed += Item.Context(key, text, sourceKind = msg["source"]["kind"].str(), at = at)
+    }
+
+    /**
+     * Desktop ui-trajectory emits a 系统 cell from `system/message` appends
+     * (`初始系统提示词` / `系统提示词已更新`). Replacements without append are ignored.
+     */
+    private fun upsertSystemPrompt(e: JsonElement?, data: JsonElement?, seq: Long) {
+        val surface = e["surfaceOp"]
+        // Desktop only publishes 系统 cells for append surface ops (object replace = history rewrite).
+        if (surface is JsonObject) return
+        if (surface != null && surface.str() != null && surface.str() != "append") return
+        val msg = data["message"] ?: data
+        val text = messageText(msg)
+        if (text.isBlank()) return
+        val label = if (systemPromptSeen) "系统提示词已更新" else "初始系统提示词"
+        systemPromptSeen = true
+        committed += Item.System("sys$seq", label, text, at = e["time"].long())
+    }
+
+    private fun upsertUser(msg: JsonElement?, key: String, pending: Boolean, at: Long? = null) {
         val blocks = msg["content"].arr().orEmpty()
         val text = blocks.filter { it["type"].str() == "text" }.joinToString("\n") { it["text"].str().orEmpty() }
         val images = blocks.count { it["type"].str() == "image" }
         val rpc = msg["source"]["rpcId"].str()
-        val at = rpc?.let { userByRpc[it] }
+        val idx = rpc?.let { userByRpc[it] }
             ?: localEchoes.indexOfFirst { it.second == text }.takeIf { it >= 0 }?.let { localEchoes.removeAt(it).first }
-        if (at != null) {
-            val old = committed[at] as Item.User
-            committed[at] = old.copy(text = text, images = images, pending = pending && old.pending)
-            if (rpc != null) userByRpc[rpc] = at
+        if (idx != null) {
+            val old = committed[idx] as Item.User
+            committed[idx] = old.copy(
+                text = text, images = images, pending = pending && old.pending,
+                at = at ?: old.at,
+            )
+            if (rpc != null) userByRpc[rpc] = idx
         } else {
             if (rpc != null) userByRpc[rpc] = committed.size
-            committed += Item.User(key, text, images, pending)
+            committed += Item.User(key, text, images, pending, at = at)
         }
     }
 
