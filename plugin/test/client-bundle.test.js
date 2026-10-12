@@ -28,10 +28,15 @@ test('built client bundle is ModuleLoader lazy-CJS with static inject', () => {
   assert.doesNotMatch(src, /shell\.overlay/)
   assert.match(src, /手机连接/)
   assert.match(src, /Phone connection/)
+  assert.match(src, /撤销设备/)
+  assert.match(src, /Revoke device/)
+  assert.doesNotMatch(src, /确认撤销/)
+  assert.doesNotMatch(src, /revokeConfirm/)
 
   // Evaluate factory in a stub ModuleLoader to assert inject is a static array.
   const requires = {
     react: { useState: () => [], useEffect: () => {}, useCallback: () => {} },
+    'react-dom': { createPortal: (node) => node },
     'react/jsx-runtime': { jsx: () => null, jsxs: () => null, Fragment: 'fragment' },
     '@deepseek-ai/cordis': {},
   }

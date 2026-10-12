@@ -25,6 +25,8 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
 //#endregion
 let react = require("react");
 react = __toESM(react);
+let react_dom = require("react-dom");
+react_dom = __toESM(react_dom);
 let react_jsx_runtime = require("react/jsx-runtime");
 react_jsx_runtime = __toESM(react_jsx_runtime);
 
@@ -102,8 +104,9 @@ const zh = {
 	renameSave: "保存",
 	renameCancel: "取消",
 	revoke: "撤销",
-	revokeConfirm: "确认撤销？",
-	revokeArmed: "再点一次确认撤销",
+	revokeTitle: "撤销设备",
+	revokeBody: "将撤销「{name}」。之后该手机需重新配对才能连接。",
+	cancel: "取消",
 	loading: "加载中…",
 	loadFailed: "加载失败",
 	refresh: "刷新",
@@ -139,14 +142,239 @@ const en = {
 	renameSave: "Save",
 	renameCancel: "Cancel",
 	revoke: "Revoke",
-	revokeConfirm: "Confirm revoke?",
-	revokeArmed: "Click again to confirm",
+	revokeTitle: "Revoke device",
+	revokeBody: "Revoke “{name}”. The phone will need to pair again to reconnect.",
+	cancel: "Cancel",
 	loading: "Loading…",
 	loadFailed: "Failed to load",
 	refresh: "Refresh",
 	close: "Close",
 	noCode: "Click “Start pairing” for a 6-digit code"
 };
+
+//#endregion
+//#region src/client/styles.ts
+/** Inline styles using only `--dsw-alias-*` tokens (no literal theme colors). */
+const styles = {
+	settingsRoot: {
+		display: "flex",
+		flexDirection: "column",
+		gap: 16,
+		padding: "4px 0 24px"
+	},
+	sectionLabel: {
+		fontSize: 12,
+		color: "var(--dsw-alias-label-secondary)",
+		marginBottom: 8
+	},
+	muted: {
+		fontSize: 12,
+		color: "var(--dsw-alias-label-tertiary)"
+	},
+	row: {
+		display: "flex",
+		alignItems: "center",
+		justifyContent: "space-between",
+		gap: 10,
+		fontSize: 13
+	},
+	primaryBtn: {
+		appearance: "none",
+		border: "none",
+		borderRadius: 8,
+		padding: "8px 14px",
+		background: "var(--dsw-alias-button-primary-fill)",
+		color: "var(--dsw-alias-button-primary-label, var(--dsw-alias-bg-base))",
+		cursor: "pointer",
+		font: "inherit",
+		fontSize: 13,
+		fontWeight: 500
+	},
+	ghostBtn: {
+		appearance: "none",
+		border: "1px solid var(--dsw-alias-border-l2)",
+		borderRadius: 8,
+		padding: "7px 12px",
+		background: "transparent",
+		color: "var(--dsw-alias-label-primary)",
+		cursor: "pointer",
+		font: "inherit",
+		fontSize: 13
+	},
+	dangerBtn: {
+		appearance: "none",
+		border: "none",
+		borderRadius: 8,
+		padding: "6px 10px",
+		background: "transparent",
+		color: "var(--dsw-alias-state-error-primary)",
+		cursor: "pointer",
+		font: "inherit",
+		fontSize: 12
+	},
+	destructiveBtn: {
+		appearance: "none",
+		border: "none",
+		borderRadius: 8,
+		padding: "8px 14px",
+		background: "var(--dsw-alias-state-error-primary)",
+		color: "var(--dsw-alias-label-primary-foreground, #fff)",
+		cursor: "pointer",
+		font: "inherit",
+		fontSize: 13,
+		fontWeight: 500
+	},
+	dialogMask: {
+		position: "fixed",
+		inset: 0,
+		zIndex: 120,
+		display: "flex",
+		alignItems: "center",
+		justifyContent: "center",
+		pointerEvents: "auto",
+		background: "rgba(0, 0, 0, 0.45)",
+		padding: 24
+	},
+	dialogCard: {
+		width: "min(400px, calc(100vw - 48px))",
+		borderRadius: 12,
+		border: "1px solid var(--dsw-alias-border-l2)",
+		background: "var(--dsw-alias-bg-base)",
+		color: "var(--dsw-alias-label-primary)",
+		boxShadow: "var(--dsw-elevation-overlay, 0 12px 40px rgba(0,0,0,0.25))",
+		padding: "20px 22px 18px",
+		display: "flex",
+		flexDirection: "column",
+		gap: 12
+	},
+	dialogTitle: {
+		margin: 0,
+		fontSize: 16,
+		fontWeight: 600,
+		lineHeight: "24px"
+	},
+	dialogBody: {
+		margin: 0,
+		fontSize: 14,
+		lineHeight: "22px",
+		color: "var(--dsw-alias-label-secondary)"
+	},
+	dialogActions: {
+		display: "flex",
+		justifyContent: "flex-end",
+		gap: 8,
+		marginTop: 8
+	},
+	code: {
+		fontFamily: "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace",
+		fontSize: 32,
+		letterSpacing: "0.18em",
+		fontWeight: 600,
+		textAlign: "center",
+		padding: "8px 0 4px"
+	},
+	qrWrap: {
+		display: "flex",
+		justifyContent: "center",
+		padding: "8px 0"
+	},
+	qrBox: {
+		padding: 10,
+		borderRadius: 10,
+		background: "#fff",
+		border: "1px solid var(--dsw-alias-border-l3)",
+		lineHeight: 0
+	},
+	deviceRow: {
+		display: "flex",
+		alignItems: "center",
+		gap: 10,
+		padding: "8px 0",
+		borderTop: "1px solid var(--dsw-alias-border-l3)"
+	},
+	dot: (online) => ({
+		flex: "none",
+		width: 8,
+		height: 8,
+		borderRadius: "50%",
+		background: online ? "var(--dsw-alias-state-success-primary)" : "var(--dsw-alias-border-l2)"
+	}),
+	input: {
+		flex: 1,
+		minWidth: 0,
+		border: "1px solid var(--dsw-alias-border-l2)",
+		borderRadius: 6,
+		padding: "6px 8px",
+		background: "var(--dsw-alias-bg-base)",
+		color: "var(--dsw-alias-label-primary)",
+		font: "inherit",
+		fontSize: 13
+	}
+};
+
+//#endregion
+//#region src/client/ConfirmDialog.tsx
+/**
+* Lightweight confirm dialog matching dsh Modal / SignOutDialog chrome
+* (mask + card + title + body + action row), built with theme tokens only.
+* Does not `require` `@deepseek-ai/dsh-client-ui-primitives` (plugin hard rule).
+*/
+function ConfirmDialog({ open, title, body, cancelLabel, confirmLabel, busy = false, onCancel, onConfirm }) {
+	(0, react.useEffect)(() => {
+		if (!open) return;
+		const onKey = (e) => {
+			if (e.key === "Escape" && !busy) onCancel();
+		};
+		document.addEventListener("keydown", onKey);
+		return () => document.removeEventListener("keydown", onKey);
+	}, [
+		open,
+		busy,
+		onCancel
+	]);
+	if (!open || typeof document === "undefined") return null;
+	return (0, react_dom.createPortal)(/* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
+		style: styles.dialogMask,
+		role: "presentation",
+		onClick: (e) => {
+			if (e.target === e.currentTarget && !busy) onCancel();
+		},
+		children: /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
+			role: "dialog",
+			"aria-modal": "true",
+			"aria-label": title,
+			style: styles.dialogCard,
+			onClick: (e) => e.stopPropagation(),
+			children: [
+				/* @__PURE__ */ (0, react_jsx_runtime.jsx)("h2", {
+					style: styles.dialogTitle,
+					children: title
+				}),
+				/* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
+					style: styles.dialogBody,
+					children: body
+				}),
+				/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
+					style: styles.dialogActions,
+					children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
+						type: "button",
+						style: styles.ghostBtn,
+						disabled: busy,
+						"data-modal-autofocus": true,
+						onClick: onCancel,
+						children: cancelLabel
+					}), /* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
+						type: "button",
+						style: styles.destructiveBtn,
+						disabled: busy,
+						onClick: onConfirm,
+						children: confirmLabel
+					})]
+				})
+			]
+		})
+	}), document.body);
+}
 
 //#endregion
 //#region node_modules/uqr/dist/index.mjs
@@ -1040,113 +1268,6 @@ function qrSvg(text, size = 180) {
 }
 
 //#endregion
-//#region src/client/styles.ts
-/** Inline styles using only `--dsw-alias-*` tokens (no literal theme colors). */
-const styles = {
-	settingsRoot: {
-		display: "flex",
-		flexDirection: "column",
-		gap: 16,
-		padding: "4px 0 24px"
-	},
-	sectionLabel: {
-		fontSize: 12,
-		color: "var(--dsw-alias-label-secondary)",
-		marginBottom: 8
-	},
-	muted: {
-		fontSize: 12,
-		color: "var(--dsw-alias-label-tertiary)"
-	},
-	row: {
-		display: "flex",
-		alignItems: "center",
-		justifyContent: "space-between",
-		gap: 10,
-		fontSize: 13
-	},
-	primaryBtn: {
-		appearance: "none",
-		border: "none",
-		borderRadius: 8,
-		padding: "8px 14px",
-		background: "var(--dsw-alias-button-primary-fill)",
-		color: "var(--dsw-alias-button-primary-label, var(--dsw-alias-bg-base))",
-		cursor: "pointer",
-		font: "inherit",
-		fontSize: 13,
-		fontWeight: 500
-	},
-	ghostBtn: {
-		appearance: "none",
-		border: "1px solid var(--dsw-alias-border-l2)",
-		borderRadius: 8,
-		padding: "7px 12px",
-		background: "transparent",
-		color: "var(--dsw-alias-label-primary)",
-		cursor: "pointer",
-		font: "inherit",
-		fontSize: 13
-	},
-	dangerBtn: {
-		appearance: "none",
-		border: "none",
-		borderRadius: 8,
-		padding: "6px 10px",
-		background: "transparent",
-		color: "var(--dsw-alias-state-error-primary)",
-		cursor: "pointer",
-		font: "inherit",
-		fontSize: 12
-	},
-	code: {
-		fontFamily: "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace",
-		fontSize: 32,
-		letterSpacing: "0.18em",
-		fontWeight: 600,
-		textAlign: "center",
-		padding: "8px 0 4px"
-	},
-	qrWrap: {
-		display: "flex",
-		justifyContent: "center",
-		padding: "8px 0"
-	},
-	qrBox: {
-		padding: 10,
-		borderRadius: 10,
-		background: "#fff",
-		border: "1px solid var(--dsw-alias-border-l3)",
-		lineHeight: 0
-	},
-	deviceRow: {
-		display: "flex",
-		alignItems: "center",
-		gap: 10,
-		padding: "8px 0",
-		borderTop: "1px solid var(--dsw-alias-border-l3)"
-	},
-	dot: (online) => ({
-		flex: "none",
-		width: 8,
-		height: 8,
-		borderRadius: "50%",
-		background: online ? "var(--dsw-alias-state-success-primary)" : "var(--dsw-alias-border-l2)"
-	}),
-	input: {
-		flex: 1,
-		minWidth: 0,
-		border: "1px solid var(--dsw-alias-border-l2)",
-		borderRadius: 6,
-		padding: "6px 8px",
-		background: "var(--dsw-alias-bg-base)",
-		color: "var(--dsw-alias-label-primary)",
-		font: "inherit",
-		fontSize: 13
-	}
-};
-
-//#endregion
 //#region src/client/ManagePanel.tsx
 function formatLastSeen(t, at) {
 	if (at == null) return t("neverSeen");
@@ -1156,19 +1277,21 @@ function formatLastSeen(t, at) {
 		return t("neverSeen");
 	}
 }
+/** Prefer framework interpolation; fall back to `{name}` replacement. */
+function tr(t, key, vars) {
+	const out = t(key, vars);
+	if (out !== key && !/\{name\}/.test(out)) return out;
+	return Object.entries(vars).reduce((s, [k, v]) => s.replaceAll(`{${k}}`, String(v)), out === key ? String(zhFallback[key] ?? key) : out);
+}
+const zhFallback = { revokeBody: "将撤销「{name}」。之后该手机需重新配对才能连接。" };
 function DeviceItem({ device, t, api, onChanged }) {
 	const [editing, setEditing] = (0, react.useState)(false);
 	const [name, setName] = (0, react.useState)(device.name);
-	const [armed, setArmed] = (0, react.useState)(false);
+	const [confirmOpen, setConfirmOpen] = (0, react.useState)(false);
 	const [busy, setBusy] = (0, react.useState)(false);
 	(0, react.useEffect)(() => {
 		setName(device.name);
 	}, [device.name]);
-	(0, react.useEffect)(() => {
-		if (!armed) return;
-		const id = setTimeout(() => setArmed(false), 4e3);
-		return () => clearTimeout(id);
-	}, [armed]);
 	const save = async () => {
 		const trimmed = name.trim();
 		if (!trimmed || trimmed === device.name) {
@@ -1183,17 +1306,13 @@ function DeviceItem({ device, t, api, onChanged }) {
 			setBusy(false);
 		}
 	};
-	const revoke = async () => {
-		if (!armed) {
-			setArmed(true);
-			return;
-		}
+	const confirmRevoke = async () => {
 		setBusy(true);
 		try {
 			onChanged((await api.revoke(device.id)).devices);
+			setConfirmOpen(false);
 		} finally {
 			setBusy(false);
-			setArmed(false);
 		}
 	};
 	return /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
@@ -1265,9 +1384,21 @@ function DeviceItem({ device, t, api, onChanged }) {
 				type: "button",
 				style: styles.dangerBtn,
 				disabled: busy,
-				onClick: () => void revoke(),
-				children: armed ? t("revokeConfirm") : t("revoke")
-			})] })
+				onClick: () => setConfirmOpen(true),
+				children: t("revoke")
+			})] }),
+			/* @__PURE__ */ (0, react_jsx_runtime.jsx)(ConfirmDialog, {
+				open: confirmOpen,
+				title: t("revokeTitle"),
+				body: tr(t, "revokeBody", { name: device.name }),
+				cancelLabel: t("cancel"),
+				confirmLabel: t("revoke"),
+				busy,
+				onCancel: () => {
+					if (!busy) setConfirmOpen(false);
+				},
+				onConfirm: () => void confirmRevoke()
+			})
 		]
 	});
 }
