@@ -483,13 +483,26 @@ class TranscriptReducer {
             // Desktop ui-trajectory: index EpochHeader.tools + config for Request inspector.
             "request/header" -> indexRequestHeader(e, data, seq)
             "llm/retry" -> {
+                // Trajectory Request inspector: keep retry facts on the open step.
                 openRetry = data["retry"].long()?.toInt() ?: ((openRetry ?: 0) + 1)
-                openMaxRetries = data["maxRetries"].long()?.toInt() ?: openMaxRetries
+                openMaxRetries = data["maxRetries"].long()?.toInt()
+                    ?: data["maximum"].long()?.toInt()
+                    ?: openMaxRetries
                 openRetryDelayMs = data["delayMs"].long() ?: data["retryDelayMs"].long() ?: openRetryDelayMs
                 openLastAttemptError = data["error"]["message"].str()
                     ?: data["error"]["reason"].str()
                     ?: data["error"].str()
                     ?: openLastAttemptError
+                // Chat notice (desktop message.retry.*).
+                val retry = openRetry
+                val maximum = openMaxRetries
+                val seconds = openRetryDelayMs?.let { (it / 1000).coerceAtLeast(0) }
+                    ?: data["delaySeconds"].long()
+                val label = "等待重试模型请求"
+                val text = if (retry != null && maximum != null && seconds != null) {
+                    "$label（$retry/$maximum） · ${seconds}s"
+                } else label
+                committed += Item.Notice("n$seq", text)
             }
             "user/message" -> {
                 val msg = if (data["content"] != null) data else data["message"]
@@ -575,14 +588,10 @@ class TranscriptReducer {
                     retryDelayMs = openRetryDelayMs,
                     lastAttemptError = openLastAttemptError,
                 )
-<<<<<<< HEAD
                 openRetry = null; openMaxRetries = null; openRetryDelayMs = null; openLastAttemptError = null
-                // Desktop: interrupted assistant is `message` with isError — no invented 系统 Notice.
-=======
                 // Chat locale message.stopped = 已停止. Trajectory marks interrupted on StepRecord
                 // (assistant cell isError) — do not invent a 系统 Context/System row here.
                 if (interrupted) committed += Item.Notice("i$seq", "已停止")
->>>>>>> 126afa7 (feat: desktop parity — message actions, fork, todos, error copy)
             }
             "tool/call" -> upsertTool(
                 data["callId"].str() ?: "c$seq",
@@ -619,18 +628,6 @@ class TranscriptReducer {
                     val t = committed[i] as Item.Tool
                     committed[i] = if (outcome == "allowed-once") t.copy(status = ToolStatus.Running) else t.copy(status = ToolStatus.Error, error = outcome)
                 }
-            }
-            // Chat shows retry notices; trajectory ledger has no separate llm/retry cell.
-            "llm/retry" -> {
-                val retry = data["retry"].long()?.toInt()
-                val maximum = data["maximum"].long()?.toInt()
-                val seconds = data["delayMs"]?.long()?.let { (it / 1000).coerceAtLeast(0) }
-                    ?: data["delaySeconds"].long()
-                val label = "等待重试模型请求"
-                val text = if (retry != null && maximum != null && seconds != null) {
-                    "$label（$retry/$maximum） · ${seconds}s"
-                } else label
-                committed += Item.Notice("n$seq", text)
             }
             "llm/retry-started" -> committed += Item.Notice("ns$seq", "正在重试模型请求")
         }
