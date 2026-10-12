@@ -3,6 +3,7 @@ plugins {
     id("org.jetbrains.kotlin.android")
     id("org.jetbrains.kotlin.plugin.compose")
     id("org.jetbrains.kotlin.plugin.serialization")
+    id("io.github.takahirom.roborazzi")
 }
 android {
     namespace = "dev.dsh.pocket.app"
@@ -17,6 +18,7 @@ android {
     }
     compileOptions { sourceCompatibility = JavaVersion.VERSION_17; targetCompatibility = JavaVersion.VERSION_17 }
     kotlinOptions { jvmTarget = "17" }
+    testOptions { unitTests { isIncludeAndroidResources = true } }
     buildFeatures { compose = true; buildConfig = true }
     packaging { resources { excludes += setOf("META-INF/*.kotlin_module", "META-INF/versions/**", "META-INF/{AL2.0,LGPL2.1}") } }
 }
@@ -37,4 +39,9 @@ dependencies {
     debugImplementation("androidx.compose.ui:ui-test-manifest")
     testImplementation(kotlin("test"))
     testImplementation("junit:junit:4.13.2")
+    testImplementation("org.robolectric:robolectric:4.14.1")
+    testImplementation("io.github.takahirom.roborazzi:roborazzi:1.39.0")
+    testImplementation("io.github.takahirom.roborazzi:roborazzi-compose:1.39.0")
+    testImplementation(platform("androidx.compose:compose-bom:2024.10.01"))
+    testImplementation("androidx.compose.ui:ui-test-junit4")
 }

@@ -7,6 +7,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ViewSidebar
@@ -18,6 +19,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.rotate
+import androidx.compose.foundation.layout.offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.text.SpanStyle
@@ -64,12 +66,12 @@ fun ChatRoot(onMenu: () -> Unit) {
 
     Column(Modifier.fillMaxSize().background(Color.White).systemBarsPadding().imePadding()) {
         TopBar(chat?.title ?: summary?.title, sid != null, dot, chat?.running == true, onMenu, onMore = { sheet = Sheet.More }, onPanel = { sheet = Sheet.Panel },
-            onTeam = { sheet = Sheet.Team }, onPreset = { sheet = Sheet.Preset }, preset = "standard")
+            onTeam = { sheet = Sheet.Team }, onPreset = { sheet = Sheet.Preset }, preset = "standard", onNew = { Pocket.closeChat() })
         if (chat == null) {
             Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) { Hero() }
             Row(Modifier.padding(horizontal = 16.dp, vertical = 6.dp), horizontalArrangement = Arrangement.spacedBy(14.dp)) {
-                Chip(Icons.Outlined.FolderOpen, (draftCwd ?: workspaces.firstOrNull())?.substringAfterLast('/') ?: "默认工作区") { sheet = Sheet.Workspace }
-                Chip(Icons.Outlined.Recycling, presetLabel(draftPreset)) { sheet = Sheet.Preset }
+                Chip(D.folderOpen, (draftCwd ?: workspaces.firstOrNull())?.substringAfterLast('/') ?: "默认工作区") { sheet = Sheet.Workspace }
+                Chip(D.agentPreset, presetLabel(draftPreset)) { sheet = Sheet.Preset }
             }
             Composer("描述你想要构建的内容, / 调用指令, @ 文件或对话", false, curPerm, curModel, enabled = dot == Dot.Online,
                 onPlus = { sheet = Sheet.Plus }, onPerm = { sheet = Sheet.Permission }, onModel = { sheet = Sheet.Model },
@@ -80,7 +82,7 @@ fun ChatRoot(onMenu: () -> Unit) {
             var tab by remember(st.sessionId) { mutableIntStateOf(0) }
             Tabs(tab) { tab = it }
             Box(Modifier.weight(1f).fillMaxWidth()) {
-                if (tab == 0) Transcript(st, onTool = { tool = it }) else EmptyState(Icons.Outlined.Timeline, "暂无轨迹", "轨迹视图将在后续版本提供")
+                if (tab == 0) Transcript(st, onTool = { tool = it }) else EmptyState(D.inspect, "暂无轨迹", "轨迹视图将在后续版本提供")
             }
             approvals.firstOrNull { it.sessionId == null || it.sessionId == st.sessionId }?.let { ApprovalCard(it) }
             Composer("发消息或创建任务, / 调用指令, @ 文件或对话", st.running, curPerm, curModel, enabled = dot == Dot.Online,
@@ -108,20 +110,23 @@ fun ChatRoot(onMenu: () -> Unit) {
 }
 
 @Composable
-private fun TopBar(title: String?, inChat: Boolean, dot: Dot?, running: Boolean, onMenu: () -> Unit, onMore: () -> Unit, onPanel: () -> Unit, onTeam: () -> Unit, onPreset: () -> Unit, preset: String) {
+private fun TopBar(title: String?, inChat: Boolean, dot: Dot?, running: Boolean, onMenu: () -> Unit, onMore: () -> Unit, onPanel: () -> Unit, onTeam: () -> Unit, onPreset: () -> Unit, preset: String, onNew: () -> Unit = {}) {
     Row(Modifier.fillMaxWidth().height(56.dp).padding(horizontal = 6.dp), verticalAlignment = Alignment.CenterVertically) {
         IconButton(onMenu) { Icon(Icons.Rounded.Menu, "菜单", tint = T.Ink) }
-        if (inChat) {
-            Text(title ?: "新会话", style = MaterialTheme.typography.titleMedium, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
-            Spacer(Modifier.width(10.dp))
-            GrayLink(Icons.Outlined.Groups, "智能体团队", onTeam)
-            Spacer(Modifier.width(10.dp))
-            GrayLink(Icons.Outlined.Recycling, presetLabel(preset), onPreset)
+        // One weighted region: the title takes what the gray links leave (no competing spacer).
+        Row(Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically) {
+            if (inChat) {
+                Text(title ?: "新会话", style = MaterialTheme.typography.titleMedium, color = T.Ink, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
+                Spacer(Modifier.width(10.dp))
+                GrayLink(D.users, "智能体团队", onTeam)
+                Spacer(Modifier.width(8.dp))
+                GrayLink(D.agentPreset, presetLabel(preset), onPreset)
+            }
         }
-        Spacer(Modifier.weight(1f))
-        StatusDot(dot, Modifier.padding(horizontal = 8.dp))
-        IconButton(onMore) { Icon(Icons.Rounded.MoreHoriz, "更多", tint = T.Ink) }
-        if (inChat) IconButton(onPanel) { Icon(Icons.AutoMirrored.Outlined.ViewSidebar, "右侧面板", tint = T.Ink, modifier = Modifier.rotate(180f)) }
+        StatusDot(dot, Modifier.padding(horizontal = 6.dp))
+        IconButton(onMore, Modifier.size(40.dp)) { Icon(D.ellipsis, "更多", tint = T.Ink) }
+        if (!inChat) IconButton(onNew, Modifier.size(40.dp)) { Icon(D.newChat, "新会话", tint = T.Ink) }
+        IconButton(onPanel, Modifier.size(40.dp)) { Icon(D.panelRight, "右侧面板", tint = T.Ink, modifier = Modifier.size(20.dp)) }
     }
     HorizontalDivider(color = T.Fill)
 }
@@ -155,10 +160,15 @@ private fun Tabs(sel: Int, onSel: (Int) -> Unit) {
 
 @Composable
 private fun Hero() {
+    // deepseek-harness EmptyHero / HeroShell.module.css: 34px fish, 10px gap, 26px/500 headline, 7px to the badge.
     Row(verticalAlignment = Alignment.CenterVertically) {
-        Text("🐋", fontSize = 28.sp); Spacer(Modifier.width(10.dp))
-        Text("探索未至之境", fontSize = 24.sp, color = T.Ink); Spacer(Modifier.width(12.dp))
-        Text("预览版", fontSize = 12.sp, color = T.Accent, modifier = Modifier.clip(T.R4).background(T.Tint).padding(horizontal = 6.dp, vertical = 3.dp))
+        Icon(D.fish, null, tint = T.Ink, modifier = Modifier.width(34.dp).height(25.dp))
+        Spacer(Modifier.width(10.dp))
+        Text("探索未至之境", fontSize = 26.sp, lineHeight = 32.sp, fontWeight = FontWeight.Medium, color = T.Ink)
+        Spacer(Modifier.width(7.dp))
+        Text("预览版", fontSize = 12.sp, lineHeight = 18.sp, fontWeight = FontWeight.Medium, fontFamily = FontFamily.Monospace, color = T.Bluish,
+            modifier = Modifier.align(Alignment.Top).padding(top = 2.dp).clip(RoundedCornerShape(50)).background(T.Tint)
+                .border(0.5.dp, T.HoverBg, RoundedCornerShape(50)).padding(start = 7.dp, end = 7.dp, top = 1.dp))
     }
 }
 
@@ -166,7 +176,7 @@ private fun Hero() {
 private fun Chip(icon: androidx.compose.ui.graphics.vector.ImageVector, text: String, onClick: () -> Unit) {
     Row(Modifier.clip(T.R8).clickable(onClick = onClick).padding(vertical = 6.dp, horizontal = 2.dp), verticalAlignment = Alignment.CenterVertically) {
         Icon(icon, null, tint = T.Ink, modifier = Modifier.size(16.dp)); Spacer(Modifier.width(5.dp))
-        Text(text, fontSize = 14.sp, color = T.Ink); Icon(Icons.Rounded.KeyboardArrowDown, null, tint = T.Ink, modifier = Modifier.size(18.dp))
+        Text(text, fontSize = 14.sp, color = T.Ink); Icon(D.chevronDown, null, tint = T.Ink, modifier = Modifier.size(18.dp))
     }
 }
 
@@ -186,7 +196,7 @@ private fun Transcript(st: ChatState, onTool: (Item.Tool) -> Unit) {
     val n = st.items.size
     val lastLen = (st.items.lastOrNull() as? Item.Text)?.text?.length ?: 0
     LaunchedEffect(n, lastLen, st.running) { if (n > 0) list.animateScrollToItem(n) }
-    if (st.loaded && n == 0 && !st.running) { EmptyState(Icons.Outlined.ChatBubbleOutline, "开始对话", "发送第一条消息"); return }
+    if (st.loaded && n == 0 && !st.running) { EmptyState(D.chat, "开始对话", "发送第一条消息"); return }
     if (!st.loaded) { Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator(color = T.Accent, strokeWidth = 2.dp, modifier = Modifier.size(24.dp)) }; return }
     LazyColumn(state = list, modifier = Modifier.fillMaxSize(), contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
         items(st.items, key = { it.key }) { item ->
@@ -230,7 +240,7 @@ private fun ToolCard(t: Item.Tool, onClick: () -> Unit) {
         Spacer(Modifier.width(10.dp))
         Text(t.name, fontSize = 15.sp, color = T.Ink); Spacer(Modifier.width(10.dp))
         Text(primaryArg(t.name, t.arguments).orEmpty(), style = T.Mono.copy(color = T.Text3), maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
-        Icon(Icons.Rounded.ChevronRight, null, tint = T.Caption, modifier = Modifier.size(18.dp))
+        Icon(D.chevronRight, null, tint = T.Caption, modifier = Modifier.size(18.dp))
     }
 }
 
@@ -297,24 +307,30 @@ private fun Composer(placeholder: String, running: Boolean, perm: String, model:
     var text by remember { mutableStateOf("") }
     Column(Modifier.padding(horizontal = 14.dp, vertical = 4.dp).fillMaxWidth().clip(T.R20).border(1.dp, T.Border, T.R20).padding(start = 16.dp, end = 10.dp, top = 14.dp, bottom = 10.dp)) {
         Box {
-            if (text.isEmpty()) Text(placeholder, fontSize = 16.sp, color = T.Caption, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            if (text.isEmpty()) Text(placeholder, fontSize = 16.sp, color = T.Caption, maxLines = 2, overflow = TextOverflow.Ellipsis)
             BasicTextField(text, { text = it }, textStyle = MaterialTheme.typography.bodyLarge, cursorBrush = SolidColor(T.Accent),
                 modifier = Modifier.fillMaxWidth().heightIn(max = 160.dp))
         }
         Spacer(Modifier.height(12.dp))
         Row(verticalAlignment = Alignment.CenterVertically) {
-            Box(Modifier.size(32.dp).clip(CircleShape).background(T.Fill).clickable(onClick = onPlus), contentAlignment = Alignment.Center) { Icon(Icons.Rounded.Add, "添加", tint = T.Ink, modifier = Modifier.size(18.dp)) }
-            Spacer(Modifier.width(10.dp))
-            Row(Modifier.clip(T.R8).clickable(onClick = onPerm).padding(4.dp), verticalAlignment = Alignment.CenterVertically) {
-                Icon(if (perm == "danger-full-access") Icons.Outlined.GppMaybe else Icons.Outlined.Shield, null, tint = if (perm == "danger-full-access") T.WarnText else T.Text2, modifier = Modifier.size(15.dp))
-                Spacer(Modifier.width(5.dp)); Text(permissionLabel(perm), fontSize = 14.sp, color = T.Text2, maxLines = 1)
-                Icon(Icons.Rounded.KeyboardArrowDown, null, tint = T.Text2, modifier = Modifier.size(16.dp))
-            }
-            Spacer(Modifier.width(6.dp))
-            Row(Modifier.weight(1f).clip(T.R8).clickable(onClick = onModel).padding(4.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.End) {
-                Text(model?.name ?: "选择模型", fontSize = 14.sp, color = T.Text2, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
-                model?.effort?.let { Spacer(Modifier.width(5.dp)); Text(it.replaceFirstChar(Char::uppercase), fontSize = 14.sp, color = T.Caption) }
-                Icon(Icons.Rounded.KeyboardArrowDown, null, tint = T.Text2, modifier = Modifier.size(16.dp))
+            Box(Modifier.size(32.dp).clip(CircleShape).background(T.Fill).clickable(onClick = onPlus), contentAlignment = Alignment.Center) { Icon(D.plus, "添加", tint = T.Ink, modifier = Modifier.size(18.dp)) }
+            Spacer(Modifier.width(8.dp))
+            // Narrow phones: access mode collapses to its icon (the sheet shows the full label); the model keeps priority.
+            BoxWithConstraints(Modifier.weight(1f)) {
+                val roomy = maxWidth >= 300.dp
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    val danger = perm == "danger-full-access"
+                    Row(Modifier.clip(T.R8).clickable(onClick = onPerm).padding(horizontal = 6.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Icon(if (danger) D.warning else D.shield, permissionLabel(perm), tint = if (danger) T.WarnText else T.Text2, modifier = Modifier.size(17.dp))
+                        if (roomy) { Spacer(Modifier.width(5.dp)); Text(permissionLabel(perm), fontSize = 14.sp, color = T.Text2, maxLines = 1) }
+                        Icon(D.chevronDown, null, tint = T.Text2, modifier = Modifier.size(16.dp))
+                    }
+                    Row(Modifier.weight(1f), horizontalArrangement = Arrangement.End) { Row(Modifier.clip(T.R8).clickable(onClick = onModel).padding(horizontal = 6.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Text(model?.let { shortModelName(it.name) } ?: "选择模型", fontSize = 14.sp, color = T.Text2, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
+                        model?.effort?.let { Spacer(Modifier.width(5.dp)); Text(it.replaceFirstChar(Char::uppercase), fontSize = 14.sp, color = T.Caption, maxLines = 1, softWrap = false) }
+                        Icon(D.chevronDown, null, tint = T.Text2, modifier = Modifier.size(16.dp))
+                    } }
+                }
             }
             Spacer(Modifier.width(8.dp))
             val canSend = enabled && text.isNotBlank()
@@ -335,7 +351,6 @@ private fun Composer(placeholder: String, running: Boolean, perm: String, model:
 private fun Footer(st: ChatState) {
     val u = st.usage
     Row(Modifier.fillMaxWidth().padding(vertical = 8.dp), horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically) {
-        Icon(Icons.Outlined.Bolt, null, tint = T.Text3, modifier = Modifier.size(13.dp)); Spacer(Modifier.width(3.dp))
         Text("${u.turns} 轮 ${u.steps} 步", fontSize = 12.sp, color = T.Text3)
         u.cacheHitPercent?.let { Spacer(Modifier.width(14.dp)); Text("缓存命中 $it%", fontSize = 12.sp, color = T.Text3) }
     }

@@ -30,6 +30,8 @@ object T {
     val WarnText = Color(0xFFB7791F)
     /** Sheet backdrop: ink at 28%, matches the mockups (not M3's flat 32% black). */
     val Scrim = Color(0x470F1115)
+    val Bluish = Color(0xFF0E3074)          // --dsw-alias-label-primary-bluish (blue-900)
+    val HoverBg = Color(0x0F263148)         // --dsw-alias-interactive-bg-hover
     val Ok = Color(0xFF22C55E)
     val Err = Color(0xFFEC1313)
     val R4 = RoundedCornerShape(4.dp); val R8 = RoundedCornerShape(8.dp); val R12 = RoundedCornerShape(12.dp)
@@ -48,12 +50,14 @@ fun PocketTheme(content: @Composable () -> Unit) {
             surfaceContainer = Color.White, surfaceContainerHigh = Color.White,
         ),
         typography = Typography(
-            bodyLarge = TextStyle(fontSize = 16.sp, lineHeight = 26.sp, color = T.Ink),
-            bodyMedium = TextStyle(fontSize = 14.sp, lineHeight = 22.sp, color = T.Ink),
-            titleLarge = TextStyle(fontSize = 20.sp, fontWeight = FontWeight.SemiBold, color = T.Ink),
-            titleMedium = TextStyle(fontSize = 17.sp, fontWeight = FontWeight.SemiBold, color = T.Ink),
-            labelMedium = TextStyle(fontSize = 13.sp, color = T.Text3),
+            bodyLarge = TextStyle(fontSize = 16.sp, lineHeight = 26.sp),
+            bodyMedium = TextStyle(fontSize = 14.sp, lineHeight = 22.sp),
+            titleLarge = TextStyle(fontSize = 20.sp, fontWeight = FontWeight.SemiBold),
+            titleMedium = TextStyle(fontSize = 17.sp, fontWeight = FontWeight.SemiBold),
+            labelMedium = TextStyle(fontSize = 13.sp),
         ),
+        // Typography carries no colors: a color here leaks into LocalTextStyle and beats Button content colors
+        // (that made the black primary buttons render black-on-black).
         content = content,
     )
 }
