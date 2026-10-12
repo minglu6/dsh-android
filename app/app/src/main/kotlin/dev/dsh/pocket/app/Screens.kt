@@ -22,11 +22,13 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.dsh.pocket.protocol.PairingLink
@@ -63,21 +65,36 @@ private fun Row2(title: String, sub: String? = null, icon: ImageVector? = null, 
 
 // ---------- Drawer ----------
 
+/** Official DeepSeek drawer proportion: ~80% of screen width, capped at [max] on large screens. */
+fun drawerWidthFor(screenWidth: Dp, fraction: Float = 0.8f, max: Dp = DrawerMaxWidth): Dp =
+    minOf(screenWidth * fraction, max)
+
+val DrawerMaxWidth = 320.dp
+
 @Composable
 fun SessionDrawer(onPick: (String) -> Unit, onNew: () -> Unit, onSettings: () -> Unit, onConnections: () -> Unit) {
     val sessions by Pocket.sessions.collectAsState()
     val chat by Pocket.chat.collectAsState()
     val active by Pocket.active.collectAsState()
     val status by Pocket.status.collectAsState()
-    val routes by Pocket.routes.collectAsState()
     val profile = Pocket.profiles.collectAsState().value.firstOrNull { it.id == active }
-    ModalDrawerSheet(drawerContainerColor = T.Drawer, drawerShape = RoundedCornerShapeEnd, modifier = Modifier.width(320.dp)) {
+    val drawerWidth = drawerWidthFor(LocalConfiguration.current.screenWidthDp.dp)
+    ModalDrawerSheet(
+        drawerContainerColor = T.Drawer,
+        drawerShape = RoundedCornerShapeEnd,
+        modifier = Modifier.width(drawerWidth).testTag("sessionDrawer"),
+    ) {
         Column(Modifier.fillMaxHeight().systemBarsPadding()) {
             Row(Modifier.padding(start = 18.dp, end = 18.dp, top = 18.dp, bottom = 12.dp), verticalAlignment = Alignment.CenterVertically) {
                 androidx.compose.foundation.Image(D.wordmark, "deepseek HARNESS", modifier = Modifier.height(22.dp).width(167.dp))
-                Spacer(Modifier.weight(1f))
-                Row(Modifier.clip(T.R8).clickable(onClick = onConnections).padding(4.dp), verticalAlignment = Alignment.CenterVertically) {
-                    StatusDot(status[active]); Spacer(Modifier.width(6.dp)); Text(profile?.name ?: "未连接", fontSize = 13.sp, color = T.Text2)
+                Spacer(Modifier.width(8.dp))
+                Row(
+                    Modifier.weight(1f).clip(T.R8).clickable(onClick = onConnections).padding(4.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.End,
+                ) {
+                    StatusDot(status[active]); Spacer(Modifier.width(6.dp))
+                    Text(profile?.name ?: "未连接", fontSize = 13.sp, color = T.Text2, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
             }
             Row(Modifier.padding(horizontal = 12.dp).fillMaxWidth().clip(T.R12).background(Color.White).border(1.dp, T.Border, T.R12).clickable(onClick = onNew).padding(12.dp),
@@ -90,8 +107,9 @@ fun SessionDrawer(onPick: (String) -> Unit, onNew: () -> Unit, onSettings: () ->
                 val top = sessions.filter { it.parentSessionId == null && !it.blank }
                 if (top.isEmpty()) Text(if (status[active] == Dot.Online) "暂无会话" else "连接后显示会话", fontSize = 14.sp, color = T.Caption, modifier = Modifier.padding(horizontal = 22.dp, vertical = 10.dp))
                 top.groupBy { it.cwd?.trimEnd('/')?.substringAfterLast('/') ?: "默认" }.forEach { (ws, list) ->
-                    Row(Modifier.padding(horizontal = 22.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-                        Icon(D.folderOpen, null, Modifier.size(17.dp), tint = T.Accent); Spacer(Modifier.width(10.dp)); Text(ws, fontSize = 15.sp, color = T.Ink)
+                    Row(Modifier.fillMaxWidth().padding(horizontal = 22.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Icon(D.folderOpen, null, Modifier.size(17.dp), tint = T.Accent); Spacer(Modifier.width(10.dp))
+                        Text(ws, fontSize = 15.sp, color = T.Ink, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
                     }
                     list.forEach { s ->
                         val sel = s.sessionId == chat?.sessionId
@@ -116,7 +134,8 @@ private val RoundedCornerShapeEnd = androidx.compose.foundation.shape.RoundedCor
 private fun DrawerItem(icon: ImageVector, text: String, enabled: Boolean = true, onClick: () -> Unit = {}) {
     Row(Modifier.padding(horizontal = 10.dp).fillMaxWidth().clip(T.R8).clickable(enabled = enabled, onClick = onClick).alpha(if (enabled) 1f else 0.45f).padding(12.dp),
         verticalAlignment = Alignment.CenterVertically) {
-        Icon(icon, null, Modifier.size(18.dp), tint = T.Ink); Spacer(Modifier.width(12.dp)); Text(text, fontSize = 15.sp, color = T.Ink)
+        Icon(icon, null, Modifier.size(18.dp), tint = T.Ink); Spacer(Modifier.width(12.dp))
+        Text(text, fontSize = 15.sp, color = T.Ink, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
     }
 }
 
