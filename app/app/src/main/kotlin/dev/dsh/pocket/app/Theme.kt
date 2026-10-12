@@ -12,12 +12,14 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
-/** dsh web UI design tokens (see docs/mockups, gen2.py). */
+/** dsh web UI design tokens (`--dsw-static-deepseek-*` / InputBar `.primary`). */
 object T {
     val Ink = Color(0xFF0F1115)
-    val Accent = Color(0xFF3964FE)
+    /** Light `--dsw-alias-button-info-fill` / deepseek-500. */
+    val Accent = Color(0xFF4176E6)
+    /** Dark `--dsw-alias-button-info-fill` / deepseek-400. */
+    val AccentDark = Color(0xFF7AAAFF)
     val Tint = Color(0xFFE4EDFD)
-    val SendDisabled = Color(0xFFB4C4F4)
     val Text2 = Color(0xFF61666B)
     val Text3 = Color(0xFF81858C)
     val Caption = Color(0xFFADB2B8)
@@ -52,7 +54,7 @@ fun PocketTheme(content: @Composable () -> Unit) {
     }
     MaterialTheme(
         colorScheme = if (dark) androidx.compose.material3.darkColorScheme(
-            primary = T.Accent, onPrimary = Color.White, background = Color(0xFF151517), surface = Color(0xFF232324),
+            primary = T.AccentDark, onPrimary = Color.White, background = Color(0xFF151517), surface = Color(0xFF232324),
             onSurface = Color(0xFFF9FAFB), onBackground = Color(0xFFF9FAFB), error = T.Err,
         ) else lightColorScheme(
             primary = T.Accent, onPrimary = Color.White, background = Color.White, surface = Color.White,

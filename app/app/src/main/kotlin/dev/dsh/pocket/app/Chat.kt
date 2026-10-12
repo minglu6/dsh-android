@@ -17,6 +17,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.rotate
 import androidx.compose.foundation.layout.offset
@@ -390,14 +391,26 @@ private fun Composer(placeholder: String, running: Boolean, perm: String, model:
                 }
             }
             Spacer(Modifier.width(8.dp))
+            // Desktop InputBar `.primary`: 34px circle, button-info-fill (#4176E6 / #7AAAFF),
+            // white 16px glyph; stop uses the same fill (not brand-primary/ink). Disabled = 0.4 opacity.
             val canSend = enabled && text.isNotBlank()
+            val primaryFill = MaterialTheme.colorScheme.primary
             if (running && text.isBlank()) {
-                Box(Modifier.size(38.dp).clip(CircleShape).background(T.Ink).clickable(onClick = onStop), contentAlignment = Alignment.Center) {
-                    Box(Modifier.size(11.dp).clip(T.R4).background(Color.White))
+                Box(Modifier.size(34.dp).clip(CircleShape).background(primaryFill).clickable(onClick = onStop), contentAlignment = Alignment.Center) {
+                    // svg rect x=3 y=3 w=10 h=10 rx=3 in 16×16 viewBox
+                    Box(Modifier.size(10.dp).clip(RoundedCornerShape(3.dp)).background(Color.White))
                 }
             } else {
-                Box(Modifier.size(38.dp).clip(CircleShape).background(if (canSend) T.Accent else T.SendDisabled).clickable(enabled = canSend) { onSend(text.trim()); text = "" }, contentAlignment = Alignment.Center) {
-                    Icon(Icons.Rounded.ArrowUpward, "发送", tint = Color.White, modifier = Modifier.size(18.dp))
+                Box(
+                    Modifier
+                        .size(34.dp)
+                        .clip(CircleShape)
+                        .background(primaryFill)
+                        .alpha(if (canSend) 1f else 0.4f)
+                        .clickable(enabled = canSend) { onSend(text.trim()); text = "" },
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(Icons.Rounded.ArrowUpward, "发送", tint = Color.White, modifier = Modifier.size(16.dp))
                 }
             }
         }
