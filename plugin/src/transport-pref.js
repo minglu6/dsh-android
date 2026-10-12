@@ -1,22 +1,24 @@
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 
-export const TRANSPORTS = Object.freeze(['iroh', 'tailscale'])
+/** Phone path is always host:port WebSocket (Tailscale or LAN). */
+export const TRANSPORTS = Object.freeze(['tailscale'])
 
 /**
  * @param {unknown} v
- * @returns {'iroh'|'tailscale'|null}
+ * @returns {'tailscale'|null}
  */
 export function normalizeTransport(v) {
-  if (v === 'iroh' || v === 'tailscale') return v
+  if (v === 'tailscale') return v
   return null
 }
 
 /**
- * Resolve remote transport: explicit config > persisted last choice > default iroh.
+ * Resolve remote transport: explicit config > persisted last choice > default tailscale.
+ * Legacy `iroh` values in the transport file are ignored (phone path no longer supports them).
  * @param {string} dataDir
  * @param {unknown} [configTransport]
- * @returns {'iroh'|'tailscale'}
+ * @returns {'tailscale'}
  */
 export function loadTransport(dataDir, configTransport) {
   const fromConfig = normalizeTransport(configTransport)
@@ -28,13 +30,13 @@ export function loadTransport(dataDir, configTransport) {
   } catch {
     // missing file is fine
   }
-  return 'iroh'
+  return 'tailscale'
 }
 
 /**
- * Persist last UI / API choice (ignored when cordis config.transport is set).
+ * Persist last choice (ignored when cordis config.transport is set).
  * @param {string} dataDir
- * @param {'iroh'|'tailscale'} mode
+ * @param {'tailscale'} mode
  */
 export function saveTransport(dataDir, mode) {
   const m = normalizeTransport(mode)

@@ -1,6 +1,7 @@
 [workspace]
 resolver = "2"
-members = ["pocket-iroh", "pocket-host", "pocket-ffi"]
+# pocket-ffi (Android JNI) removed from the phone path — APK no longer ships libpocket_iroh.so.
+members = ["pocket-iroh", "pocket-host"]
 
 [workspace.package]
 version = "0.1.0"

@@ -4,8 +4,8 @@ Gradle 工程根目录就是 `app/`。
 
 | 模块 | 内容 |
 |---|---|
-| `core/protocol` | 纯 Kotlin/JVM：`PocketClient`（iroh + 可选 loopback WS）、`Transport`（iroh 优先）、`TranscriptReducer`、模型等数据结构 |
-| `app` | Compose 界面、连接管理、iroh JNI（`IrohNative`）、前台服务（审批通知）、Keystore 加密 token |
+| `core/protocol` | 纯 Kotlin/JVM：`PocketClient`（WebSocket）、`Transport`（Tailscale / LAN 路由标签）、`TranscriptReducer`、模型等数据结构 |
+| `app` | Compose 界面、连接管理、前台服务（审批通知）、Keystore 加密 token |
 
 界面按 [docs/mockups](../docs/mockups/) 实现，配色和圆角沿用 dsh 网页端。
 
@@ -21,11 +21,13 @@ cd app
 cd ../plugin && node test/integration/kotlin-live.mjs
 ```
 
+APK **不再**包含 `libpocket_iroh.so`；连接只走 host:port WebSocket。
+
 ## 使用
 
-1. 电脑端：`dsh web` 装好插件后，设置 →「手机连接」打开配对（QR + `nodeId#code`）。
-2. 手机端：连接 →「扫码配对」或「粘贴配对串」。不填 IP/端口，不依赖 Tailscale。
-3. 连接只走 iroh（打洞 direct，否则 relay）。列表小标签显示路由；relay 时状态点为琥珀色。旧连接需重新配对。
+1. 电脑端：`dsh web` 装好插件后，设置 →「手机连接」打开配对（QR + `dshpocket://pair?h=host:port&c=`）。
+2. 手机端：连接 →「扫码配对」或「手动配对」填入电脑地址与 6 位码。
+3. 列表小标签按地址显示 `Tailscale` / `LAN`。旧 iroh 配置需重新配对。
 4. token 用 Android Keystore 的 AES-GCM 密钥加密保存。
 
 ## 功能对齐

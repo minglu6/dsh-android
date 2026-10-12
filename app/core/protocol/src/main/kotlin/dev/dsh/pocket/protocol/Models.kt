@@ -66,45 +66,28 @@ data class Approval(val approvalId: String, val sessionId: String?, val toolName
 /** One image part for `prompt` (base64 payload, no data: URL prefix). */
 data class PromptImage(val mediaType: String, val data: String, val name: String? = null)
 
-/** User-selected remote path. Never auto-switched against the other. */
-enum class RemoteTransport {
-    Iroh,
-    Tailscale,
-}
-
 /**
- * Pairing payload for one transport only — never mixes Tailscale host with iroh dial.
+ * Pairing payload for LAN / Tailscale WebSocket.
  *
- * - Iroh QR / deep link: `dshpocket://pair?n=<irohNodeId>&c=<6-digit>`
- * - Iroh paste: `<irohNodeId>#<6-digit>`
- * - Tailscale QR / deep link: `dshpocket://pair?h=<host:port>&c=<6-digit>`
- *
- * If both `n` and `h` appear, `n` wins (iroh advertisement). Modes are exclusive at dial time.
+ * Happy path: `dshpocket://pair?h=<host:port>&c=<6-digit>`
+ * Legacy iroh forms (`n=` / `nodeId#code`) are rejected — re-pair from the desktop UI.
  */
-sealed class PairingLink {
-    abstract val code: String
-
-    data class Iroh(val nodeId: String, override val code: String) : PairingLink()
-    data class Tailscale(val host: String, val port: Int, override val code: String) : PairingLink()
-
+data class PairingLink(val host: String, val port: Int, val code: String) {
     companion object {
         private val CODE = Regex("^\\d{6}$")
-        private val TETHER_LINE = Regex("^([A-Za-z0-9_-]{16,})#(\\d{6})$")
 
         fun parse(text: String): PairingLink? {
             val s = text.trim()
-            TETHER_LINE.matchEntire(s)?.let { m ->
-                return Iroh(m.groupValues[1], m.groupValues[2])
-            }
             if (!s.startsWith("dshpocket://pair")) return null
             val q = s.substringAfter('?', "").split('&')
                 .filter { it.isNotEmpty() }
                 .associate { it.substringBefore('=') to java.net.URLDecoder.decode(it.substringAfter('=', ""), "UTF-8") }
             val c = q["c"]?.takeIf { CODE.matches(it) } ?: return null
-            q["n"]?.takeIf { it.isNotBlank() }?.let { return Iroh(it, c) }
+            // Explicitly ignore legacy iroh node-id advertisements.
+            if (!q["n"].isNullOrBlank()) return null
             val h = q["h"]?.takeIf { it.isNotBlank() } ?: return null
             val hp = parseHostPort(h) ?: return null
-            return Tailscale(hp.first, hp.second, c)
+            return PairingLink(hp.first, hp.second, c)
         }
     }
 }

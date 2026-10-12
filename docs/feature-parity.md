@@ -49,7 +49,7 @@ Plugin surface: `dsh-plugin-pocket` WebSocket ops (+ optional Cordis injects).
 | General → 性能与用量 | `ui-chat.performanceUsage` | implement | done | Footer density. |
 | 扫码配对 | Camera + deep link | — | elsewhere | PR #10; untouched. |
 | Desktop plugin account-menu | Account menu placement | — | elsewhere | PR #9; untouched. |
-| iroh transport | M3 | — | elsewhere | Untouched. |
+| Remote transport | M3 | — | elsewhere | Tailscale / LAN host:port only; iroh removed from phone path. |
 
 ## Plugin RPC additions
 

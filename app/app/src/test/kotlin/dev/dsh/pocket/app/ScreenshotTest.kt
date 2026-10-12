@@ -47,8 +47,8 @@ class ScreenshotTest {
         {"id":"deepseek-v4-pro","name":"DeepSeek-V4-Pro","description":"Stronger agentic coding, knowledge, and difficult reasoning; suited to complex or quality-critical tasks at higher cost."}]}]}"""))
 
     @Before fun state() {
-        val p = Profile("p1", "Mac mini", nodeId = "abcdefghijklmnopqrstuvwxyz01")
-        Pocket.profiles.value = listOf(p, Profile("p2", "书房 NAS", nodeId = "abcdefghijklmnopqrstuvwxyz02"))
+        val p = Profile("p1", "Mac mini", host = "100.106.128.87", port = 7690)
+        Pocket.profiles.value = listOf(p, Profile("p2", "书房 NAS", host = "192.168.1.20", port = 7690))
         Pocket.active.value = "p1"
         Pocket.status.value = mapOf("p1" to Dot.Online, "p2" to Dot.Offline)
         Pocket.catalog.value = catalog
@@ -103,7 +103,7 @@ class ScreenshotTest {
     @Test fun s04_drawer() = show("04-drawer") { SessionDrawer({}, {}, {}, {}) }
     @Test fun s05_connections() = show("05-connections") { ConnectionsScreen(null, {}, true, {}, {}) }
     @Test fun s06_connectionsEmpty() { Pocket.profiles.value = emptyList(); Pocket.active.value = null; show("06-connections-empty") { ConnectionsScreen(null, {}, false, {}, {}) } }
-    @Test fun s07_pairSheet() { Pocket.profiles.value = emptyList(); showWithDialogs("07-pair-sheet") { PairSheet(PairingLink.Iroh("abcdefghijklmnopqrstuv", "752314"), {}, {}) } }
+    @Test fun s07_pairSheet() { Pocket.profiles.value = emptyList(); showWithDialogs("07-pair-sheet") { PairSheet(PairingLink("100.106.128.87", 7690, "752314"), {}, {}) } }
     @Test fun s07b_cameraPermissionSheet() = showWithDialogs("07b-camera-permission") { CameraPermissionSheet({}, {}) }
     @Test fun s08_settings() = show("08-settings") { SettingsScreen({}, {}, {}) }
     @Test fun s09_general() = show("09-general-settings") { GeneralSettingsScreen {} }

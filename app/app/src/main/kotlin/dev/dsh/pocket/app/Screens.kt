@@ -30,7 +30,6 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.dsh.pocket.protocol.PairingLink
-import dev.dsh.pocket.protocol.RemoteTransport
 import dev.dsh.pocket.protocol.parseHostPort
 import kotlinx.coroutines.launch
 
@@ -78,7 +77,7 @@ fun SessionDrawer(onPick: (String) -> Unit, onNew: () -> Unit, onSettings: () ->
                 androidx.compose.foundation.Image(D.wordmark, "deepseek HARNESS", modifier = Modifier.height(22.dp).width(167.dp))
                 Spacer(Modifier.weight(1f))
                 Row(Modifier.clip(T.R8).clickable(onClick = onConnections).padding(4.dp), verticalAlignment = Alignment.CenterVertically) {
-                    StatusDot(status[active], relay = routes[active]?.isRelay == true); Spacer(Modifier.width(6.dp)); Text(profile?.name ?: "未连接", fontSize = 13.sp, color = T.Text2)
+                    StatusDot(status[active]); Spacer(Modifier.width(6.dp)); Text(profile?.name ?: "未连接", fontSize = 13.sp, color = T.Text2)
                 }
             }
             Row(Modifier.padding(horizontal = 12.dp).fillMaxWidth().clip(T.R12).background(Color.White).border(1.dp, T.Border, T.R12).clickable(onClick = onNew).padding(12.dp),
@@ -155,7 +154,7 @@ fun ConnectionsScreen(pairLink: PairingLink?, onPairLinkConsumed: () -> Unit, ca
                 profiles.forEachIndexed { i, p ->
                     val d = status[p.id]
                     val route = routes[p.id]
-                    Row(verticalAlignment = Alignment.CenterVertically) { Spacer(Modifier.width(16.dp)); StatusDot(d, relay = route?.isRelay == true); Box(Modifier.weight(1f)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) { Spacer(Modifier.width(16.dp)); StatusDot(d); Box(Modifier.weight(1f)) {
                     Row2(p.name + if (p.id == active) "  · 当前" else "", "${p.subtitle} · ${dotLabel(d)}", icon = null, divider = i < profiles.lastIndex, onClick = { manageId = p.id }, trailing = {
                         Text(route?.label ?: p.kind, fontSize = 12.sp, color = if (p.needsRepair) T.WarnBorder else T.Text2, modifier = Modifier.border(1.dp, T.Border, T.R8).padding(horizontal = 8.dp, vertical = 4.dp))
                         Icon(D.chevronRight, null, tint = T.Text3, modifier = Modifier.padding(start = 8.dp).size(20.dp))
@@ -251,27 +250,8 @@ private fun dotLabel(d: Dot?) = when (d) { Dot.Online -> "在线"; Dot.Connectin
 
 @Composable
 fun PairSheet(link: PairingLink?, onDismiss: () -> Unit, onPaired: (Profile) -> Unit) {
-    val initialMode = when (link) {
-        is PairingLink.Tailscale -> RemoteTransport.Tailscale
-        is PairingLink.Iroh -> RemoteTransport.Iroh
-        null -> Pocket.prefs.preferredTransport
-    }
-    var mode by remember { mutableStateOf(initialMode) }
-    var ticket by remember {
-        mutableStateOf(
-            when (link) {
-                is PairingLink.Iroh -> "${link.nodeId}#${link.code}"
-                else -> ""
-            },
-        )
-    }
     var address by remember {
-        mutableStateOf(
-            when (link) {
-                is PairingLink.Tailscale -> "${link.host}:${link.port}"
-                else -> ""
-            },
-        )
+        mutableStateOf(link?.let { "${it.host}:${it.port}" } ?: "")
     }
     var name by remember { mutableStateOf("") }
     var code by remember { mutableStateOf(link?.code ?: "") }
@@ -279,51 +259,25 @@ fun PairSheet(link: PairingLink?, onDismiss: () -> Unit, onPaired: (Profile) -> 
     var err by remember { mutableStateOf<String?>(null) }
     val scope = rememberCoroutineScope()
     val focus = remember { FocusRequester() }
-    val parsed = remember(mode, ticket, address, code) {
-        when (mode) {
-            RemoteTransport.Iroh -> {
-                PairingLink.parse(ticket.trim()) as? PairingLink.Iroh
-                    ?: ticket.trim().takeIf { it.length >= 16 && '#' !in it }?.let { n ->
-                        code.takeIf { it.length == 6 }?.let { PairingLink.Iroh(n, it) }
-                    }
+    val parsed = remember(address, code) {
+        when (val p = PairingLink.parse(address.trim())) {
+            null -> parseHostPort(address)?.let { (h, port) ->
+                code.takeIf { it.length == 6 }?.let { PairingLink(h, port, it) }
             }
-            RemoteTransport.Tailscale -> {
-                when (val p = PairingLink.parse(address.trim())) {
-                    is PairingLink.Tailscale -> {
-                        val c = code.takeIf { it.length == 6 } ?: p.code
-                        c.takeIf { it.length == 6 }?.let { PairingLink.Tailscale(p.host, p.port, it) }
-                    }
-                    else -> parseHostPort(address)?.let { (h, port) ->
-                        code.takeIf { it.length == 6 }?.let { PairingLink.Tailscale(h, port, it) }
-                    }
-                }
+            else -> {
+                val c = code.takeIf { it.length == 6 } ?: p.code
+                c.takeIf { it.length == 6 }?.let { PairingLink(p.host, p.port, it) }
             }
         }
     }
     PocketSheet(onDismiss) {
         SheetTitle("配对")
-        TransportModeRow(mode) {
-            mode = it
+        Field("地址", address, "100.x.y.z:7690 或局域网 host:port") {
+            address = it
             err = null
-            Pocket.prefs.preferredTransport = it
-        }
-        when (mode) {
-            RemoteTransport.Iroh -> Field("配对串", ticket, "粘贴电脑上显示的整行") {
-                ticket = it
-                err = null
-                (PairingLink.parse(it.trim()) as? PairingLink.Iroh)?.let { link ->
-                    code = link.code
-                    mode = RemoteTransport.Iroh
-                }
-            }
-            RemoteTransport.Tailscale -> Field("地址", address, "100.x.y.z:7690") {
-                address = it
-                err = null
-                (PairingLink.parse(it.trim()) as? PairingLink.Tailscale)?.let { link ->
-                    address = "${link.host}:${link.port}"
-                    code = link.code
-                    mode = RemoteTransport.Tailscale
-                }
+            PairingLink.parse(it.trim())?.let { parsedLink ->
+                address = "${parsedLink.host}:${parsedLink.port}"
+                code = parsedLink.code
             }
         }
         Field("名称", name, "例如 Mac mini") { name = it }
@@ -356,25 +310,6 @@ fun PairSheet(link: PairingLink?, onDismiss: () -> Unit, onPaired: (Profile) -> 
         }
     }
     LaunchedEffect(Unit) { if (link != null) runCatching { focus.requestFocus() } }
-}
-
-@Composable
-private fun TransportModeRow(mode: RemoteTransport, onChange: (RemoteTransport) -> Unit) {
-    Row(Modifier.padding(horizontal = 18.dp, vertical = 6.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        listOf(RemoteTransport.Iroh to "iroh", RemoteTransport.Tailscale to "Tailscale").forEach { (value, label) ->
-            val selected = mode == value
-            OutlinedButton(
-                { onChange(value) },
-                Modifier.weight(1f).height(40.dp),
-                shape = T.R8,
-                border = BorderStroke(1.dp, if (selected) T.Ink else T.Border),
-                colors = ButtonDefaults.outlinedButtonColors(
-                    containerColor = if (selected) T.Fill2 else Color.Transparent,
-                    contentColor = T.Ink,
-                ),
-            ) { Text(label, fontSize = 14.sp) }
-        }
-    }
 }
 
 @Composable

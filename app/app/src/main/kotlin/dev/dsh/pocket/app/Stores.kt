@@ -4,7 +4,8 @@ import android.content.Context
 import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
 import android.util.Base64
-import dev.dsh.pocket.protocol.RemoteTransport
+import dev.dsh.pocket.protocol.Route
+import dev.dsh.pocket.protocol.classifyWsRoute
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.json.Json
@@ -45,8 +46,11 @@ class SecureTokenStore(ctx: Context) {
 }
 
 /**
- * Persisted remote path for a profile.
- * `"iroh"` | `"tailscale"` | `""` (legacy: infer from nodeId / host+port).
+ * Persisted desktop connection.
+ *
+ * [host]/[port] are required for Tailscale / LAN WebSocket.
+ * Legacy fields [transport] / [nodeId] remain only so old prefs decode; profiles
+ * that lack a usable host:port are [needsRepair] and must re-pair.
  */
 /** Trim + truncate to 64 chars like plugin `devices.js` / `PATCH /pocket/devices`. */
 internal fun clipProfileName(name: String): String {
@@ -59,42 +63,33 @@ internal fun clipProfileName(name: String): String {
 data class Profile(
     val id: String,
     val name: String,
-    /** Explicit mode; blank = infer from fields (pre-dual-mode prefs). */
+    /** Legacy; ignored. */
     val transport: String = "",
-    /** Desktop iroh endpoint id (iroh mode). */
+    /** Legacy iroh node id; ignored — forces re-pair when host/port missing. */
     val nodeId: String = "",
     val deviceId: String? = null,
-    /** Tailscale / WS listen address (Tailscale mode). */
+    /** Tailscale / LAN listen address. */
     val host: String = "",
     val port: Int = 0,
 ) {
-    val remote: RemoteTransport get() = when (transport) {
-        "tailscale" -> RemoteTransport.Tailscale
-        "iroh" -> RemoteTransport.Iroh
-        else -> when {
-            nodeId.isNotBlank() -> RemoteTransport.Iroh
-            host.isNotBlank() && port in 1..65535 -> RemoteTransport.Tailscale
-            else -> RemoteTransport.Iroh
-        }
-    }
+    val needsRepair: Boolean get() = host.isBlank() || port !in 1..65535
 
-    val needsRepair: Boolean get() = when (remote) {
-        RemoteTransport.Iroh -> nodeId.isBlank()
-        RemoteTransport.Tailscale -> host.isBlank() || port !in 1..65535
-    }
+    val routeKind: Route? get() = if (needsRepair) null else classifyWsRoute(host)
 
     val kind: String get() = when {
         needsRepair -> "需重新配对"
-        remote == RemoteTransport.Tailscale -> "Tailscale"
-        else -> "iroh"
+        else -> when (routeKind) {
+            Route.WsTailscale -> "Tailscale"
+            Route.WsLan -> "LAN"
+            Route.WsLocal -> "local"
+            null -> "需重新配对"
+        }
     }
 
     /** One-line subtitle on the connections list. */
     val subtitle: String get() = when {
         needsRepair -> "连接信息不完整，请重新配对"
-        remote == RemoteTransport.Tailscale -> "$host:$port"
-        nodeId.length > 16 -> nodeId.take(12) + "…"
-        else -> nodeId
+        else -> "$host:$port"
     }
 }
 
@@ -154,11 +149,4 @@ class AppPrefs(ctx: Context) {
     var performanceUsage: PerformanceUsage
         get() = runCatching { PerformanceUsage.valueOf(p.getString("performanceUsage", null) ?: "Detailed") }.getOrDefault(PerformanceUsage.Detailed)
         set(v) = p.edit().putString("performanceUsage", v.name).apply()
-    /** Default mode when opening a blank pair sheet (persisted last choice). */
-    var preferredTransport: RemoteTransport
-        get() = when (p.getString("preferredTransport", null)) {
-            "Tailscale" -> RemoteTransport.Tailscale
-            else -> RemoteTransport.Iroh
-        }
-        set(v) = p.edit().putString("preferredTransport", v.name).apply()
 }
