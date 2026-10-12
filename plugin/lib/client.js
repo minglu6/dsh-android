@@ -250,7 +250,7 @@ const styles = {
 	valueLine: {
 		display: "inline-flex",
 		alignItems: "center",
-		gap: 8,
+		gap: 10,
 		fontSize: 14,
 		lineHeight: "20px",
 		color: "var(--dsw-alias-label-primary)"
@@ -259,8 +259,11 @@ const styles = {
 		position: "relative",
 		display: "inline-block",
 		flex: "none",
+		alignSelf: "center",
 		width: 10,
 		height: 10,
+		borderRadius: "50%",
+		boxShadow: `0 0 0 3px color-mix(in srgb, ${state === "done" ? "var(--dsw-alias-state-success-primary)" : state === "error" ? "var(--dsw-alias-state-error-primary)" : "var(--dsw-alias-state-idle-primary, var(--dsw-alias-label-tertiary))"} 14%, transparent)`,
 		color: state === "done" ? "var(--dsw-alias-state-success-primary)" : state === "error" ? "var(--dsw-alias-state-error-primary)" : "var(--dsw-alias-state-idle-primary, var(--dsw-alias-label-tertiary))"
 	}),
 	stateDotCore: {

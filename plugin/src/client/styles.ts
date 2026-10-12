@@ -60,7 +60,7 @@ export const styles = {
   valueLine: {
     display: 'inline-flex',
     alignItems: 'center',
-    gap: 8,
+    gap: 10,
     fontSize: 14,
     lineHeight: '20px',
     color: 'var(--dsw-alias-label-primary)',
@@ -68,14 +68,24 @@ export const styles = {
 
   /**
    * Mirror of primitives StateDot solid appearance:
-   * 10px layout slot, 6px currentColor core via inset 20% (soft visual weight).
+   * 10px layout slot, 6px currentColor core via inset 20% (soft visual weight),
+   * plus a quiet halo ring (same trick ConnectionIndicator / Tag use with color-mix).
    */
   stateDotSlot: (state: 'done' | 'error' | 'idle') => ({
     position: 'relative' as const,
     display: 'inline-block',
-    flex: 'none',
+    flex: 'none' as const,
+    alignSelf: 'center',
     width: 10,
     height: 10,
+    borderRadius: '50%',
+    boxShadow: `0 0 0 3px color-mix(in srgb, ${
+      state === 'done'
+        ? 'var(--dsw-alias-state-success-primary)'
+        : state === 'error'
+          ? 'var(--dsw-alias-state-error-primary)'
+          : 'var(--dsw-alias-state-idle-primary, var(--dsw-alias-label-tertiary))'
+    } 14%, transparent)`,
     color:
       state === 'done'
         ? 'var(--dsw-alias-state-success-primary)'
