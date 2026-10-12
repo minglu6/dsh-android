@@ -25,12 +25,9 @@ import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
-import androidx.compose.ui.text.SpanStyle
-import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.dsh.pocket.protocol.Approval
@@ -252,9 +249,14 @@ fun EmptyState(icon: androidx.compose.ui.graphics.vector.ImageVector, title: Str
 @Composable
 private fun Transcript(st: ChatState, onTool: (Item.Tool) -> Unit) {
     val list = rememberLazyListState()
-    val n = st.items.size
+    // Prefs are SharedPreferences-backed; read each composition for mode switches.
+    val livePolicy = presentationPolicyFor(Pocket.prefs.transcriptView, Pocket.prefs.collapseTiming)
+    val rows = remember(st.items, st.running, livePolicy) {
+        foldChatItems(st.items, livePolicy, st.running)
+    }
+    val n = rows.size
     val lastLen = (st.items.lastOrNull() as? Item.Text)?.text?.length ?: 0
-    LaunchedEffect(n, lastLen, st.running) { if (n > 0 && !st.loadingOlder) list.animateScrollToItem(n) }
+    LaunchedEffect(n, lastLen, st.running) { if (n > 0 && !st.loadingOlder) list.animateScrollToItem((n - 1).coerceAtLeast(0)) }
     // Scroll-to-top loads older history (no extra chrome — same LazyColumn).
     var historyArmed by remember(st.sessionId) { mutableStateOf(false) }
     LaunchedEffect(list.firstVisibleItemIndex, list.firstVisibleItemScrollOffset) {
@@ -268,20 +270,19 @@ private fun Transcript(st: ChatState, onTool: (Item.Tool) -> Unit) {
             Pocket.loadOlderHistory()
         }
     }
-    if (st.loaded && n == 0 && !st.running) { EmptyState(D.chat, "开始对话", "发送第一条消息"); return }
+    if (st.loaded && st.items.isEmpty() && !st.running) { EmptyState(D.chat, "开始对话", "发送第一条消息"); return }
     if (!st.loaded) { Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator(color = T.Accent, strokeWidth = 2.dp, modifier = Modifier.size(24.dp)) }; return }
-    LazyColumn(state = list, modifier = Modifier.fillMaxSize(), contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        items(st.items, key = { it.key }) { item ->
-            when (item) {
-                is Item.User -> Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-                    Text(item.text, style = MaterialTheme.typography.bodyLarge, color = T.Ink.copy(alpha = if (item.pending) 0.6f else 1f), modifier = Modifier.padding(start = 56.dp).clip(T.R20).background(T.Fill).padding(horizontal = 16.dp, vertical = 10.dp))
+    LazyColumn(state = list, modifier = Modifier.fillMaxSize(), contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        items(rows, key = { it.key }) { row ->
+            when (row) {
+                is ChatRow.User -> Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                    Text(row.item.text, style = MaterialTheme.typography.bodyLarge, color = T.Ink.copy(alpha = if (row.item.pending) 0.6f else 1f), modifier = Modifier.padding(start = 56.dp).clip(T.R20).background(T.Fill).padding(horizontal = 16.dp, vertical = 10.dp))
                 }
-                is Item.Reasoning -> ReasoningRow(item)
-                is Item.Text -> Markdownish(item.text)
-                is Item.Tool -> ToolCard(item) { onTool(item) }
-                is Item.Notice -> Text(item.text, fontSize = 13.sp, color = T.Text3)
-                // Trajectory-only ledger kinds (desktop 系统 / 上下文); keep chat transcript clean.
-                is Item.Context, is Item.System -> Unit
+                is ChatRow.Answer -> MarkdownView(row.item.text, streaming = row.item.live)
+                is ChatRow.Notice -> Text(row.item.text, fontSize = 13.sp, color = T.Text3)
+                is ChatRow.Tool -> ToolCard(row.item) { onTool(row.item) }
+                is ChatRow.Reasoning -> ReasoningRow(row.item)
+                is ChatRow.Process -> ProcessGroupRow(row, onTool)
             }
         }
         if (st.running) item(key = "status") { RunningLine(st.runStartedAt) }
@@ -289,13 +290,48 @@ private fun Transcript(st: ChatState, onTool: (Item.Tool) -> Unit) {
 }
 
 @Composable
-private fun ReasoningRow(r: Item.Reasoning) {
+private fun ProcessGroupRow(proc: ChatRow.Process, onTool: (Item.Tool) -> Unit) {
+    var open by remember(proc.key, proc.defaultOpen) { mutableStateOf(proc.defaultOpen) }
+    Column(Modifier.fillMaxWidth()) {
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .clickable { open = !open }
+                .padding(bottom = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            val label = when {
+                !proc.closed -> proc.title
+                proc.durationMs != null && proc.tools.isNotEmpty() ->
+                    "已完成，用时 ${seconds(proc.durationMs)}秒"
+                else -> proc.title
+            }
+            Text(label, fontSize = 14.sp, color = T.Text3, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
+            Text(if (open) " ⌄" else " ›", fontSize = 14.sp, color = T.Text3)
+        }
+        if (open) {
+            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                proc.reasoning.forEach { ReasoningRow(it, forceOpen = true) }
+                proc.tools.forEach { ToolCard(it) { onTool(it) } }
+            }
+        }
+        HorizontalDivider(color = T.Border, thickness = 0.5.dp)
+    }
+}
+
+@Composable
+private fun ReasoningRow(r: Item.Reasoning, forceOpen: Boolean = false) {
     val verbose = Pocket.prefs.transcriptView == TranscriptView.Verbose
-    var open by remember(r.key, verbose) { mutableStateOf(verbose) }
+    var open by remember(r.key, verbose, forceOpen) { mutableStateOf(forceOpen || verbose) }
     Row(Modifier.height(IntrinsicSize.Min)) {
         Box(Modifier.width(2.dp).fillMaxHeight().background(T.Fill))
         Column(Modifier.padding(start = 12.dp).clickable { open = !open }) {
-            Text(if (r.live) "深度思考中…" else "已深度思考${r.durationMs?.let { " ${seconds(it)} 秒" } ?: ""} ${if (open) "⌄" else "›"}", fontSize = 14.sp, color = T.Text3)
+            // Desktop locale: message.turnProcess.thoughtForAWhile = "已思考" (not 已深度思考).
+            Text(
+                if (r.live) "深度求索中…"
+                else "已思考${r.durationMs?.let { " ${seconds(it)} 秒" } ?: ""} ${if (open) "⌄" else "›"}",
+                fontSize = 14.sp, color = T.Text3,
+            )
             if (open || r.live) Text(r.text, fontSize = Pocket.prefs.fontSize.sp, lineHeight = (Pocket.prefs.fontSize + 8).sp, color = T.Text3, modifier = Modifier.padding(top = 6.dp))
         }
     }
@@ -304,9 +340,7 @@ private fun ReasoningRow(r: Item.Reasoning) {
 @Composable
 private fun ToolCard(t: Item.Tool, onClick: () -> Unit) {
     val warn = t.status == ToolStatus.AwaitingApproval
-    val view = Pocket.prefs.transcriptView
-    if (view == TranscriptView.Compact && t.status == ToolStatus.Ok) return
-    val showArg = view != TranscriptView.Compact
+    val showArg = Pocket.prefs.transcriptView != TranscriptView.Compact
     Row(Modifier.fillMaxWidth().clip(T.R12).border(1.dp, if (warn) T.WarnBorder else T.Border, T.R12).clickable(onClick = onClick).padding(horizontal = 14.dp, vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically) {
         when (t.status) {
@@ -321,34 +355,6 @@ private fun ToolCard(t: Item.Tool, onClick: () -> Unit) {
         else Spacer(Modifier.weight(1f))
         Icon(D.chevronRight, null, tint = T.Caption, modifier = Modifier.size(18.dp))
     }
-}
-
-/** Minimal markdown: ``` fences as code blocks, `inline` code, **bold**. */
-@Composable
-private fun Markdownish(text: String) {
-    val body = Pocket.prefs.fontSize.sp
-    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        text.split("```").forEachIndexed { i, part ->
-            if (i % 2 == 1) {
-                val code = part.substringAfter('\n', part).trimEnd()
-                Text(code, style = T.Mono.copy(lineHeight = 21.sp), modifier = Modifier.fillMaxWidth().clip(T.R12).background(T.Fill2).horizontalScroll(rememberScrollState()).padding(14.dp))
-            } else if (part.isNotBlank()) {
-                Text(inline(part.trim()), style = MaterialTheme.typography.bodyLarge.copy(fontSize = body, lineHeight = (Pocket.prefs.fontSize + 10).sp))
-            }
-        }
-    }
-}
-
-private fun inline(s: String) = buildAnnotatedString {
-    var i = 0
-    val re = Regex("`([^`]+)`|\\*\\*([^*]+)\\*\\*")
-    for (m in re.findAll(s)) {
-        append(s.substring(i, m.range.first))
-        if (m.groups[1] != null) withStyle(SpanStyle(fontFamily = FontFamily.Monospace, background = T.Fill, fontSize = 14.sp)) { append(" ${m.groupValues[1]} ") }
-        else withStyle(SpanStyle(fontWeight = FontWeight.SemiBold)) { append(m.groupValues[2]) }
-        i = m.range.last + 1
-    }
-    append(s.substring(i))
 }
 
 @Composable

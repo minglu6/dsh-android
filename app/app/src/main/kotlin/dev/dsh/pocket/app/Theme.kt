@@ -7,7 +7,6 @@ import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.TextStyle
-import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -39,7 +38,8 @@ object T {
     val R4 = RoundedCornerShape(4.dp); val R8 = RoundedCornerShape(8.dp); val R12 = RoundedCornerShape(12.dp)
     val R16 = RoundedCornerShape(16.dp); val R20 = RoundedCornerShape(20.dp); val R28 = RoundedCornerShape(28.dp)
     val Sheet = RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp)
-    val Mono = TextStyle(fontFamily = FontFamily.Monospace, fontSize = 13.sp, color = Ink)
+    /** Meslo Nerd Font — same code face as desktop / terminal (Tokyo Night blocks). */
+    val Mono = TextStyle(fontFamily = MesloNerdFamily, fontSize = 13.sp, color = Ink)
 }
 
 @Composable
