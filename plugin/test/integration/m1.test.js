@@ -16,11 +16,23 @@ test('real dsh: approvals, pairing route, resume', { skip: !hasDsh, timeout: 300
   const owner = await pocketClient(`ws://127.0.0.1:${PORT}`)
   await owner.ok('hello', { token: TOKEN })
 
-  // --- pairing through dsh's own webServer route
+  // --- pairing / management through dsh's own webServer routes
   const origin = new URL(webUrl).origin
+  const status0 = await (await fetch(`${origin}/pocket/status`)).json()
+  assert.equal(status0.running, true, JSON.stringify(status0))
+  assert.ok(status0.version)
+  assert.ok(Array.isArray(status0.listen))
+  assert.ok(Array.isArray(status0.devices))
+
   const pr = await fetch(`${origin}/pocket/pair`, { method: 'POST' })
   assert.equal(pr.status, 200, await pr.clone().text())
-  const { code } = await pr.json()
+  const { code, uri } = await pr.json()
+  assert.match(code, /^\d{6}$/)
+  assert.ok(typeof uri === 'string' && uri.includes(code))
+  const pairGet = await (await fetch(`${origin}/pocket/pair`)).json()
+  assert.equal(pairGet.open, true)
+  assert.equal(pairGet.code, code)
+
   const phone = await pocketClient(`ws://127.0.0.1:${PORT}`)
   const paired = await phone.ok('pair', { code, name: 'it-phone' })
   assert.ok(paired.token)
@@ -28,8 +40,22 @@ test('real dsh: approvals, pairing route, resume', { skip: !hasDsh, timeout: 300
   assert.equal((await phone2.ok('hello', { token: paired.token })).device.name, 'it-phone')
   const crossSite = await fetch(`${origin}/pocket/pair`, { method: 'POST', headers: { origin: 'http://evil.example' } })
   assert.equal(crossSite.status, 403)
+  const crossStatus = await fetch(`${origin}/pocket/status`, { headers: { origin: 'http://evil.example' } })
+  assert.equal(crossStatus.status, 403)
   const dl = await (await fetch(`${origin}/pocket/devices`)).json()
   assert.equal(dl.devices.length, 1)
+  assert.equal(dl.devices[0].online, true)
+
+  const renamed = await (await fetch(`${origin}/pocket/devices`, {
+    method: 'PATCH',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ id: paired.deviceId, name: 'it-phone-renamed' }),
+  })).json()
+  assert.equal(renamed.renamed, true)
+  assert.equal(renamed.devices[0].name, 'it-phone-renamed')
+  const status1 = await (await fetch(`${origin}/pocket/status`)).json()
+  assert.equal(status1.devices[0].name, 'it-phone-renamed')
+  assert.equal(status1.devices[0].online, true)
 
   // --- a live session so an Agent exists
   const { sessionId } = await owner.ok('sessions.create', {})

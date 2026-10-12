@@ -16,7 +16,10 @@ export function createPairing({ now = Date.now, ttlMs = PAIRING_TTL_MS } = {}) {
       return { code: win.code, expiresInSec: Math.round(ttlMs / 1000) }
     },
     close() { win = undefined },
-    status: () => (win && now() < win.deadline ? { open: true, expiresInSec: Math.round((win.deadline - now()) / 1000), attemptsLeft: PAIRING_MAX_ATTEMPTS - win.attempts } : { open: false }),
+    /** Includes `code` while open so the local management UI can re-render after refresh. */
+    status: () => (win && now() < win.deadline
+      ? { open: true, code: win.code, expiresInSec: Math.round((win.deadline - now()) / 1000), attemptsLeft: PAIRING_MAX_ATTEMPTS - win.attempts }
+      : { open: false }),
     /** @returns {null | string} null on success (window consumed), else a reason code */
     attempt(code) {
       if (!win) return PAIR_NO_WINDOW

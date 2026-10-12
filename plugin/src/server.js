@@ -268,6 +268,14 @@ export function createPocketServer(opts) {
       return () => { for (const k of Object.keys(table)) if (extraOps[k] === table[k]) delete extraOps[k] }
     },
     hasDevices: () => authedClients().length > 0,
+    /** Device ids currently authenticated on a live WebSocket. */
+    onlineDeviceIds: () => new Set(authedClients().filter((c) => !c.device.owner).map((c) => c.device.id)),
+    /** Revoke a paired device and kick any live connection. */
+    revokeDevice(id) {
+      const removed = devices.revoke(id)
+      for (const c of clients) if (c.device?.id === id) c.ws.close(4403, 'revoked')
+      return removed
+    },
     /**
      * Offer one approval to connected devices.
      * @returns {{ answer: Promise<{outcome: string, by: string}>, close(outcome: string, by: string): void }}

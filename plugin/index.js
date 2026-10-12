@@ -1,5 +1,7 @@
 import { homedir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
+import { readFileSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
 import { createApprovalHook } from './src/approval-hook.js'
 import { createDeviceStore } from './src/devices.js'
 import { createPairing } from './src/pairing.js'
@@ -7,6 +9,7 @@ import { createPocketServer } from './src/server.js'
 import { loadOrCreateToken } from './src/token.js'
 import { permissionOps, presetOps } from './src/extra-ops.js'
 import { registerPairRoute } from './src/web-route.js'
+import { createManageApi, pairingUri } from './src/manage.js'
 
 export const name = 'dsh-plugin-pocket'
 // webServer is optional: Cordis `inject` entries are all required, so the
@@ -15,6 +18,7 @@ export const name = 'dsh-plugin-pocket'
 export const inject = ['sessionController']
 
 const SESSION_EVENTS = ['added', 'removed', 'status', 'activity', 'error']
+const PKG = JSON.parse(readFileSync(join(dirname(fileURLToPath(import.meta.url)), 'package.json'), 'utf8'))
 
 /**
  * @param {import('@deepseek-ai/cordis').Context} ctx
@@ -31,6 +35,7 @@ export function apply(ctx, config = {}) {
   const port = config.port ?? 7690
   const server = createPocketServer({
     sessionController: ctx.sessionController, token, host, port, devices, pairing,
+    info: { plugin: PKG.name, version: PKG.version },
     onSessionEvent: (fn) => { listeners.add(fn); return () => listeners.delete(fn) },
   })
   for (const kind of SESSION_EVENTS) {
@@ -41,12 +46,14 @@ export function apply(ctx, config = {}) {
 
   const openPairing = () => {
     const w = pairing.open()
-    log(`pairing code ${w.code} (valid ${Math.round(w.expiresInSec / 60)} min) — dshpocket://pair?h=${host}:${port}&c=${w.code}`)
-    return { ...w, host, port }
+    const uri = pairingUri({ host, port, code: w.code })
+    log(`pairing code ${w.code} (valid ${Math.round(w.expiresInSec / 60)} min) — ${uri}`)
+    return { ...w, host, port, uri }
   }
+  const manage = createManageApi({ host, port, devices, pairing, server, openPairing })
   ctx.inject(['permissionPresets', 'agents'], (c) => { c.effect(() => server.registerOps(permissionOps(c.permissionPresets, c.agents))) })
   ctx.inject(['agentPresets'], (c) => { c.effect(() => server.registerOps(presetOps(c.agentPresets))) })
-  ctx.inject(['webServer'], (webCtx) => registerPairRoute(webCtx, { openPairing, devices, pairing }))
+  ctx.inject(['webServer'], (webCtx) => registerPairRoute(webCtx, manage))
 
   ctx.effect(() => {
     server.listen().then(
