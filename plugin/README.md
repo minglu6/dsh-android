@@ -34,7 +34,7 @@ dsh web
 该弹层由 `@deepseek-ai/dsh-client-ui-settings-account` 的 `AccountMenu` 占用 `settings.launcher`（`kind: 'single'`）。菜单项是写死的数组（`settings` → `contact` → `signout`），**没有**类似 `settings.launcher.item` 的 list slot。替换整个 `settings.launcher` 会盖掉官方 AccountMenu，不算合法扩展。要在「设置」与「意见反馈」之间加一行，需要上游 dsh 新增扩展点。本插件因此**不**往侧栏 footer / 账号菜单乱挂入口。
 
 面板功能：
-- 桥接状态（是否在跑、监听地址、插件版本）
+- 连接器状态（是否在跑、监听地址、插件版本）
 - 打开配对窗口：6 位码 + 倒计时 + `dshpocket://pair?…` 二维码
 - 已配对设备：名称、最近活跃、是否在线；可重命名 / 撤销
 

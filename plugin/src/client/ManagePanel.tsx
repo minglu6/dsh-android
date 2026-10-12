@@ -197,7 +197,13 @@ export function ManagePanel({
         <section>
           <div style={styles.sectionLabel}>{t('statusTitle')}</div>
           <div style={styles.row}>
-            <span>{status.running ? t('statusRunning') : t('statusStopped')}</span>
+            <span style={styles.statusLine}>
+              {status.running ? t('statusRunning') : t('statusStopped')}
+              <span
+                style={styles.statusDot(status.running && !error)}
+                aria-hidden="true"
+              />
+            </span>
             <button type="button" style={styles.ghostBtn} onClick={() => void refresh()}>{t('refresh')}</button>
           </div>
           <div style={{ ...styles.muted, marginTop: 6 }}>

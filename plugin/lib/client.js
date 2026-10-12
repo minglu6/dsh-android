@@ -23,12 +23,12 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
 }) : target, mod));
 
 //#endregion
+let react_jsx_runtime = require("react/jsx-runtime");
+react_jsx_runtime = __toESM(react_jsx_runtime);
 let react = require("react");
 react = __toESM(react);
 let react_dom = require("react-dom");
 react_dom = __toESM(react_dom);
-let react_jsx_runtime = require("react/jsx-runtime");
-react_jsx_runtime = __toESM(react_jsx_runtime);
 
 //#region src/client/api.ts
 async function readBody(res) {
@@ -78,7 +78,7 @@ function createPocketApi(base = "") {
 const zh = {
 	entry: "手机连接",
 	title: "手机连接",
-	statusTitle: "桥接状态",
+	statusTitle: "连接器状态",
 	statusRunning: "运行中",
 	statusStopped: "未运行",
 	listen: "监听地址",
@@ -116,7 +116,7 @@ const zh = {
 const en = {
 	entry: "Phone connection",
 	title: "Phone connection",
-	statusTitle: "Bridge status",
+	statusTitle: "Connector status",
 	statusRunning: "Running",
 	statusStopped: "Stopped",
 	listen: "Listen address",
@@ -151,6 +151,49 @@ const en = {
 	close: "Close",
 	noCode: "Click “Start pairing” for a 6-digit code"
 };
+
+//#endregion
+//#region src/client/PhoneIcon.tsx
+/** Matches dsh ui-primitives Medium outline icons: 16×16 viewBox, 1.3 stroke. */
+const ICON_MEDIUM_STROKE = 1.3;
+/** Markup used when swapping the shell's default gear in the nav cell. */
+function phoneIconSvgHtml(className) {
+	return `<svg width="16" height="16" class="${className}" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true" stroke-width="${ICON_MEDIUM_STROKE}" data-pocket-icon="1"><rect x="4.75" y="1.75" width="6.5" height="12.5" rx="1.25" stroke="currentColor"></rect><path d="M7 12.25h2" stroke="currentColor" stroke-linecap="round"></path></svg>`;
+}
+
+//#endregion
+//#region src/client/nav-icon.ts
+const LABELS = new Set(["手机连接", "Phone connection"]);
+/**
+* Settings nav icons are hardcoded by section id in
+* `@deepseek-ai/dsh-client-ui-settings-general` (`navIcon`): unknown ids fall
+* back to the gear. `settings.section` has no `icon` register option, and the
+* primitives icon set has no phone glyph. Swap the gear SVG on our nav cell
+* for a Medium-outline smartphone that matches shipped stroke/size.
+*/
+function installPocketNavIcon() {
+	const sync = () => {
+		for (const cell of document.querySelectorAll("[class*=\"navCell\"]")) {
+			const label = (cell.innerText || "").trim();
+			if (!LABELS.has(label)) continue;
+			const svg = cell.querySelector("svg");
+			if (!svg || svg.getAttribute("data-pocket-icon") === "1") continue;
+			const cls = svg.getAttribute("class") || "";
+			const wrap = document.createElement("span");
+			wrap.innerHTML = phoneIconSvgHtml(cls);
+			const next = wrap.firstElementChild;
+			if (next) svg.replaceWith(next);
+		}
+	};
+	const mo = new MutationObserver(() => sync());
+	mo.observe(document.documentElement, {
+		childList: true,
+		subtree: true,
+		characterData: true
+	});
+	sync();
+	return () => mo.disconnect();
+}
 
 //#endregion
 //#region src/client/styles.ts
@@ -299,6 +342,18 @@ const styles = {
 		borderRadius: "50%",
 		background: online ? "var(--dsw-alias-state-success-primary)" : "var(--dsw-alias-border-l2)"
 	}),
+	statusDot: (ok) => ({
+		flex: "none",
+		width: 8,
+		height: 8,
+		borderRadius: "50%",
+		background: ok ? "var(--dsw-alias-state-success-primary)" : "var(--dsw-alias-state-error-primary)"
+	}),
+	statusLine: {
+		display: "inline-flex",
+		alignItems: "center",
+		gap: 8
+	},
 	input: {
 		flex: 1,
 		minWidth: 0,
@@ -1484,7 +1539,13 @@ function ManagePanel({ t, api }) {
 				}),
 				/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
 					style: styles.row,
-					children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", { children: status.running ? t("statusRunning") : t("statusStopped") }), /* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
+					children: [/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("span", {
+						style: styles.statusLine,
+						children: [status.running ? t("statusRunning") : t("statusStopped"), /* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
+							style: styles.statusDot(status.running && !error),
+							"aria-hidden": "true"
+						})]
+					}), /* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
 						type: "button",
 						style: styles.ghostBtn,
 						onClick: () => void refresh(),
@@ -1624,6 +1685,7 @@ function apply(ctx) {
 		zh,
 		en
 	}), "pocket:locale");
+	ctx.effect(() => installPocketNavIcon(), "pocket:nav-icon");
 	const t = ctx.locale.bind(NS);
 	const api = createPocketApi();
 	ctx.slots.inject("settings.section", () => ctx.slots.register({

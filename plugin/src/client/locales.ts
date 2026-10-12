@@ -1,7 +1,7 @@
 export const zh = {
   entry: '手机连接',
   title: '手机连接',
-  statusTitle: '桥接状态',
+  statusTitle: '连接器状态',
   statusRunning: '运行中',
   statusStopped: '未运行',
   listen: '监听地址',
@@ -40,7 +40,7 @@ export const zh = {
 export const en = {
   entry: 'Phone connection',
   title: 'Phone connection',
-  statusTitle: 'Bridge status',
+  statusTitle: 'Connector status',
   statusRunning: 'Running',
   statusStopped: 'Stopped',
   listen: 'Listen address',
