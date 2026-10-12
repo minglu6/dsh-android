@@ -3,9 +3,7 @@ package dev.dsh.pocket.app
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.ScrollableTabRow
 import androidx.compose.material3.Tab
@@ -83,7 +81,7 @@ fun TrajectoryRequestSheet(
         Spacer(Modifier.height(8.dp))
         ScrollableTabRow(
             selectedTabIndex = tabs.indexOf(tab).coerceAtLeast(0),
-            edgePadding = 12.dp,
+            edgePadding = 22.dp,
             containerColor = Color.White,
             contentColor = T.Ink,
             divider = { HorizontalDivider(color = T.Fill) },
@@ -103,7 +101,7 @@ fun TrajectoryRequestSheet(
                     selected = tab == t,
                     onClick = { tab = t },
                     text = {
-                        Text(t.label, fontSize = 13.sp, color = if (tab == t) T.Accent else T.Text2, maxLines = 1)
+                        Text(t.label, fontSize = 13.sp, color = if (tab == t) T.Accent else T.Text2, maxLines = 1, softWrap = false)
                     },
                 )
             }
@@ -214,10 +212,10 @@ private fun RequestOptions(configJson: String?) {
         Column(Modifier.padding(horizontal = 22.dp)) {
             Text(TrajL.optionsJson, fontSize = 12.sp, color = T.Text3, modifier = Modifier.padding(bottom = 6.dp))
             Text(
-                prettyJson(configJson),
+                prettyJson(configJson).breakAnywhere(),
                 style = T.Mono.copy(lineHeight = 20.sp),
-                modifier = Modifier.fillMaxWidth().clip(T.R12).background(T.Fill2)
-                    .horizontalScroll(rememberScrollState()).padding(14.dp),
+                softWrap = true,
+                modifier = Modifier.fillMaxWidth().clip(T.R12).background(T.Fill2).padding(14.dp),
             )
         }
     }
@@ -313,7 +311,13 @@ private fun OverviewLine(
             horizontalArrangement = Arrangement.SpaceBetween,
         ) {
             Text(label, fontSize = 13.sp, color = T.Text3, modifier = Modifier.padding(end = 12.dp))
-            Text(value, fontSize = 13.sp, color = valueColor, modifier = Modifier.weight(1f, fill = false))
+            Text(
+                value.breakAnywhere(),
+                fontSize = 13.sp,
+                color = valueColor,
+                softWrap = true,
+                modifier = Modifier.weight(1f, fill = false),
+            )
         }
     }
 }

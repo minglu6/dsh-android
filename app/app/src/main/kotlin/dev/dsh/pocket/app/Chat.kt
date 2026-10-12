@@ -472,7 +472,7 @@ private fun Transcript(
                     }
                 }
                 is ChatRow.Notice -> SelectableOutput {
-                    Text(row.item.text, fontSize = 13.sp, color = T.Text3)
+                    Text(row.item.text.breakAnywhere(), fontSize = 13.sp, color = T.Text3, softWrap = true, modifier = Modifier.fillMaxWidth())
                 }
                 is ChatRow.Tool -> ToolCard(row.item) { onTool(row.item) }
                 is ChatRow.Reasoning -> ReasoningRow(row.item)
@@ -680,11 +680,12 @@ private fun ReasoningRow(r: Item.Reasoning, forceOpen: Boolean = false) {
             if (open || r.live) {
                 SelectableOutput {
                     Text(
-                        r.text,
+                        r.text.breakAnywhere(),
                         fontSize = Pocket.prefs.fontSize.sp,
                         lineHeight = (Pocket.prefs.fontSize + 8).sp,
                         color = T.Text3,
-                        modifier = Modifier.padding(top = 6.dp),
+                        softWrap = true,
+                        modifier = Modifier.padding(top = 6.dp).fillMaxWidth(),
                     )
                 }
             }
@@ -733,7 +734,14 @@ private fun ApprovalCard(a: Approval) {
                 Text("工具 ${a.toolName} 请求越权执行", fontSize = 16.sp, color = T.Ink)
                 (approvalCommand(a) ?: a.reason)?.let {
                     Spacer(Modifier.height(8.dp))
-                    Text(it, style = T.Mono.copy(color = T.Text3, fontSize = 14.sp, lineHeight = 21.sp), maxLines = 4, overflow = TextOverflow.Ellipsis)
+                    Text(
+                        it.breakAnywhere(),
+                        style = T.Mono.copy(color = T.Text3, fontSize = 14.sp, lineHeight = 21.sp),
+                        softWrap = true,
+                        maxLines = 8,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
                 }
             }
             Spacer(Modifier.height(16.dp))

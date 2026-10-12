@@ -388,9 +388,11 @@ private fun MdBlockView(block: MdBlock, bodySp: TextUnit) {
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun FencedCode(language: String?, literal: String, incomplete: Boolean) {
-    val highlighted = remember(literal, language) { highlightCode(literal, language) }
-    val clip = LocalClipboardManager.current
+    // Default wrap ON (phone); toggle restores horizontal scroll for desk-like viewing.
     var wrapped by remember { mutableStateOf(true) }
+    val display = if (wrapped) literal.breakAnywhere() else literal
+    val highlighted = remember(display, language) { highlightCode(display, language) }
+    val clip = LocalClipboardManager.current
     var copied by remember { mutableStateOf(false) }
     LaunchedEffect(copied) {
         if (copied) {
@@ -398,7 +400,7 @@ private fun FencedCode(language: String?, literal: String, incomplete: Boolean) 
             copied = false
         }
     }
-    // Selection comes from enclosing MarkdownView Selectable; exclude toolbar icons.
+    // Selection comes from enclosing MarkdownView SelectableOutput; exclude toolbar icons.
     Column(
         Modifier
             .fillMaxWidth()
@@ -443,6 +445,7 @@ private fun FencedCode(language: String?, literal: String, incomplete: Boolean) 
                 lineHeight = 20.sp,
                 color = TokyoNight.Fg,
             ),
+            softWrap = wrapped,
             modifier = if (wrapped) Modifier.fillMaxWidth() else Modifier.horizontalScroll(rememberScrollState()),
         )
         if (incomplete) {

@@ -100,12 +100,12 @@ fun ToolSheet(t: Item.Tool, onDismiss: () -> Unit) {
 private fun CodeBox(s: String, maxLines: Int = 20) {
     SelectableOutput {
         Text(
-            s,
+            s.breakAnywhere(),
             style = T.Mono.copy(lineHeight = 20.sp),
+            softWrap = true,
             maxLines = maxLines,
             overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.padding(horizontal = 22.dp).fillMaxWidth().clip(T.R12).background(T.Fill2)
-                .horizontalScroll(rememberScrollState()).padding(14.dp),
+            modifier = Modifier.padding(horizontal = 22.dp).fillMaxWidth().clip(T.R12).background(T.Fill2).padding(14.dp),
         )
     }
 }

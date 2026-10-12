@@ -3,9 +3,7 @@ package dev.dsh.pocket.app
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.ScrollableTabRow
 import androidx.compose.material3.Tab
@@ -90,9 +88,10 @@ fun TrajectoryDetailSheet(
             }
         }
         Spacer(Modifier.height(8.dp))
+        // edgePadding matches sheet content inset so first/last labels (概述/计时) are not clipped.
         ScrollableTabRow(
             selectedTabIndex = tabs.indexOf(tab).coerceAtLeast(0),
-            edgePadding = 12.dp,
+            edgePadding = 22.dp,
             containerColor = Color.White,
             contentColor = T.Ink,
             divider = { HorizontalDivider(color = T.Fill) },
@@ -117,6 +116,7 @@ fun TrajectoryDetailSheet(
                             fontSize = 13.sp,
                             color = if (tab == t) T.Accent else T.Text2,
                             maxLines = 1,
+                            softWrap = false,
                         )
                     },
                 )
@@ -380,10 +380,10 @@ private fun TrajCodeProgram(program: CodeProgram) {
                 Text(program.language, fontSize = 12.sp, color = T.Text3, modifier = Modifier.padding(bottom = 6.dp))
             }
             Text(
-                program.source,
+                program.source.breakAnywhere(),
                 style = T.Mono.copy(lineHeight = 20.sp),
-                modifier = Modifier.fillMaxWidth().clip(T.R12).background(T.Fill2)
-                    .horizontalScroll(rememberScrollState()).padding(14.dp),
+                softWrap = true,
+                modifier = Modifier.fillMaxWidth().clip(T.R12).background(T.Fill2).padding(14.dp),
             )
         }
     }
@@ -461,7 +461,13 @@ private fun OverviewKv(
             horizontalArrangement = Arrangement.SpaceBetween,
         ) {
             Text(label, fontSize = 13.sp, color = T.Text3, modifier = Modifier.padding(end = 12.dp))
-            Text(value, fontSize = 13.sp, color = valueColor, modifier = Modifier.weight(1f, fill = false))
+            Text(
+                value.breakAnywhere(),
+                fontSize = 13.sp,
+                color = valueColor,
+                softWrap = true,
+                modifier = Modifier.weight(1f, fill = false),
+            )
         }
     }
 }
@@ -487,17 +493,17 @@ private fun TrajPayload(value: String?, missing: String, error: Boolean = false)
         }
         return
     }
-    val shown = runCatching { prettyJson(value) }.getOrDefault(value)
+    val shown = runCatching { prettyJson(value) }.getOrDefault(value).breakAnywhere()
     SelectableOutput {
         Text(
             shown,
             style = T.Mono.copy(lineHeight = 20.sp, color = if (error) T.Err else T.Ink),
+            softWrap = true,
             modifier = Modifier
                 .padding(horizontal = 22.dp)
                 .fillMaxWidth()
                 .clip(T.R12)
                 .background(if (error) T.Err.copy(alpha = 0.06f) else T.Fill2)
-                .horizontalScroll(rememberScrollState())
                 .padding(14.dp),
         )
     }
@@ -520,10 +526,10 @@ private fun TrajSchema(schemaDetail: String?) {
             Text(parsed.description, fontSize = 13.sp, color = T.Text2, lineHeight = 20.sp, modifier = Modifier.padding(top = 4.dp, bottom = 10.dp))
             Text(TrajL.recordParameters, fontSize = 12.sp, color = T.Text3, modifier = Modifier.padding(bottom = 6.dp))
             Text(
-                SchemaPrettyJson.encodeToString(JsonElement.serializer(), parsed.parameters),
+                SchemaPrettyJson.encodeToString(JsonElement.serializer(), parsed.parameters).breakAnywhere(),
                 style = T.Mono.copy(lineHeight = 20.sp),
-                modifier = Modifier.fillMaxWidth().clip(T.R12).background(T.Fill2)
-                    .horizontalScroll(rememberScrollState()).padding(14.dp),
+                softWrap = true,
+                modifier = Modifier.fillMaxWidth().clip(T.R12).background(T.Fill2).padding(14.dp),
             )
         }
     }
@@ -558,8 +564,9 @@ private fun TrajTiming(row: TrajRow) {
 private fun TrajCodePreview(text: String) {
     SelectableOutput {
         Text(
-            text,
+            text.breakAnywhere(),
             style = T.Mono.copy(fontSize = 12.sp, lineHeight = 18.sp, color = T.Ink),
+            softWrap = true,
             maxLines = 8,
             overflow = TextOverflow.Ellipsis,
             modifier = Modifier.fillMaxWidth(),
