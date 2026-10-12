@@ -40,7 +40,7 @@ class ProxyBypassTest {
             assertEquals(setOf("prompt"), hello.ops)
             c.close()
         } finally {
-            ProxySelector.setDefault(prev); server.shutdown(); bad.close()
+            ProxySelector.setDefault(prev); runCatching { server.shutdown() }; bad.close()
         }
     }
 }
