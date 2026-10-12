@@ -9,7 +9,7 @@ export function qrSvg(text: string, size = 180): string {
     blackColor: '#111',
     whiteColor: '#fff',
   })
-  return svg
-    .replace(/width="[^"]+"/, `width="${size}"`)
-    .replace(/height="[^"]+"/, `height="${size}"`)
+  // uqr emits viewBox-only <svg>; pin display size on the root element (do not
+  // rewrite the white <rect width/height>, which share the same attribute names).
+  return svg.replace('<svg ', `<svg width="${size}" height="${size}" `)
 }

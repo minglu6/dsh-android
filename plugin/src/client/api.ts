@@ -27,38 +27,52 @@ export type PocketStatus = {
   devices: DeviceRow[]
 }
 
-async function parse<T>(res: Response): Promise<T> {
-  if (!res.ok) {
-    const text = await res.text().catch(() => '')
-    throw new Error(text || `HTTP ${res.status}`)
+async function readBody(res: Response): Promise<unknown> {
+  if (typeof res?.json === 'function') {
+    try { return await res.json() } catch { /* fall through */ }
   }
-  return res.json() as Promise<T>
+  if (typeof res?.text === 'function') {
+    try { return await res.text() } catch { /* fall through */ }
+  }
+  return undefined
+}
+
+async function parse<T>(res: Response): Promise<T> {
+  if (!res || res.ok !== true) {
+    const body = await readBody(res)
+    const detail = body === undefined
+      ? `HTTP ${res?.status ?? '?'}`
+      : (typeof body === 'string' ? body : JSON.stringify(body))
+    throw new Error(detail || `HTTP ${res?.status ?? '?'}`)
+  }
+  return (await readBody(res)) as T
 }
 
 /** Same-origin fetch helpers for the Host management routes. */
 export function createPocketApi(base = '') {
   const url = (path: string) => `${base}${path}`
+  const get = async <T>(path: string, init?: RequestInit) => parse<T>(await fetch(url(path), init))
   return {
-    status: () => parse<PocketStatus>(fetch(url('/pocket/status'))),
-    pairStatus: () => parse<PairingStatus>(fetch(url('/pocket/pair'))),
-    openPair: () => parse<PairingStatus & { host: string, port: number, uri: string }>(
-      fetch(url('/pocket/pair'), { method: 'POST' }),
+    status: () => get<PocketStatus>('/pocket/status'),
+    pairStatus: () => get<PairingStatus>('/pocket/pair'),
+    openPair: () => get<PairingStatus & { host: string, port: number, uri: string }>(
+      '/pocket/pair', { method: 'POST' },
     ),
-    closePair: () => parse<{ open: false }>(fetch(url('/pocket/pair'), { method: 'DELETE' })),
-    listDevices: () => parse<{ devices: DeviceRow[] }>(fetch(url('/pocket/devices'))).then((r) => r.devices),
-    revoke: (id: string) => parse<{ removed: boolean, devices: DeviceRow[] }>(
-      fetch(url('/pocket/devices'), {
+    closePair: () => get<{ open: false }>('/pocket/pair', { method: 'DELETE' }),
+    listDevices: () => get<{ devices: DeviceRow[] }>('/pocket/devices').then((r) => r.devices),
+    revoke: (id: string) => get<{ removed: boolean, devices: DeviceRow[] }>(
+      '/pocket/devices', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ id }),
-      }),
+      },
     ),
-    rename: (id: string, name: string) => parse<{ renamed: boolean, devices: DeviceRow[] }>(
-      fetch(url('/pocket/devices'), {
+    rename: (id: string, name: string) => get<{ renamed: boolean, devices: DeviceRow[] }>(
+      '/pocket/devices', {
         method: 'PATCH',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ id, name }),
-      }),
+      },
     ),
   }
 }

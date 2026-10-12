@@ -29,35 +29,45 @@ let react_jsx_runtime = require("react/jsx-runtime");
 react_jsx_runtime = __toESM(react_jsx_runtime);
 
 //#region src/client/api.ts
+async function readBody(res) {
+	if (typeof res?.json === "function") try {
+		return await res.json();
+	} catch {}
+	if (typeof res?.text === "function") try {
+		return await res.text();
+	} catch {}
+}
 async function parse(res) {
-	if (!res.ok) {
-		const text = await res.text().catch(() => "");
-		throw new Error(text || `HTTP ${res.status}`);
+	if (!res || res.ok !== true) {
+		const body = await readBody(res);
+		const detail = body === void 0 ? `HTTP ${res?.status ?? "?"}` : typeof body === "string" ? body : JSON.stringify(body);
+		throw new Error(detail || `HTTP ${res?.status ?? "?"}`);
 	}
-	return res.json();
+	return await readBody(res);
 }
 /** Same-origin fetch helpers for the Host management routes. */
 function createPocketApi(base = "") {
 	const url = (path) => `${base}${path}`;
+	const get = async (path, init) => parse(await fetch(url(path), init));
 	return {
-		status: () => parse(fetch(url("/pocket/status"))),
-		pairStatus: () => parse(fetch(url("/pocket/pair"))),
-		openPair: () => parse(fetch(url("/pocket/pair"), { method: "POST" })),
-		closePair: () => parse(fetch(url("/pocket/pair"), { method: "DELETE" })),
-		listDevices: () => parse(fetch(url("/pocket/devices"))).then((r) => r.devices),
-		revoke: (id) => parse(fetch(url("/pocket/devices"), {
+		status: () => get("/pocket/status"),
+		pairStatus: () => get("/pocket/pair"),
+		openPair: () => get("/pocket/pair", { method: "POST" }),
+		closePair: () => get("/pocket/pair", { method: "DELETE" }),
+		listDevices: () => get("/pocket/devices").then((r) => r.devices),
+		revoke: (id) => get("/pocket/devices", {
 			method: "POST",
 			headers: { "content-type": "application/json" },
 			body: JSON.stringify({ id })
-		})),
-		rename: (id, name) => parse(fetch(url("/pocket/devices"), {
+		}),
+		rename: (id, name) => get("/pocket/devices", {
 			method: "PATCH",
 			headers: { "content-type": "application/json" },
 			body: JSON.stringify({
 				id,
 				name
 			})
-		}))
+		})
 	};
 }
 
@@ -1068,7 +1078,7 @@ function qrSvg(text, size = 180) {
 		border: 2,
 		blackColor: "#111",
 		whiteColor: "#fff"
-	}).replace(/width="[^"]+"/, `width="${size}"`).replace(/height="[^"]+"/, `height="${size}"`);
+	}).replace("<svg ", `<svg width="${size}" height="${size}" `);
 }
 
 //#endregion
