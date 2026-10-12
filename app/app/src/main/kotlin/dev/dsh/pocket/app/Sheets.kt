@@ -23,6 +23,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.SecureFlagPolicy
 import dev.dsh.pocket.protocol.Item
 import dev.dsh.pocket.protocol.ModelCatalog
 import dev.dsh.pocket.protocol.ToolStatus
@@ -34,9 +35,17 @@ import kotlinx.coroutines.launch
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun PocketSheet(onDismiss: () -> Unit, content: @Composable ColumnScope.() -> Unit) {
-    ModalBottomSheet(onDismiss, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true), shape = T.Sheet, containerColor = Color.White,
-        scrimColor = T.Scrim, tonalElevation = 0.dp,
-        dragHandle = { Box(Modifier.padding(top = 10.dp, bottom = 14.dp).size(40.dp, 4.dp).clip(CircleShape).background(T.Border)) }) {
+    ModalBottomSheet(
+        onDismiss,
+        sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
+        shape = T.Sheet,
+        containerColor = Color.White,
+        scrimColor = T.Scrim,
+        tonalElevation = 0.dp,
+        // Never inherit/set FLAG_SECURE — screenshots & recording stay allowed on every sheet.
+        properties = ModalBottomSheetProperties(securePolicy = SecureFlagPolicy.SecureOff),
+        dragHandle = { Box(Modifier.padding(top = 10.dp, bottom = 14.dp).size(40.dp, 4.dp).clip(CircleShape).background(T.Border)) },
+    ) {
         Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(bottom = 24.dp), content = content)
     }
 }
