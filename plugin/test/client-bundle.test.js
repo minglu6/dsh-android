@@ -13,8 +13,9 @@ test('package declares official dsh.client half', () => {
   assert.equal(pkg.exports['./client'], './lib/client.js')
   assert.ok(pkg.dsh?.client?.platform === 'web')
   assert.ok(Array.isArray(pkg.dsh.client.inject))
-  assert.ok(pkg.dsh.client.inject.includes('@deepseek-ai/dsh-client-ui-sidebar'))
+  assert.ok(pkg.dsh.client.inject.includes('@deepseek-ai/dsh-client-ui-settings'))
   assert.ok(pkg.dsh.client.inject.includes('@deepseek-ai/dsh-client-locale'))
+  assert.ok(!pkg.dsh.client.inject.includes('@deepseek-ai/dsh-client-ui-sidebar'))
 })
 
 test('built client bundle is ModuleLoader lazy-CJS with static inject', () => {
@@ -22,15 +23,20 @@ test('built client bundle is ModuleLoader lazy-CJS with static inject', () => {
   const src = readFileSync(clientPath, 'utf8')
   assert.match(src, /window\.__ModuleLoader__\.load\(\{ id: "dsh-plugin-pocket"/)
   assert.match(src, /factory: \(require\) =>/)
-  assert.match(src, /sidebar\.footer\.action/)
-  assert.match(src, /shell\.overlay/)
   assert.match(src, /settings\.section/)
+  assert.doesNotMatch(src, /sidebar\.footer\.action/)
+  assert.doesNotMatch(src, /shell\.overlay/)
   assert.match(src, /手机连接/)
   assert.match(src, /Phone connection/)
+  assert.match(src, /撤销设备/)
+  assert.match(src, /Revoke device/)
+  assert.doesNotMatch(src, /确认撤销/)
+  assert.doesNotMatch(src, /revokeConfirm/)
 
   // Evaluate factory in a stub ModuleLoader to assert inject is a static array.
   const requires = {
-    react: { useState: () => [], useEffect: () => {}, useCallback: () => {}, useSyncExternalStore: () => false },
+    react: { useState: () => [], useEffect: () => {}, useCallback: () => {} },
+    'react-dom': { createPortal: (node) => node },
     'react/jsx-runtime': { jsx: () => null, jsxs: () => null, Fragment: 'fragment' },
     '@deepseek-ai/cordis': {},
   }

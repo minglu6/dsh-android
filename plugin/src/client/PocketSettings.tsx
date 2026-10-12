@@ -9,5 +9,5 @@ export function PocketSettings({
   api: PocketApi
   close: () => void
 }): JSX.Element {
-  return <ManagePanel t={t} api={api} embedded />
+  return <ManagePanel t={t} api={api} />
 }

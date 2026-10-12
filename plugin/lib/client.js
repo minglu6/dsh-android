@@ -25,6 +25,8 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
 //#endregion
 let react = require("react");
 react = __toESM(react);
+let react_dom = require("react-dom");
+react_dom = __toESM(react_dom);
 let react_jsx_runtime = require("react/jsx-runtime");
 react_jsx_runtime = __toESM(react_jsx_runtime);
 
@@ -102,8 +104,9 @@ const zh = {
 	renameSave: "保存",
 	renameCancel: "取消",
 	revoke: "撤销",
-	revokeConfirm: "确认撤销？",
-	revokeArmed: "再点一次确认撤销",
+	revokeTitle: "撤销设备",
+	revokeBody: "将撤销「{name}」。之后该手机需重新配对才能连接。",
+	cancel: "取消",
 	loading: "加载中…",
 	loadFailed: "加载失败",
 	refresh: "刷新",
@@ -139,8 +142,9 @@ const en = {
 	renameSave: "Save",
 	renameCancel: "Cancel",
 	revoke: "Revoke",
-	revokeConfirm: "Confirm revoke?",
-	revokeArmed: "Click again to confirm",
+	revokeTitle: "Revoke device",
+	revokeBody: "Revoke “{name}”. The phone will need to pair again to reconnect.",
+	cancel: "Cancel",
 	loading: "Loading…",
 	loadFailed: "Failed to load",
 	refresh: "Refresh",
@@ -149,45 +153,227 @@ const en = {
 };
 
 //#endregion
-//#region src/client/panel-store.ts
-/** Tiny shared open-state for the overlay, shared by the footer trigger and overlay cell. */
-function createPanelStore(initial = false) {
-	let open = initial;
-	const listeners = /* @__PURE__ */ new Set();
-	const emit = () => {
-		for (const l of listeners) l();
-	};
-	return {
-		getSnapshot: () => open,
-		subscribe: (l) => {
-			listeners.add(l);
-			return () => {
-				listeners.delete(l);
-			};
+//#region src/client/styles.ts
+/** Inline styles using only `--dsw-alias-*` tokens (no literal theme colors). */
+const styles = {
+	settingsRoot: {
+		display: "flex",
+		flexDirection: "column",
+		gap: 16,
+		padding: "4px 0 24px"
+	},
+	sectionLabel: {
+		fontSize: 12,
+		color: "var(--dsw-alias-label-secondary)",
+		marginBottom: 8
+	},
+	muted: {
+		fontSize: 12,
+		color: "var(--dsw-alias-label-tertiary)"
+	},
+	row: {
+		display: "flex",
+		alignItems: "center",
+		justifyContent: "space-between",
+		gap: 10,
+		fontSize: 13
+	},
+	primaryBtn: {
+		appearance: "none",
+		border: "none",
+		borderRadius: 8,
+		padding: "8px 14px",
+		background: "var(--dsw-alias-button-primary-fill)",
+		color: "var(--dsw-alias-button-primary-label, var(--dsw-alias-bg-base))",
+		cursor: "pointer",
+		font: "inherit",
+		fontSize: 13,
+		fontWeight: 500
+	},
+	ghostBtn: {
+		appearance: "none",
+		border: "1px solid var(--dsw-alias-border-l2)",
+		borderRadius: 8,
+		padding: "7px 12px",
+		background: "transparent",
+		color: "var(--dsw-alias-label-primary)",
+		cursor: "pointer",
+		font: "inherit",
+		fontSize: 13
+	},
+	dangerBtn: {
+		appearance: "none",
+		border: "none",
+		borderRadius: 8,
+		padding: "6px 10px",
+		background: "transparent",
+		color: "var(--dsw-alias-state-error-primary)",
+		cursor: "pointer",
+		font: "inherit",
+		fontSize: 12
+	},
+	destructiveBtn: {
+		appearance: "none",
+		border: "none",
+		borderRadius: 8,
+		padding: "8px 14px",
+		background: "var(--dsw-alias-state-error-primary)",
+		color: "var(--dsw-alias-label-primary-foreground, #fff)",
+		cursor: "pointer",
+		font: "inherit",
+		fontSize: 13,
+		fontWeight: 500
+	},
+	dialogMask: {
+		position: "fixed",
+		inset: 0,
+		zIndex: 1100,
+		display: "flex",
+		alignItems: "center",
+		justifyContent: "center",
+		pointerEvents: "auto",
+		background: "rgba(0, 0, 0, 0.45)",
+		padding: 24
+	},
+	dialogCard: {
+		width: "min(400px, calc(100vw - 48px))",
+		borderRadius: 12,
+		border: "1px solid var(--dsw-alias-border-l2)",
+		background: "var(--dsw-alias-bg-base)",
+		color: "var(--dsw-alias-label-primary)",
+		boxShadow: "var(--dsw-elevation-overlay, 0 12px 40px rgba(0,0,0,0.25))",
+		padding: "20px 22px 18px",
+		display: "flex",
+		flexDirection: "column",
+		gap: 12
+	},
+	dialogTitle: {
+		margin: 0,
+		fontSize: 16,
+		fontWeight: 600,
+		lineHeight: "24px"
+	},
+	dialogBody: {
+		margin: 0,
+		fontSize: 14,
+		lineHeight: "22px",
+		color: "var(--dsw-alias-label-secondary)"
+	},
+	dialogActions: {
+		display: "flex",
+		justifyContent: "flex-end",
+		gap: 8,
+		marginTop: 8
+	},
+	code: {
+		fontFamily: "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace",
+		fontSize: 32,
+		letterSpacing: "0.18em",
+		fontWeight: 600,
+		textAlign: "center",
+		padding: "8px 0 4px"
+	},
+	qrWrap: {
+		display: "flex",
+		justifyContent: "center",
+		padding: "8px 0"
+	},
+	qrBox: {
+		padding: 10,
+		borderRadius: 10,
+		background: "#fff",
+		border: "1px solid var(--dsw-alias-border-l3)",
+		lineHeight: 0
+	},
+	deviceRow: {
+		display: "flex",
+		alignItems: "center",
+		gap: 10,
+		padding: "8px 0",
+		borderTop: "1px solid var(--dsw-alias-border-l3)"
+	},
+	dot: (online) => ({
+		flex: "none",
+		width: 8,
+		height: 8,
+		borderRadius: "50%",
+		background: online ? "var(--dsw-alias-state-success-primary)" : "var(--dsw-alias-border-l2)"
+	}),
+	input: {
+		flex: 1,
+		minWidth: 0,
+		border: "1px solid var(--dsw-alias-border-l2)",
+		borderRadius: 6,
+		padding: "6px 8px",
+		background: "var(--dsw-alias-bg-base)",
+		color: "var(--dsw-alias-label-primary)",
+		font: "inherit",
+		fontSize: 13
+	}
+};
+
+//#endregion
+//#region src/client/ConfirmDialog.tsx
+/**
+* Lightweight confirm dialog matching dsh Modal / SignOutDialog chrome
+* (mask + card + title + body + action row), built with theme tokens only.
+* Does not `require` `@deepseek-ai/dsh-client-ui-primitives` (plugin hard rule).
+*/
+function ConfirmDialog({ open, title, body, cancelLabel, confirmLabel, busy = false, onCancel, onConfirm }) {
+	(0, react.useEffect)(() => {
+		if (!open) return;
+		const onKey = (e) => {
+			if (e.key === "Escape" && !busy) onCancel();
+		};
+		document.addEventListener("keydown", onKey);
+		return () => document.removeEventListener("keydown", onKey);
+	}, [
+		open,
+		busy,
+		onCancel
+	]);
+	if (!open || typeof document === "undefined") return null;
+	return (0, react_dom.createPortal)(/* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
+		style: styles.dialogMask,
+		role: "presentation",
+		onClick: (e) => {
+			if (e.target === e.currentTarget && !busy) onCancel();
 		},
-		open: () => {
-			if (!open) {
-				open = true;
-				emit();
-			}
-		},
-		close: () => {
-			if (open) {
-				open = false;
-				emit();
-			}
-		},
-		toggle: () => {
-			open = !open;
-			emit();
-		},
-		useOpen: () => (0, react.useSyncExternalStore)((l) => {
-			listeners.add(l);
-			return () => {
-				listeners.delete(l);
-			};
-		}, () => open, () => open)
-	};
+		children: /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
+			role: "dialog",
+			"aria-modal": "true",
+			"aria-label": title,
+			style: styles.dialogCard,
+			onClick: (e) => e.stopPropagation(),
+			children: [
+				/* @__PURE__ */ (0, react_jsx_runtime.jsx)("h2", {
+					style: styles.dialogTitle,
+					children: title
+				}),
+				/* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
+					style: styles.dialogBody,
+					children: body
+				}),
+				/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
+					style: styles.dialogActions,
+					children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
+						type: "button",
+						style: styles.ghostBtn,
+						disabled: busy,
+						"data-modal-autofocus": true,
+						onClick: onCancel,
+						children: cancelLabel
+					}), /* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
+						type: "button",
+						style: styles.destructiveBtn,
+						disabled: busy,
+						onClick: onConfirm,
+						children: confirmLabel
+					})]
+				})
+			]
+		})
+	}), document.body);
 }
 
 //#endregion
@@ -1082,182 +1268,6 @@ function qrSvg(text, size = 180) {
 }
 
 //#endregion
-//#region src/client/styles.ts
-/** Inline styles using only `--dsw-alias-*` / elevation tokens (no literal theme colors). */
-const styles = {
-	trigger: {
-		display: "flex",
-		alignItems: "center",
-		gap: 10,
-		width: "100%",
-		height: 40,
-		padding: "0 12px",
-		border: "none",
-		borderRadius: 8,
-		background: "transparent",
-		color: "var(--dsw-alias-label-primary)",
-		cursor: "pointer",
-		font: "inherit",
-		textAlign: "left"
-	},
-	triggerRail: {
-		display: "flex",
-		alignItems: "center",
-		justifyContent: "center",
-		width: 40,
-		height: 40,
-		margin: "0 auto",
-		border: "none",
-		borderRadius: 8,
-		background: "transparent",
-		color: "var(--dsw-alias-label-primary)",
-		cursor: "pointer"
-	},
-	mask: {
-		position: "fixed",
-		inset: 0,
-		zIndex: 80,
-		display: "flex",
-		alignItems: "center",
-		justifyContent: "center",
-		pointerEvents: "auto",
-		background: "rgba(0,0,0,0.45)"
-	},
-	panel: {
-		width: "min(440px, calc(100vw - 32px))",
-		maxHeight: "min(720px, calc(100vh - 48px))",
-		overflow: "auto",
-		borderRadius: 12,
-		border: "1px solid var(--dsw-alias-border-l2)",
-		background: "var(--dsw-alias-bg-base)",
-		color: "var(--dsw-alias-label-primary)",
-		boxShadow: "var(--dsw-elevation-overlay, 0 12px 40px rgba(0,0,0,0.25))",
-		display: "flex",
-		flexDirection: "column"
-	},
-	header: {
-		display: "flex",
-		alignItems: "center",
-		justifyContent: "space-between",
-		gap: 12,
-		padding: "16px 18px 12px",
-		borderBottom: "1px solid var(--dsw-alias-border-l3)"
-	},
-	title: {
-		margin: 0,
-		fontSize: 16,
-		fontWeight: 600
-	},
-	body: {
-		padding: "14px 18px 18px",
-		display: "flex",
-		flexDirection: "column",
-		gap: 16
-	},
-	sectionLabel: {
-		fontSize: 12,
-		color: "var(--dsw-alias-label-secondary)",
-		marginBottom: 8
-	},
-	muted: {
-		fontSize: 12,
-		color: "var(--dsw-alias-label-tertiary)"
-	},
-	row: {
-		display: "flex",
-		alignItems: "center",
-		justifyContent: "space-between",
-		gap: 10,
-		fontSize: 13
-	},
-	primaryBtn: {
-		appearance: "none",
-		border: "none",
-		borderRadius: 8,
-		padding: "8px 14px",
-		background: "var(--dsw-alias-button-primary-fill)",
-		color: "var(--dsw-alias-button-primary-label, var(--dsw-alias-bg-base))",
-		cursor: "pointer",
-		font: "inherit",
-		fontSize: 13,
-		fontWeight: 500
-	},
-	ghostBtn: {
-		appearance: "none",
-		border: "1px solid var(--dsw-alias-border-l2)",
-		borderRadius: 8,
-		padding: "7px 12px",
-		background: "transparent",
-		color: "var(--dsw-alias-label-primary)",
-		cursor: "pointer",
-		font: "inherit",
-		fontSize: 13
-	},
-	dangerBtn: {
-		appearance: "none",
-		border: "none",
-		borderRadius: 8,
-		padding: "6px 10px",
-		background: "transparent",
-		color: "var(--dsw-alias-state-error-primary)",
-		cursor: "pointer",
-		font: "inherit",
-		fontSize: 12
-	},
-	code: {
-		fontFamily: "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace",
-		fontSize: 32,
-		letterSpacing: "0.18em",
-		fontWeight: 600,
-		textAlign: "center",
-		padding: "8px 0 4px"
-	},
-	qrWrap: {
-		display: "flex",
-		justifyContent: "center",
-		padding: "8px 0"
-	},
-	qrBox: {
-		padding: 10,
-		borderRadius: 10,
-		background: "#fff",
-		border: "1px solid var(--dsw-alias-border-l3)",
-		lineHeight: 0
-	},
-	deviceRow: {
-		display: "flex",
-		alignItems: "center",
-		gap: 10,
-		padding: "8px 0",
-		borderTop: "1px solid var(--dsw-alias-border-l3)"
-	},
-	dot: (online) => ({
-		flex: "none",
-		width: 8,
-		height: 8,
-		borderRadius: "50%",
-		background: online ? "var(--dsw-alias-state-success-primary)" : "var(--dsw-alias-border-l2)"
-	}),
-	input: {
-		flex: 1,
-		minWidth: 0,
-		border: "1px solid var(--dsw-alias-border-l2)",
-		borderRadius: 6,
-		padding: "6px 8px",
-		background: "var(--dsw-alias-bg-base)",
-		color: "var(--dsw-alias-label-primary)",
-		font: "inherit",
-		fontSize: 13
-	},
-	settingsRoot: {
-		display: "flex",
-		flexDirection: "column",
-		gap: 16,
-		padding: "4px 0 24px"
-	}
-};
-
-//#endregion
 //#region src/client/ManagePanel.tsx
 function formatLastSeen(t, at) {
 	if (at == null) return t("neverSeen");
@@ -1267,19 +1277,21 @@ function formatLastSeen(t, at) {
 		return t("neverSeen");
 	}
 }
+/** Prefer framework interpolation; fall back to `{name}` replacement. */
+function tr(t, key, vars) {
+	const out = t(key, vars);
+	if (out !== key && !/\{name\}/.test(out)) return out;
+	return Object.entries(vars).reduce((s, [k, v]) => s.replaceAll(`{${k}}`, String(v)), out === key ? String(zhFallback[key] ?? key) : out);
+}
+const zhFallback = { revokeBody: "将撤销「{name}」。之后该手机需重新配对才能连接。" };
 function DeviceItem({ device, t, api, onChanged }) {
 	const [editing, setEditing] = (0, react.useState)(false);
 	const [name, setName] = (0, react.useState)(device.name);
-	const [armed, setArmed] = (0, react.useState)(false);
+	const [confirmOpen, setConfirmOpen] = (0, react.useState)(false);
 	const [busy, setBusy] = (0, react.useState)(false);
 	(0, react.useEffect)(() => {
 		setName(device.name);
 	}, [device.name]);
-	(0, react.useEffect)(() => {
-		if (!armed) return;
-		const id = setTimeout(() => setArmed(false), 4e3);
-		return () => clearTimeout(id);
-	}, [armed]);
 	const save = async () => {
 		const trimmed = name.trim();
 		if (!trimmed || trimmed === device.name) {
@@ -1294,17 +1306,13 @@ function DeviceItem({ device, t, api, onChanged }) {
 			setBusy(false);
 		}
 	};
-	const revoke = async () => {
-		if (!armed) {
-			setArmed(true);
-			return;
-		}
+	const confirmRevoke = async () => {
 		setBusy(true);
 		try {
 			onChanged((await api.revoke(device.id)).devices);
+			setConfirmOpen(false);
 		} finally {
 			setBusy(false);
-			setArmed(false);
 		}
 	};
 	return /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
@@ -1376,13 +1384,25 @@ function DeviceItem({ device, t, api, onChanged }) {
 				type: "button",
 				style: styles.dangerBtn,
 				disabled: busy,
-				onClick: () => void revoke(),
-				children: armed ? t("revokeConfirm") : t("revoke")
-			})] })
+				onClick: () => setConfirmOpen(true),
+				children: t("revoke")
+			})] }),
+			/* @__PURE__ */ (0, react_jsx_runtime.jsx)(ConfirmDialog, {
+				open: confirmOpen,
+				title: t("revokeTitle"),
+				body: tr(t, "revokeBody", { name: device.name }),
+				cancelLabel: t("cancel"),
+				confirmLabel: t("revoke"),
+				busy,
+				onCancel: () => {
+					if (!busy) setConfirmOpen(false);
+				},
+				onConfirm: () => void confirmRevoke()
+			})
 		]
 	});
 }
-function ManagePanel({ t, api, onClose, embedded = false }) {
+function ManagePanel({ t, api }) {
 	const [status, setStatus] = (0, react.useState)(null);
 	const [error, setError] = (0, react.useState)(null);
 	const [loading, setLoading] = (0, react.useState)(true);
@@ -1439,8 +1459,8 @@ function ManagePanel({ t, api, onClose, embedded = false }) {
 	};
 	const pairing = status?.pairing;
 	const expires = pairing?.open ? Math.max(0, pairing.expiresInSec ?? 0) : 0;
-	const body = /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
-		style: embedded ? styles.settingsRoot : styles.body,
+	return /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
+		style: styles.settingsRoot,
 		children: [
 			loading && !status ? /* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
 				style: styles.muted,
@@ -1583,42 +1603,6 @@ function ManagePanel({ t, api, onClose, embedded = false }) {
 			}, d.id))] })
 		]
 	});
-	if (embedded) return body;
-	return /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
-		style: styles.panel,
-		role: "dialog",
-		"aria-label": t("title"),
-		children: [/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
-			style: styles.header,
-			children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)("h2", {
-				style: styles.title,
-				children: t("title")
-			}), onClose ? /* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
-				type: "button",
-				style: styles.ghostBtn,
-				onClick: onClose,
-				children: t("close")
-			}) : null]
-		}), body]
-	});
-}
-
-//#endregion
-//#region src/client/PocketOverlay.tsx
-function PocketOverlay({ t, api, panel }) {
-	if (!panel.useOpen()) return null;
-	return /* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
-		style: styles.mask,
-		onClick: (e) => {
-			if (e.target === e.currentTarget) panel.close();
-		},
-		role: "presentation",
-		children: /* @__PURE__ */ (0, react_jsx_runtime.jsx)(ManagePanel, {
-			t,
-			api,
-			onClose: () => panel.close()
-		})
-	});
 }
 
 //#endregion
@@ -1626,51 +1610,7 @@ function PocketOverlay({ t, api, panel }) {
 function PocketSettings({ t, api }) {
 	return /* @__PURE__ */ (0, react_jsx_runtime.jsx)(ManagePanel, {
 		t,
-		api,
-		embedded: true
-	});
-}
-
-//#endregion
-//#region src/client/PhoneIcon.tsx
-function PhoneIcon({ size = 18 }) {
-	return /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("svg", {
-		width: size,
-		height: size,
-		viewBox: "0 0 24 24",
-		fill: "none",
-		stroke: "currentColor",
-		strokeWidth: "1.8",
-		strokeLinecap: "round",
-		strokeLinejoin: "round",
-		"aria-hidden": "true",
-		children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)("rect", {
-			x: "7",
-			y: "2",
-			width: "10",
-			height: "20",
-			rx: "2"
-		}), /* @__PURE__ */ (0, react_jsx_runtime.jsx)("path", { d: "M11 18h2" })]
-	});
-}
-
-//#endregion
-//#region src/client/PocketTrigger.tsx
-function PocketTrigger({ wide, t, open }) {
-	if (!wide) return /* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
-		type: "button",
-		"aria-label": t("entry"),
-		title: t("entry"),
-		onClick: open,
-		style: styles.triggerRail,
-		children: /* @__PURE__ */ (0, react_jsx_runtime.jsx)(PhoneIcon, {})
-	});
-	return /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("button", {
-		type: "button",
-		"aria-label": t("entry"),
-		onClick: open,
-		style: styles.trigger,
-		children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)(PhoneIcon, {}), /* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", { children: t("entry") })]
+		api
 	});
 }
 
@@ -1686,24 +1626,6 @@ function apply(ctx) {
 	}), "pocket:locale");
 	const t = ctx.locale.bind(NS);
 	const api = createPocketApi();
-	const panel = createPanelStore(false);
-	ctx.slots.inject("sidebar.footer.action", () => ctx.slots.register({
-		name: "sidebar.footer.action",
-		id: "pocket",
-		order: 40,
-		locale: NS,
-		inject: () => ({ open: () => panel.open() })
-	}, PocketTrigger));
-	ctx.slots.inject("shell.overlay", () => ctx.slots.register({
-		name: "shell.overlay",
-		id: "pocket-manage",
-		order: 40,
-		locale: NS,
-		inject: () => ({
-			api,
-			panel
-		})
-	}, PocketOverlay));
 	ctx.slots.inject("settings.section", () => ctx.slots.register({
 		name: "settings.section",
 		id: "pocket",

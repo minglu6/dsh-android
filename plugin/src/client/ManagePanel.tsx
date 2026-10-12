@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState, type JSX } from 'react'
 import type { DeviceRow, PocketApi, PocketStatus } from './api.ts'
+import { ConfirmDialog } from './ConfirmDialog.tsx'
 import { qrSvg } from './qr.ts'
 import { styles } from './styles.ts'
 
@@ -14,6 +15,19 @@ function formatLastSeen(t: TFn, at: number | null): string {
   }
 }
 
+/** Prefer framework interpolation; fall back to `{name}` replacement. */
+function tr(t: TFn, key: string, vars: Record<string, string | number>): string {
+  const out = t(key, vars)
+  if (out !== key && !/\{name\}/.test(out)) return out
+  return Object.entries(vars).reduce(
+    (s, [k, v]) => s.replaceAll(`{${k}}`, String(v)),
+    out === key ? String((zhFallback as Record<string, string>)[key] ?? key) : out,
+  )
+}
+
+// Used only if locale.bind returns the raw key without substituting vars.
+const zhFallback = { revokeBody: '将撤销「{name}」。之后该手机需重新配对才能连接。' }
+
 function DeviceItem({
   device, t, api, onChanged,
 }: {
@@ -24,15 +38,10 @@ function DeviceItem({
 }): JSX.Element {
   const [editing, setEditing] = useState(false)
   const [name, setName] = useState(device.name)
-  const [armed, setArmed] = useState(false)
+  const [confirmOpen, setConfirmOpen] = useState(false)
   const [busy, setBusy] = useState(false)
 
   useEffect(() => { setName(device.name) }, [device.name])
-  useEffect(() => {
-    if (!armed) return
-    const id = setTimeout(() => setArmed(false), 4000)
-    return () => clearTimeout(id)
-  }, [armed])
 
   const save = async () => {
     const trimmed = name.trim()
@@ -45,13 +54,13 @@ function DeviceItem({
     } finally { setBusy(false) }
   }
 
-  const revoke = async () => {
-    if (!armed) { setArmed(true); return }
+  const confirmRevoke = async () => {
     setBusy(true)
     try {
       const r = await api.revoke(device.id)
       onChanged(r.devices)
-    } finally { setBusy(false); setArmed(false) }
+      setConfirmOpen(false)
+    } finally { setBusy(false) }
   }
 
   return (
@@ -89,22 +98,30 @@ function DeviceItem({
       ) : (
         <>
           <button type="button" style={styles.ghostBtn} disabled={busy} onClick={() => setEditing(true)}>{t('rename')}</button>
-          <button type="button" style={styles.dangerBtn} disabled={busy} onClick={() => void revoke()}>
-            {armed ? t('revokeConfirm') : t('revoke')}
+          <button type="button" style={styles.dangerBtn} disabled={busy} onClick={() => setConfirmOpen(true)}>
+            {t('revoke')}
           </button>
         </>
       )}
+      <ConfirmDialog
+        open={confirmOpen}
+        title={t('revokeTitle')}
+        body={tr(t, 'revokeBody', { name: device.name })}
+        cancelLabel={t('cancel')}
+        confirmLabel={t('revoke')}
+        busy={busy}
+        onCancel={() => { if (!busy) setConfirmOpen(false) }}
+        onConfirm={() => void confirmRevoke()}
+      />
     </div>
   )
 }
 
 export function ManagePanel({
-  t, api, onClose, embedded = false,
+  t, api,
 }: {
   t: TFn
   api: PocketApi
-  onClose?: () => void
-  embedded?: boolean
 }): JSX.Element {
   const [status, setStatus] = useState<PocketStatus | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -171,8 +188,8 @@ export function ManagePanel({
   // tick forces countdown re-render while open
   void tick
 
-  const body = (
-    <div style={embedded ? styles.settingsRoot : styles.body}>
+  return (
+    <div style={styles.settingsRoot}>
       {loading && !status ? <div style={styles.muted}>{t('loading')}</div> : null}
       {error ? <div style={{ ...styles.muted, color: 'var(--dsw-alias-state-error-primary)' }}>{t('loadFailed')}: {error}</div> : null}
 
@@ -245,20 +262,6 @@ export function ManagePanel({
           ))
         )}
       </section>
-    </div>
-  )
-
-  if (embedded) return body
-
-  return (
-    <div style={styles.panel} role="dialog" aria-label={t('title')}>
-      <div style={styles.header}>
-        <h2 style={styles.title}>{t('title')}</h2>
-        {onClose ? (
-          <button type="button" style={styles.ghostBtn} onClick={onClose}>{t('close')}</button>
-        ) : null}
-      </div>
-      {body}
     </div>
   )
 }

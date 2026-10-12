@@ -24,13 +24,14 @@ dsh web
 
 ## 管理 UI（桌面 / `dsh web`）
 
-插件通过官方 **client half**（`dsh.client` + `exports["./client"]`）挂到 dsh 的 slot 体系，**不**使用 `tapIndex` HTML 注入（桌面端 Electron 读自己的 `file://` index，只认结构化 index injection / client modules）：
+插件通过官方 **client half**（`dsh.client` + `exports["./client"]`）挂到 dsh 的 slot 体系，**不**使用 `tapIndex` HTML 注入（桌面端 Electron 读自己的 `file://` index，只认结构化 index injection / client modules）。
 
 | 入口 | Slot | 作用 |
 |---|---|---|
-| 侧栏底部「手机连接」 | `sidebar.footer.action` | 与「设置」并列，一点即开管理面板 |
-| 设置页「手机连接」 | `settings.section` | 同一套管理面板嵌在设置里 |
-| 浮层 | `shell.overlay` | 配对码倒计时、QR、设备列表 |
+| 设置 →「手机连接」 | `settings.section` | 官方可叠加设置页：状态 / 配对码+QR / 设备重命名·撤销 |
+
+**账号菜单（设置 / 意见反馈 / 退出登录）无法插入「手机连接」。**  
+该弹层由 `@deepseek-ai/dsh-client-ui-settings-account` 的 `AccountMenu` 占用 `settings.launcher`（`kind: 'single'`）。菜单项是写死的数组（`settings` → `contact` → `signout`），**没有**类似 `settings.launcher.item` 的 list slot。替换整个 `settings.launcher` 会盖掉官方 AccountMenu，不算合法扩展。要在「设置」与「意见反馈」之间加一行，需要上游 dsh 新增扩展点。本插件因此**不**往侧栏 footer / 账号菜单乱挂入口。
 
 面板功能：
 - 桥接状态（是否在跑、监听地址、插件版本）
@@ -39,14 +40,14 @@ dsh web
 
 文案走 `ctx.locale.register('pocket', { zh, en })`，跟随 dsh 的语言设置。样式只用 `--dsw-alias-*` 主题 token。
 
-桌面 App（`~/.dsh/profiles/desktop`）与 `dsh web` 共用同一套 client module 加载器：Host 把 `dsh.client` 包打进 boot 图（结构化 `IndexInjection`），Desktop 的 IPC fetch 仍能打到 Host 上的 `/pocket/*` 管理路由。因此本 UI **预期在桌面端同样可用**（证据见上文扩展点与 `@deepseek-ai/dsh-host-webserver` / `dsh-client-modules` 文档；本仓库在 CI / 本地用真实 `dsh web` 验证）。
+桌面 App（`~/.dsh/profiles/desktop`）与 `dsh web` 共用同一套 client module 加载器：Host 把 `dsh.client` 包打进 boot 图（结构化 `IndexInjection`），Desktop 的 IPC fetch 仍能打到 Host 上的 `/pocket/*` 管理路由。因此本 UI **预期在桌面端同样可用**。
 
 开发时改完 `src/client/**` 后需 `npm run build:client` 生成 `lib/client.js`（lazy-CJS `window.__ModuleLoader__.load` 格式）。
 
 ## 配对（M1）
 
 首次启动且还没有任何已配对设备时，会自动打开一个配对窗口，日志里打印 6 位配对码。配对码 10 分钟内有效，最多试 3 次，用一次就作废。之后要再开窗口，有四种方式：
-- **管理 UI**：侧栏「手机连接」或设置页同名分区（推荐）
+- **管理 UI**：设置 →「手机连接」（推荐）
 - CLI：`node bin/pocket.js pair`，用本机的 owner token 连上插件后打开窗口；`node bin/pocket.js devices` 查看设备，`node bin/pocket.js revoke <id>` 撤销设备
 - dsh 网页端口上的管理路由（Host 必须是回环权威，拒绝 `sec-fetch-site: cross-site` 与跨站 Origin）：
   - `GET /pocket/status` — 运行状态 / 监听地址 / 版本 / 设备（含 online）
