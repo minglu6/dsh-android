@@ -538,20 +538,25 @@ fun MentionPopupSheet(onDismiss: () -> Unit) {
         if (loading) {
             Text(L.searchingSessions(), fontSize = 13.sp, color = T.Caption, modifier = Modifier.padding(22.dp))
         }
+        fun pick(token: String) {
+            val t = token.trim()
+            if (t.isNotEmpty()) Pocket.insertComposer(if (t.startsWith("@")) t else "@$t")
+            onDismiss()
+        }
         SectionLabel(L.filesAndFolders())
         if (files.isEmpty()) Text(L.noOptions(), fontSize = 13.sp, color = T.Caption, modifier = Modifier.padding(horizontal = 22.dp, vertical = 6.dp))
         files.take(12).forEach { f ->
-            OptionRow(f.path.substringAfterLast('/'), f.path, D.folderOpen) { onDismiss() }
+            OptionRow(f.path.substringAfterLast('/'), f.path, D.folderOpen) { pick(f.path) }
         }
         SectionLabel(L.conversations())
         if (sessions.isEmpty()) Text(L.noOptions(), fontSize = 13.sp, color = T.Caption, modifier = Modifier.padding(horizontal = 22.dp, vertical = 6.dp))
         sessions.take(12).forEach { s ->
-            OptionRow(s.title ?: s.mention, s.mention, D.chat) { onDismiss() }
+            OptionRow(s.title ?: s.mention, s.mention, D.chat) { pick(s.mention) }
         }
         SectionLabel(L.subagents())
         val subs = sessions.filter { it.kind == "subagent" || it.mention.contains("sub", ignoreCase = true) }
         if (subs.isEmpty()) Text(L.noOptions(), fontSize = 13.sp, color = T.Caption, modifier = Modifier.padding(horizontal = 22.dp, vertical = 6.dp))
-        else subs.forEach { s -> OptionRow(s.title ?: s.mention, s.mention, D.user) { onDismiss() } }
+        else subs.forEach { s -> OptionRow(s.title ?: s.mention, s.mention, D.user) { pick(s.mention) } }
     }
 }
 

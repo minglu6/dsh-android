@@ -59,6 +59,8 @@ object Pocket {
     val errors = MutableSharedFlow<String>(extraBufferCapacity = 8)
     /** Transient toast-style notices (archive undo, feedback thanks, …). */
     val notices = MutableSharedFlow<String>(extraBufferCapacity = 8)
+    /** One-shot text to insert into the open composer (e.g. `@path` mention). */
+    val composerInsert = MutableSharedFlow<String>(extraBufferCapacity = 4)
     /** Live host PTY emulator for the open terminal sheet. */
     val terminal = AnsiTerminal(80, 24)
     /** Bumps whenever [terminal] mutates so Compose can redraw. */
@@ -576,6 +578,34 @@ object Pocket {
         userQuestions.value = userQuestions.value.filter { it.callId != callId && it.questionId != callId }
         runCatching { c.answerUserQuestion(st.sessionId, callId, answers) }
             .onFailure { errors.tryEmit(it.message ?: "回答失败") }
+    }
+
+    /** Insert a mention token into the open composer (`@path` / session mention). */
+    fun insertComposer(token: String) {
+        if (token.isNotBlank()) composerInsert.tryEmit(token)
+    }
+
+    /**
+     * Enrich a `workspace/changes` card via Host summary.
+     * @return Triple(total, singleDisplayName, added) or null when unavailable.
+     */
+    fun fetchChangesSummary(seq: Long, onResult: (Triple<Int, String?, Int>?) -> Unit) = main.launch {
+        val c = client ?: run { onResult(null); return@launch }
+        val st = chat.value ?: run { onResult(null); return@launch }
+        if (!hasOp("workspaceChanges.summary")) { onResult(null); return@launch }
+        runCatching {
+            val summary = c.workspaceChangesSummary(st.sessionId, seq)["summary"]
+            if (summary == null || summary is kotlinx.serialization.json.JsonNull) {
+                onResult(null); return@runCatching
+            }
+            val total = summary["total"].long()?.toInt() ?: summary["files"].arr()?.size ?: 0
+            val files = summary["files"].arr().orEmpty()
+            val name = files.singleOrNull()?.let { f ->
+                f["display"].str() ?: f["path"].str()?.substringAfterLast('/')
+            }
+            val added = summary["added"].long()?.toInt() ?: 0
+            onResult(Triple(total, name, added))
+        }.onFailure { onResult(null) }
     }
 
     suspend fun listFiles(sessionId: String, path: String) = client?.listFiles(sessionId, path)

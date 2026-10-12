@@ -313,10 +313,11 @@ Appearance values from `ui-theme` locales. Performance: `settings.performance.{c
 
 | Gap | Notes |
 |---|---|
-| `workspace/changes` count/name | Event carries turn only; Host `workspaceChanges.summary` not yet a pocket op — card shows when count/name present |
 | Folder attach | desktop-only (**hide**) |
-| Appearance theme tokens | prefs + labels done; UI chrome still light `T.*` |
-| Mention insert into composer | popup lists refs; picking dismisses (insert-into-text polish left) |
+| Appearance theme tokens | prefs + labels done; UI chrome still light `T.*` (Material dark follows Appearance pref) |
+| OS workspace picker / browser / plugin manager / schedules / credentials | **hide** |
+
+**Also added:** `workspaceChanges.summary` → Host `workspaceChanges.summary(sessionId, seq)` to enrich changed-file cards; `@` mention pick inserts into composer.
 
 ---
 

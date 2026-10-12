@@ -727,10 +727,21 @@ private fun DeliverableCard(item: Item.Deliverable) {
 
 @Composable
 private fun ChangesCard(item: Item.Changes) {
-    val name = item.name
+    var count by remember(item.key) { mutableIntStateOf(item.count) }
+    var name by remember(item.key) { mutableStateOf(item.name) }
+    LaunchedEffect(item.key, item.seq) {
+        val seq = item.seq ?: return@LaunchedEffect
+        if (count > 0 && name != null) return@LaunchedEffect
+        if ("workspaceChanges.summary" !in Pocket.ops.value) return@LaunchedEffect
+        Pocket.fetchChangesSummary(seq) { triple ->
+            if (triple == null) return@fetchChangesSummary
+            count = triple.first
+            if (triple.second != null) name = triple.second
+        }
+    }
     val title = when {
-        name != null -> L.editedName(name)
-        else -> L.editedCount(item.count.coerceAtLeast(0))
+        name != null -> L.editedName(name!!)
+        else -> L.editedCount(count.coerceAtLeast(0))
     }
     Row(
         Modifier.fillMaxWidth().clip(T.R12).border(1.dp, T.Border, T.R12).padding(horizontal = 14.dp, vertical = 12.dp),
@@ -860,6 +871,19 @@ private fun Composer(
     onStop: () -> Unit,
 ) {
     var text by remember { mutableStateOf("") }
+    LaunchedEffect(Unit) {
+        Pocket.composerInsert.collect { token ->
+            val base = text.trimEnd()
+            text = when {
+                base.isEmpty() || base == "@" || base.endsWith("@") -> {
+                    val bare = token.removePrefix("@")
+                    if (base.endsWith("@") || base == "@") base.removeSuffix("@") + "@$bare "
+                    else "@$bare "
+                }
+                else -> "$base ${if (token.startsWith("@")) token else "@$token"} "
+            }
+        }
+    }
     val hasPending = pendingImages.isNotEmpty() || pendingFiles.isNotEmpty()
     val filesReady = pendingFiles.none { it.status == AttachStatus.Uploading || it.status == AttachStatus.Failed || it.status == AttachStatus.Pending }
     val sendLabel = composerSendLabel(running)

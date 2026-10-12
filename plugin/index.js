@@ -12,7 +12,7 @@ import { zipSync, strToU8 } from 'fflate'
 import { permissionOps, presetOps, commandOps, filesOps, jobsOps, exportOps, terminalOps } from './src/extra-ops.js'
 import {
   searchOps, workspaceOps, feedbackOps, fileReferenceOps, sessionReferenceOps,
-  attachmentOps, uploadOps, userQuestionOps,
+  attachmentOps, workspaceChangesOps, uploadOps, userQuestionOps,
 } from './src/parity-ops.js'
 import { registerPairRoute } from './src/web-route.js'
 import { createManageApi, pairingUri, pairingString } from './src/manage.js'
@@ -99,6 +99,9 @@ export function apply(ctx, config = {}) {
   server.registerOps(exportOps(ctx.sessionController, { zipSync, strToU8 }))
   server.registerOps(searchOps(ctx.sessionController))
   server.registerOps(attachmentOps(ctx.sessionController))
+  ctx.inject(['workspaceChanges'], (c) => {
+    c.effect(() => server.registerOps(workspaceChangesOps(c.workspaceChanges)))
+  })
   // Prefer Host workspaceController when present; registry alone is enough in-process.
   ctx.inject(['workspaceRegistry'], (c) => {
     c.effect(() => {

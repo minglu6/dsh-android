@@ -174,6 +174,22 @@ export function attachmentOps(sc) {
 }
 
 /**
+ * Host `workspaceChanges.summary(sessionId, seq)` — enrich `workspace/changes` chat cards.
+ * Returns `{ summary }` or `{ summary: null }` when the Host no longer holds the turn.
+ */
+export function workspaceChangesOps(workspaceChanges) {
+  return {
+    'workspaceChanges.summary': (a) => {
+      if (!str(a.sessionId) || !Number.isSafeInteger(a.seq)) throw bad('sessionId and seq required')
+      if (!workspaceChanges?.summary) {
+        throw Object.assign(new Error('workspaceChanges unavailable'), { code: 'unavailable' })
+      }
+      return { summary: workspaceChanges.summary(a.sessionId, a.seq) ?? null }
+    },
+  }
+}
+
+/**
  * Stage a non-image file for the next prompt via Host `fileUploads.upload`.
  * Returns `{receiptId, file}` for `prompt` content `{type:'file', receiptId}`.
  */

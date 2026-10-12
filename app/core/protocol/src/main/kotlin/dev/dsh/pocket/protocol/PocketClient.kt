@@ -263,6 +263,9 @@ class PocketClient(
             },
         )
 
+    suspend fun workspaceChangesSummary(sessionId: String, seq: Long): JsonElement =
+        call("workspaceChanges.summary", jsonOf("sessionId" to sessionId, "seq" to seq))
+
     fun close() {
         pump?.cancel(); pump = null
         transport?.close(); transport = null
