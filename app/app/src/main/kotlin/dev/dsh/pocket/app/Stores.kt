@@ -71,6 +71,10 @@ data class Profile(
     /** Tailscale / LAN listen address. */
     val host: String = "",
     val port: Int = 0,
+    /** Desktop plugin instance id (64 hex) for LAN auto-discovery address updates. */
+    val instanceId: String = "",
+    /** Epoch ms; used to sort the connections list. */
+    val lastUsedAt: Long = 0L,
 ) {
     val needsRepair: Boolean get() = host.isBlank() || port !in 1..65535
 
@@ -90,6 +94,31 @@ data class Profile(
     val subtitle: String get() = when {
         needsRepair -> "连接信息不完整，请重新配对"
         else -> "$host:$port"
+    }
+}
+
+/**
+ * Normalize legacy prefs into the current [Profile] shape.
+ * - Drops unusable blank rows
+ * - Marks iroh-era rows (nodeId without host:port) as needing re-pair via [Profile.needsRepair]
+ * - Seeds [Profile.lastUsedAt] from list order when unset so sort-by-last-used is stable
+ */
+fun migrateLegacyProfiles(raw: List<Profile>, now: Long = System.currentTimeMillis()): List<Profile> {
+    if (raw.isEmpty()) return emptyList()
+    val cleaned = raw.filter { it.id.isNotBlank() && it.name.isNotBlank() }
+    val allUnset = cleaned.all { it.lastUsedAt <= 0L }
+    return cleaned.mapIndexed { index, p ->
+        val used = when {
+            p.lastUsedAt > 0L -> p.lastUsedAt
+            allUnset -> now - (cleaned.size - index) * 1_000L
+            else -> 0L
+        }
+        // Strip stale transport/nodeId noise once host:port is present; keep needsRepair for iroh-only.
+        if (!p.needsRepair && (p.transport.isNotEmpty() || p.nodeId.isNotEmpty())) {
+            p.copy(transport = "", nodeId = "", lastUsedAt = used)
+        } else {
+            p.copy(lastUsedAt = used)
+        }
     }
 }
 
@@ -122,6 +151,12 @@ class AppPrefs(ctx: Context) {
     var activeProfile: String?
         get() = p.getString("active", null)
         set(v) = p.edit().putString("active", v).apply()
+    var nearbyWifiDeclined: Boolean
+        get() = p.getBoolean("nearbyWifiDeclined", false)
+        set(v) = p.edit().putBoolean("nearbyWifiDeclined", v).apply()
+    var profilesMigratedV1: Boolean
+        get() = p.getBoolean("profilesMigratedV1", false)
+        set(v) = p.edit().putBoolean("profilesMigratedV1", v).apply()
     var busySend: BusySend
         get() = runCatching { BusySend.valueOf(p.getString("busySend", null) ?: "Queue") }.getOrDefault(BusySend.Queue)
         set(v) = p.edit().putString("busySend", v.name).apply()

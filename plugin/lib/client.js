@@ -69,7 +69,8 @@ function createPocketApi(base = "") {
 				id,
 				name
 			})
-		})
+		}),
+		diagnostics: () => get("/pocket/diagnostics")
 	};
 }
 
@@ -113,7 +114,11 @@ const zh = {
 	loadFailed: "加载失败",
 	refresh: "刷新",
 	close: "关闭",
-	noCode: "点击「开始配对」生成二维码与配对串"
+	noCode: "点击「开始配对」生成二维码与配对串",
+	diagnostics: "连接诊断",
+	openDiagnostics: "打开连接诊断",
+	diagnosticsCopy: "复制脱敏报告",
+	diagnosticsCopied: "已复制"
 };
 const en = {
 	entry: "Phone connection",
@@ -153,7 +158,11 @@ const en = {
 	loadFailed: "Failed to load",
 	refresh: "Refresh",
 	close: "Close",
-	noCode: "Click “Start pairing” for a QR and pairing string"
+	noCode: "Click “Start pairing” for a QR and pairing string",
+	diagnostics: "Connection diagnostics",
+	openDiagnostics: "Open connection diagnostics",
+	diagnosticsCopy: "Copy redacted report",
+	diagnosticsCopied: "Copied"
 };
 
 //#endregion
@@ -1597,6 +1606,8 @@ function ManagePanel({ t, api }) {
 	const [error, setError] = (0, react.useState)(null);
 	const [loading, setLoading] = (0, react.useState)(true);
 	const [copied, setCopied] = (0, react.useState)(false);
+	const [diagCopied, setDiagCopied] = (0, react.useState)(false);
+	const [diagBusy, setDiagBusy] = (0, react.useState)(false);
 	const [tick, setTick] = (0, react.useState)(0);
 	const refresh = (0, react.useCallback)(async () => {
 		setError(null);
@@ -1646,6 +1657,19 @@ function ManagePanel({ t, api }) {
 			setCopied(true);
 			setTimeout(() => setCopied(false), 1500);
 		} catch {}
+	};
+	const copyDiagnostics = async () => {
+		setDiagBusy(true);
+		try {
+			const d = await api.diagnostics();
+			await navigator.clipboard.writeText(d.report);
+			setDiagCopied(true);
+			setTimeout(() => setDiagCopied(false), 1500);
+		} catch (e) {
+			setError(String(e?.message ?? e));
+		} finally {
+			setDiagBusy(false);
+		}
 	};
 	const pairing = status?.pairing;
 	const expires = pairing?.open ? Math.max(0, pairing.expiresInSec ?? 0) : 0;
@@ -1716,11 +1740,25 @@ function ManagePanel({ t, api }) {
 							]
 						})
 					]
-				}), /* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
-					type: "button",
-					style: styles.outlineBtnSm,
-					onClick: () => void refresh(),
-					children: t("refresh")
+				}), /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
+					style: {
+						display: "flex",
+						flexDirection: "column",
+						gap: 6
+					},
+					children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
+						type: "button",
+						style: styles.outlineBtnSm,
+						onClick: () => void refresh(),
+						children: t("refresh")
+					}), /* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
+						type: "button",
+						style: styles.outlineBtnSm,
+						disabled: diagBusy,
+						onClick: () => void copyDiagnostics(),
+						"aria-label": t("openDiagnostics"),
+						children: diagCopied ? t("diagnosticsCopied") : t("diagnostics")
+					})]
 				})]
 			}) : null,
 			/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {

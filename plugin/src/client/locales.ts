@@ -37,6 +37,10 @@ export const zh = {
   refresh: '刷新',
   close: '关闭',
   noCode: '点击「开始配对」生成二维码与配对串',
+  diagnostics: '连接诊断',
+  openDiagnostics: '打开连接诊断',
+  diagnosticsCopy: '复制脱敏报告',
+  diagnosticsCopied: '已复制',
 } as const
 
 export const en = {
@@ -78,6 +82,10 @@ export const en = {
   refresh: 'Refresh',
   close: 'Close',
   noCode: 'Click “Start pairing” for a QR and pairing string',
+  diagnostics: 'Connection diagnostics',
+  openDiagnostics: 'Open connection diagnostics',
+  diagnosticsCopy: 'Copy redacted report',
+  diagnosticsCopied: 'Copied',
 } as const
 
 export type PocketLocaleKey = keyof typeof zh

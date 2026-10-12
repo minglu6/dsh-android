@@ -15,10 +15,13 @@ import {
   attachmentOps, workspaceChangesOps, uploadOps, userQuestionOps,
 } from './src/parity-ops.js'
 import { registerPairRoute } from './src/web-route.js'
-import { createManageApi, pairingUri, pairingString } from './src/manage.js'
+import { createManageApi, pairingUri, pairingString, connectionTypeForHost } from './src/manage.js'
 import { startIrohSidecar } from './src/iroh.js'
 import { loadTransport, saveTransport, normalizeTransport } from './src/transport-pref.js'
 import { pickAdvertiseHost, pickBindHost } from './src/advertise-host.js'
+import { loadOrCreateInstanceId } from './src/instance-id.js'
+import { startMdnsAdvertise } from './src/mdns-advertise.js'
+import { collectConnectionDiagnostics } from './src/diagnostics.js'
 
 export const name = 'dsh-plugin-pocket'
 // webServer is optional: Cordis `inject` entries are all required, so the
@@ -48,10 +51,26 @@ export function apply(ctx, config = {}) {
   const port = config.port ?? 7690
   const advertiseHost = pickAdvertiseHost(config.host)
   const bindHost = pickBindHost(config.host)
+  const instanceId = loadOrCreateInstanceId(dataDir)
+  /** @type {{ stop: () => Promise<void>, deviceName: string } | null} */
+  let mdns = null
+  const buildDiagnostics = () => collectConnectionDiagnostics({
+    version: PKG.version,
+    plugin: PKG.name,
+    transport: remoteTransport,
+    host: advertiseHost,
+    port,
+    instanceId,
+    connectionType: connectionTypeForHost(advertiseHost),
+    running: server.address() !== null,
+    mdns: mdns !== null,
+    deviceName: mdns?.deviceName,
+  })
   const server = createPocketServer({
     sessionController: ctx.sessionController, token, host: bindHost, port, devices, pairing,
-    info: { plugin: PKG.name, version: PKG.version },
+    info: { plugin: PKG.name, version: PKG.version, instanceId },
     onSessionEvent: (fn) => { listeners.add(fn); return () => listeners.delete(fn) },
+    getDiagnostics: buildDiagnostics,
   })
   for (const kind of SESSION_EVENTS) {
     ctx.on(`api-session/${kind}`, (...args) => { for (const fn of listeners) fn(kind, args) })
@@ -85,6 +104,9 @@ export function apply(ctx, config = {}) {
     host: advertiseHost, port, devices, pairing, server, openPairing,
     getTransport,
     setTransport: setTransportMode,
+    instanceId,
+    getDiagnostics: buildDiagnostics,
+    getMdns: () => mdns !== null,
   })
   ctx.inject(['permissionPresets', 'agents'], (c) => { c.effect(() => server.registerOps(permissionOps(c.permissionPresets, c.agents))) })
   ctx.inject(['agentPresets'], (c) => { c.effect(() => server.registerOps(presetOps(c.agentPresets))) })
@@ -157,7 +179,21 @@ export function apply(ctx, config = {}) {
 
       const addr = await server.listen()
       log(`ws listening on ws://${addr} (pairing advertises ${advertiseHost}:${port})`)
+      log(`instance ${instanceId.slice(0, 8)}…`)
       log(created ? `new owner token written to ${path}: ${token}` : `owner token: ${path}`)
+
+      try {
+        mdns = startMdnsAdvertise({
+          host: advertiseHost,
+          port,
+          instanceId,
+          log,
+          onError: (err) => console.error('[pocket] mdns:', err.message ?? err),
+        })
+      } catch (e) {
+        console.error('[pocket] mdns advertise failed:', e.message ?? e)
+        mdns = null
+      }
 
       if (config.pair || devices.list().length === 0) {
         try { openPairing() } catch (e) { console.error('[pocket]', e.message ?? e) }
@@ -165,6 +201,8 @@ export function apply(ctx, config = {}) {
     }
     start().catch((error) => console.error('[pocket] start failed:', error))
     return () => {
+      void mdns?.stop()
+      mdns = null
       void iroh?.close()
       void server.close()
     }

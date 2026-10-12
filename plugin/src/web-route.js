@@ -35,6 +35,7 @@ async function readJson(req, res, limit = 4096) {
  *   revokeDevice: (id: string) => boolean,
  *   renameDevice: (id: string, name: string) => boolean,
  *   setTransport?: (mode: string) => object,
+ *   getDiagnostics?: () => object | Promise<object>,
  * }} api
  */
 export function registerPairRoute(ctx, api) {
@@ -61,6 +62,20 @@ export function registerPairRoute(ctx, api) {
         }
       }
       return json(res, 405, { error: 'method not allowed' })
+    },
+  }))
+
+  ctx.effect(() => ctx.webServer.register({
+    kind: 'exact', path: '/pocket/diagnostics',
+    handler: async (req, res) => {
+      if (!gate(req, res)) return
+      if (req.method !== 'GET') return json(res, 405, { error: 'method not allowed' })
+      if (typeof api.getDiagnostics !== 'function') return json(res, 404, { error: 'unavailable' })
+      try {
+        return json(res, 200, await api.getDiagnostics())
+      } catch (e) {
+        return json(res, 500, { error: String(e?.message ?? e) })
+      }
     },
   }))
 

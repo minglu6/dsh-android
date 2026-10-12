@@ -28,12 +28,25 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import android.Manifest
+import android.content.pm.PackageManager
+import android.os.Build
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.core.content.ContextCompat
 import dev.dsh.pocket.protocol.PairingLink
 import dev.dsh.pocket.protocol.parseHostPort
+import java.util.concurrent.Executors
+import java.util.concurrent.atomic.AtomicBoolean
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 @Composable
 private fun Header(title: String, onBack: (() -> Unit)?) {
@@ -289,18 +302,63 @@ fun ConnectionsScreen(pairLink: PairingLink?, onPairLinkConsumed: () -> Unit, ca
     val profiles by Pocket.profiles.collectAsState()
     val status by Pocket.status.collectAsState()
     val active by Pocket.active.collectAsState()
+    val ctx = LocalContext.current
     var pairing by remember { mutableStateOf<PairingLink?>(null) }
     var showPair by remember { mutableStateOf(false) }
     var showScan by remember { mutableStateOf(false) }
     var manageId by remember { mutableStateOf<String?>(null) }
+    var repairTarget by remember { mutableStateOf<Profile?>(null) }
+    var nearby by remember { mutableStateOf<List<DiscoveredHost>>(emptyList()) }
+    var showNearbyPerm by remember { mutableStateOf(false) }
     val manage = manageId?.let { id -> profiles.firstOrNull { it.id == id } }
     val routes by Pocket.routes.collectAsState()
-    LaunchedEffect(Unit) { while (true) { Pocket.probe(); kotlinx.coroutines.delay(10_000) } }
+    val sorted = remember(profiles) { Pocket.profilesSorted() }
+    val scope = rememberCoroutineScope()
+    val pollerExecutor = remember { Executors.newFixedThreadPool(3) }
+    val poller = remember {
+        DeviceStatusPoller(
+            executor = pollerExecutor,
+            dispatch = { action -> scope.launch { action() } },
+            probe = { Pocket.probeOne(it) },
+            onResult = { row, result -> Pocket.applyProbeResult(row, result) },
+        )
+    }
+    DisposableEffect(Unit) {
+        onDispose { poller.stop(); pollerExecutor.shutdownNow() }
+    }
+    LaunchedEffect(profiles, active) {
+        while (true) {
+            poller.refresh(profiles.filter { it.id != active })
+            kotlinx.coroutines.delay(10_000)
+        }
+    }
+    val nearbyPermLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { ok ->
+        if (!ok) Pocket.prefs.nearbyWifiDeclined = true
+        showNearbyPerm = false
+    }
+    LaunchedEffect(Unit) {
+        val needNearby = NearbyDiscoveryPermissionPolicy.shouldRequest(
+            apiLevel = Build.VERSION.SDK_INT,
+            granted = Build.VERSION.SDK_INT < 33 ||
+                ContextCompat.checkSelfPermission(ctx, Manifest.permission.NEARBY_WIFI_DEVICES) == PackageManager.PERMISSION_GRANTED,
+            previouslyDeclined = Pocket.prefs.nearbyWifiDeclined,
+        )
+        if (needNearby) {
+            showNearbyPerm = true
+        }
+        while (true) {
+            val canceled = AtomicBoolean(false)
+            val found = withContext(Dispatchers.IO) { LanDiscovery.scan(ctx, canceled = canceled) }
+            nearby = found.filter { disc -> profiles.none { it.instanceId == disc.instanceId && it.instanceId.isNotBlank() } }
+            Pocket.applyDiscoveredHosts(found)
+            kotlinx.coroutines.delay(8_000)
+        }
+    }
     LaunchedEffect(pairLink) { if (pairLink != null) { pairing = pairLink; showPair = true; onPairLinkConsumed() } }
 
-    Column(Modifier.fillMaxSize().background(Color.White).systemBarsPadding()) {
+    Column(Modifier.fillMaxSize().background(Color.White).systemBarsPadding().verticalScroll(rememberScrollState())) {
         Header("连接", if (canBack) onBack else null)
-        if (profiles.isEmpty()) {
+        if (sorted.isEmpty()) {
             Card {
                 Row(Modifier.fillMaxWidth().padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
                     Box(Modifier.size(40.dp).clip(CircleShape).background(T.Fill2), contentAlignment = Alignment.Center) { Icon(Icons.Outlined.Devices, null, tint = T.Text3, modifier = Modifier.size(20.dp)) }
@@ -313,14 +371,31 @@ fun ConnectionsScreen(pairLink: PairingLink?, onPairLinkConsumed: () -> Unit, ca
             }
         } else {
             Card {
-                profiles.forEachIndexed { i, p ->
+                sorted.forEachIndexed { i, p ->
                     val d = status[p.id]
                     val route = routes[p.id]
                     Row(verticalAlignment = Alignment.CenterVertically) { Spacer(Modifier.width(16.dp)); StatusDot(d); Box(Modifier.weight(1f)) {
-                    Row2(p.name + if (p.id == active) "  · 当前" else "", "${p.subtitle} · ${dotLabel(d)}", icon = null, divider = i < profiles.lastIndex, onClick = { manageId = p.id }, trailing = {
+                    Row2(p.name + if (p.id == active) "  · 当前" else "", "${p.subtitle} · ${dotLabel(d)}", icon = null, divider = i < sorted.lastIndex, onClick = { manageId = p.id }, trailing = {
                         Text(route?.label ?: p.kind, fontSize = 12.sp, color = if (p.needsRepair) T.WarnBorder else T.Text2, modifier = Modifier.border(1.dp, T.Border, T.R8).padding(horizontal = 8.dp, vertical = 4.dp))
                         Icon(D.chevronRight, null, tint = T.Text3, modifier = Modifier.padding(start = 8.dp).size(20.dp))
                     }) } }
+                }
+            }
+        }
+        if (nearby.isNotEmpty()) {
+            Text(L.nearbyComputers(), fontSize = 13.sp, color = T.Text3, modifier = Modifier.padding(start = 22.dp, top = 12.dp, bottom = 2.dp))
+            Card {
+                nearby.forEachIndexed { i, h ->
+                    Row2(
+                        h.deviceName,
+                        "${h.host}:${h.port}",
+                        icon = Icons.Outlined.Computer,
+                        divider = i < nearby.lastIndex,
+                        onClick = {
+                            pairing = PairingLink(h.host, h.port, "")
+                            showPair = true
+                        },
+                    )
                 }
             }
         }
@@ -330,9 +405,24 @@ fun ConnectionsScreen(pairLink: PairingLink?, onPairLinkConsumed: () -> Unit, ca
             OutlinedButton({ showScan = true }, Modifier.weight(1f).height(52.dp), shape = T.R12, border = BorderStroke(1.dp, T.Border),
                 colors = ButtonDefaults.outlinedButtonColors(contentColor = T.Ink)) { Text("扫码配对", fontSize = 15.sp) }
         }
-        Spacer(Modifier.weight(1f))
+        Spacer(Modifier.height(24.dp))
     }
-    if (showPair) PairSheet(pairing, onDismiss = { showPair = false }) { p -> showPair = false; Pocket.connect(p.id); onConnected() }
+    if (showNearbyPerm && Build.VERSION.SDK_INT >= 33) {
+        NearbyWifiPermissionSheet(
+            onDismiss = {
+                Pocket.prefs.nearbyWifiDeclined = true
+                showNearbyPerm = false
+            },
+            onAllow = {
+                nearbyPermLauncher.launch(Manifest.permission.NEARBY_WIFI_DEVICES)
+            },
+        )
+    }
+    if (showPair) PairSheet(
+        link = pairing,
+        prefName = repairTarget?.name.orEmpty(),
+        onDismiss = { showPair = false; repairTarget = null },
+    ) { p -> showPair = false; repairTarget = null; Pocket.connect(p.id); onConnected() }
     if (showScan) ScanPairFlow(
         onResult = { link -> pairing = link; showScan = false; showPair = true },
         onDismiss = { showScan = false },
@@ -344,11 +434,17 @@ fun ConnectionsScreen(pairLink: PairingLink?, onPairLinkConsumed: () -> Unit, ca
             isActive = p.id == active,
             onDismiss = { manageId = null },
             onConnect = { Pocket.connect(p.id); manageId = null; onConnected() },
+            onRepair = {
+                manageId = null
+                repairTarget = p
+                pairing = if (!p.needsRepair) PairingLink(p.host, p.port, "") else null
+                showPair = true
+            },
         )
     }
 }
 
-/** Device manage sheet: 重命名 (inline 保存/取消) + 删除, matching desktop ManagePanel. */
+/** Device manage sheet: 重命名 / 重新配对 / 删除, matching desktop ManagePanel. */
 @Composable
 fun ProfileManageSheet(
     profile: Profile,
@@ -356,6 +452,7 @@ fun ProfileManageSheet(
     isActive: Boolean,
     onDismiss: () -> Unit,
     onConnect: () -> Unit,
+    onRepair: () -> Unit = {},
 ) {
     var renaming by remember(profile.id) { mutableStateOf(false) }
     PocketSheet(onDismiss) {
@@ -399,36 +496,67 @@ fun ProfileManageSheet(
         Text("${profile.subtitle} · ${dotLabel(status)}", style = T.Mono.copy(color = T.Text3), modifier = Modifier.padding(horizontal = 22.dp, vertical = 4.dp))
         Spacer(Modifier.height(8.dp))
         if (profile.needsRepair) {
-            Text("连接信息不完整，请删除后重新配对。", fontSize = 13.sp, color = T.Text3, modifier = Modifier.padding(start = 22.dp, end = 22.dp, bottom = 8.dp))
+            Text("连接信息不完整，请重新配对。", fontSize = 13.sp, color = T.Text3, modifier = Modifier.padding(start = 22.dp, end = 22.dp, bottom = 8.dp))
         } else if (!isActive || status != Dot.Online) {
             OptionRow("连接", icon = D.link) { onConnect() }
         }
+        OptionRow(L.repairPair(), icon = D.link) { onRepair() }
         OptionRow("重命名", icon = D.edit) { renaming = true }
         OptionRow("删除", icon = D.trash) { Pocket.removeProfile(profile.id); onDismiss() }
     }
 }
 
-private fun dotLabel(d: Dot?) = when (d) { Dot.Online -> "在线"; Dot.Connecting -> "连接中"; Dot.Unauthorized -> "需重新配对"; Dot.Offline -> "无法连接"; null -> "未知" }
+private fun dotLabel(d: Dot?) = when (d) {
+    Dot.Online -> L.online()
+    Dot.Connecting -> "连接中"
+    Dot.Unauthorized -> L.revoked()
+    Dot.Offline -> L.offline()
+    null -> "未知"
+}
 
 @Composable
-fun PairSheet(link: PairingLink?, onDismiss: () -> Unit, onPaired: (Profile) -> Unit) {
-    var address by remember {
-        mutableStateOf(link?.let { "${it.host}:${it.port}" } ?: "")
+fun NearbyWifiPermissionSheet(onDismiss: () -> Unit, onAllow: () -> Unit) {
+    PocketSheet(onDismiss) {
+        SheetTitle(L.nearbyComputers())
+        Text(
+            "用于发现同一局域网内的电脑（不会用于定位）。",
+            fontSize = 14.sp, color = T.Text2, lineHeight = 22.sp,
+            modifier = Modifier.padding(horizontal = 22.dp, vertical = 8.dp),
+        )
+        Row(Modifier.padding(horizontal = 22.dp, vertical = 16.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            OutlinedButton(
+                onDismiss, Modifier.weight(1f).height(50.dp), shape = T.R12,
+                border = BorderStroke(1.dp, T.Border),
+                colors = ButtonDefaults.outlinedButtonColors(contentColor = T.Ink),
+            ) { Text("取消") }
+            Button(onAllow, Modifier.weight(1f).height(50.dp), shape = T.R12, colors = PrimaryColors()) {
+                Text("允许", color = Color.White)
+            }
+        }
     }
-    var name by remember { mutableStateOf("") }
-    var code by remember { mutableStateOf(link?.code ?: "") }
-    var busy by remember { mutableStateOf(false) }
+}
+
+@Composable
+fun PairSheet(link: PairingLink?, prefName: String = "", onDismiss: () -> Unit, onPaired: (Profile) -> Unit) {
+    var address by remember(link) {
+        mutableStateOf(link?.takeIf { it.host.isNotBlank() }?.let { "${it.host}:${it.port}" } ?: "")
+    }
+    var name by remember(prefName) { mutableStateOf(prefName) }
+    var code by remember(link) { mutableStateOf(link?.code?.takeIf { it.length == 6 } ?: "") }
     var err by remember { mutableStateOf<String?>(null) }
+    val gate = remember { PairingAttemptGate() }
+    var busy by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
     val focus = remember { FocusRequester() }
+    DisposableEffect(Unit) { onDispose { gate.invalidate() } }
     val parsed = remember(address, code) {
         when (val p = PairingLink.parse(address.trim())) {
             null -> parseHostPort(address)?.let { (h, port) ->
                 code.takeIf { it.length == 6 }?.let { PairingLink(h, port, it) }
             }
             else -> {
-                val c = code.takeIf { it.length == 6 } ?: p.code
-                c.takeIf { it.length == 6 }?.let { PairingLink(p.host, p.port, it) }
+                val c = code.takeIf { it.length == 6 } ?: p.code.takeIf { it.length == 6 }
+                c?.let { PairingLink(p.host, p.port, it) }
             }
         }
     }
@@ -439,7 +567,7 @@ fun PairSheet(link: PairingLink?, onDismiss: () -> Unit, onPaired: (Profile) -> 
             err = null
             PairingLink.parse(it.trim())?.let { parsedLink ->
                 address = "${parsedLink.host}:${parsedLink.port}"
-                code = parsedLink.code
+                if (parsedLink.code.length == 6) code = parsedLink.code
             }
         }
         Field("名称", name, "例如 Mac mini") { name = it }
@@ -461,10 +589,14 @@ fun PairSheet(link: PairingLink?, onDismiss: () -> Unit, onPaired: (Profile) -> 
         err?.let { Text(it, color = T.Err, fontSize = 13.sp, modifier = Modifier.padding(horizontal = 22.dp, vertical = 8.dp)) }
         val ready = parsed != null && !busy
         Button({
+            val generation = gate.begin() ?: return@Button
             busy = true
             scope.launch {
-                Pocket.pair(name.trim(), parsed!!).onSuccess(onPaired).onFailure { err = it.message }
-                busy = false
+                val result = Pocket.pair(name.trim(), parsed!!)
+                if (gate.complete(generation)) {
+                    result.onSuccess(onPaired).onFailure { err = it.message }
+                    busy = false
+                }
             }
         }, Modifier.padding(horizontal = 18.dp, vertical = 16.dp).fillMaxWidth().height(52.dp), enabled = ready, shape = T.R12,
             colors = PrimaryColors()) {
@@ -492,6 +624,7 @@ fun SettingsScreen(onBack: () -> Unit, onGeneral: () -> Unit, onConnections: () 
     val profile = Pocket.activeProfile
     var notify by remember { mutableStateOf(Pocket.prefs.approvalNotify) }
     var sheet by remember { mutableStateOf(false) }
+    var diagnostics by remember { mutableStateOf(false) }
     Column(Modifier.fillMaxSize().background(Color.White).systemBarsPadding().verticalScroll(rememberScrollState())) {
         Header("设置", onBack)
         Card {
@@ -501,6 +634,7 @@ fun SettingsScreen(onBack: () -> Unit, onGeneral: () -> Unit, onConnections: () 
         Text("dsh-android", fontSize = 13.sp, color = T.Text3, modifier = Modifier.padding(start = 22.dp, top = 12.dp, bottom = 2.dp))
         Card {
             Row2("连接", icon = D.rightUp, value = profile?.name ?: "未连接", onClick = onConnections)
+            Row2(L.diagnostics(), icon = D.inspect, onClick = { diagnostics = true })
             Row2("审批通知", divider = false, trailing = {
                 Switch(notify, { notify = it; Pocket.prefs.approvalNotify = it }, colors = SwitchDefaults.colors(checkedTrackColor = T.Ink, checkedThumbColor = Color.White))
             })
@@ -509,6 +643,65 @@ fun SettingsScreen(onBack: () -> Unit, onGeneral: () -> Unit, onConnections: () 
             textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth().padding(16.dp))
     }
     if (sheet) PresetSheet("standard", editable = false, onDismiss = { sheet = false }) {}
+    if (diagnostics) DiagnosticsSheet(onDismiss = { diagnostics = false })
+}
+
+@Composable
+fun DiagnosticsSheet(onDismiss: () -> Unit) {
+    var report by remember { mutableStateOf<String?>(null) }
+    var err by remember { mutableStateOf<String?>(null) }
+    var loading by remember { mutableStateOf(true) }
+    val clip = LocalClipboardManager.current
+    val scope = rememberCoroutineScope()
+    LaunchedEffect(Unit) {
+        loading = true
+        runCatching { Pocket.fetchDiagnostics() }
+            .onSuccess { report = it; err = null }
+            .onFailure { err = it.message ?: L.diagnosticsUnavailable(); report = null }
+        loading = false
+    }
+    PocketSheet(onDismiss) {
+        SheetTitle(L.diagnostics())
+        when {
+            loading -> Text(L.diagnosticsChecking(), fontSize = 14.sp, color = T.Text3, modifier = Modifier.padding(22.dp))
+            err != null -> Text(err!!, fontSize = 14.sp, color = T.Err, modifier = Modifier.padding(22.dp))
+            else -> Text(
+                report.orEmpty(),
+                style = T.Mono.copy(fontSize = 12.sp, color = T.Text2, lineHeight = 18.sp),
+                modifier = Modifier.padding(horizontal = 22.dp, vertical = 8.dp).testTag("diagnosticsReport"),
+            )
+        }
+        Row(Modifier.padding(horizontal = 22.dp, vertical = 16.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            OutlinedButton(
+                {
+                    loading = true
+                    scope.launch {
+                        runCatching { Pocket.fetchDiagnostics() }
+                            .onSuccess { report = it; err = null }
+                            .onFailure { err = it.message ?: L.diagnosticsUnavailable(); report = null }
+                        loading = false
+                    }
+                },
+                Modifier.weight(1f).height(50.dp),
+                shape = T.R12,
+                border = BorderStroke(1.dp, T.Border),
+                colors = ButtonDefaults.outlinedButtonColors(contentColor = T.Ink),
+                enabled = !loading,
+            ) { Text("刷新") }
+            Button(
+                {
+                    report?.let {
+                        clip.setText(AnnotatedString(it))
+                        Pocket.notices.tryEmit(L.diagnosticsCopied())
+                    }
+                },
+                Modifier.weight(1f).height(50.dp),
+                enabled = !report.isNullOrBlank(),
+                shape = T.R12,
+                colors = PrimaryColors(),
+            ) { Text(L.diagnosticsCopy(), color = Color.White) }
+        }
+    }
 }
 
 @Composable

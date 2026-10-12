@@ -251,7 +251,35 @@ export function createPocketServer(opts) {
   const idleMs = opts.idleMs ?? 60_000
   const pairFailDelayMs = opts.pairFailDelayMs ?? 200
   const ops = createOps(sc)
-  const http = createServer((req, res) => {
+  const http = createServer(async (req, res) => {
+    const url = new URL(req.url || '/', `http://${req.headers.host || '127.0.0.1'}`)
+    if (req.method === 'GET' && url.pathname === '/diagnostics') {
+      if (typeof opts.getDiagnostics !== 'function') {
+        res.writeHead(404, { 'content-type': 'application/json; charset=utf-8' }).end(JSON.stringify({ error: 'unavailable' }))
+        return
+      }
+      try {
+        const body = await opts.getDiagnostics()
+        res.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' })
+        res.end(JSON.stringify(body))
+      } catch (e) {
+        res.writeHead(500, { 'content-type': 'application/json; charset=utf-8' }).end(JSON.stringify({ error: String(e?.message ?? e) }))
+      }
+      return
+    }
+    if (req.method === 'GET' && url.pathname === '/discovery') {
+      const info = opts.info ?? {}
+      res.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' })
+      res.end(JSON.stringify({
+        protocol: 1,
+        instanceId: info.instanceId,
+        deviceName: info.deviceName,
+        plugin: info.plugin,
+        version: info.version,
+        port: opts.port ?? 7690,
+      }))
+      return
+    }
     res.writeHead(426, { 'content-type': 'text/plain' }).end('websocket required')
   })
   const wss = new WebSocketServer({ server: http, maxPayload: MAX_PAYLOAD })
