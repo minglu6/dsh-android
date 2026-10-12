@@ -9,10 +9,6 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.outlined.ViewSidebar
-import androidx.compose.material.icons.outlined.*
-import androidx.compose.material.icons.rounded.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -303,7 +299,7 @@ fun ChatRoot(onMenu: () -> Unit) {
 @Composable
 private fun TopBar(title: String?, inChat: Boolean, dot: Dot?, onMenu: () -> Unit, onMore: () -> Unit, onPanel: (() -> Unit)?, onTeam: () -> Unit, onPreset: () -> Unit, preset: String, onNew: () -> Unit = {}) {
     Row(Modifier.fillMaxWidth().height(56.dp).padding(horizontal = 6.dp), verticalAlignment = Alignment.CenterVertically) {
-        IconButton(onMenu) { Icon(Icons.Rounded.Menu, "菜单", tint = T.Ink) }
+        IconButton(onMenu) { Icon(D.panelLeft, L.menu(), tint = T.Ink, modifier = Modifier.size(20.dp)) }
         // One weighted region: the title takes what the gray links leave (no competing spacer).
         Row(Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically) {
             if (inChat) {
@@ -487,7 +483,11 @@ private fun Transcript(
 
 private enum class MessageClock { Start, End }
 
-/** Desktop MessageIconActions: clock + copy + optional branch + like/dislike. */
+/**
+ * Desktop MessageIconActions row: icon-only copy / feedback / branch + clock.
+ * Order matches desktop: (user clock?) → copy → like/dislike → branch → (assistant clock?).
+ * Locale strings live in contentDescription / long-press tooltip only.
+ */
 @Composable
 private fun MessageActions(
     text: String,
@@ -504,6 +504,7 @@ private fun MessageActions(
     val clip = androidx.compose.ui.platform.LocalClipboardManager.current
     var copied by remember { mutableStateOf(false) }
     val canFeedback = messageId != null && "feedback.set" in Pocket.ops.value
+    val iconDp = if (clock == MessageClock.End) 17.dp else 15.dp
     LaunchedEffect(copied) {
         if (copied) {
             kotlinx.coroutines.delay(1000)
@@ -511,69 +512,119 @@ private fun MessageActions(
         }
     }
     Row(
-        Modifier.padding(top = 4.dp),
+        Modifier
+            .padding(top = 4.dp)
+            .height(28.dp)
+            .fillMaxWidth(),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = if (clock == MessageClock.Start) Arrangement.End else Arrangement.Start,
     ) {
         if (clock == MessageClock.Start && timeMs != null) {
-            Text(formatMessageClock(timeMs), fontSize = 12.sp, color = T.Caption)
-            Spacer(Modifier.width(8.dp))
+            Text(
+                formatMessageClock(timeMs),
+                fontSize = 12.sp,
+                color = T.Caption,
+                maxLines = 1,
+                softWrap = false,
+                modifier = Modifier.padding(end = 12.dp),
+            )
         }
-        Text(
-            if (copied) "复制成功" else "复制",
-            fontSize = 12.sp,
-            color = T.Text3,
-            modifier = Modifier
-                .clip(T.R8)
-                .clickable(enabled = !copied) {
-                    clip.setText(androidx.compose.ui.text.AnnotatedString(text))
-                    copied = true
-                }
-                .padding(horizontal = 8.dp, vertical = 4.dp)
-                .testTag("messageCopy"),
-        )
-        if (onBranch != null) {
-            Spacer(Modifier.width(4.dp))
-            val label = when {
-                branchUnavailable -> "仅可从已完成轮次的最后一条消息分支"
-                else -> "在新对话中分支"
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            ActionIconButton(
+                icon = if (copied) D.check else D.copy,
+                label = if (copied) L.copied() else L.copy(),
+                tint = T.Caption,
+                iconSize = iconDp,
+                enabled = !copied,
+                testTag = "messageCopy",
+            ) {
+                clip.setText(androidx.compose.ui.text.AnnotatedString(text))
+                copied = true
             }
-            Text(
-                "在新对话中分支",
-                fontSize = 12.sp,
-                color = if (branchEnabled) T.Text3 else T.Caption,
-                modifier = Modifier
-                    .clip(T.R8)
-                    .then(
-                        if (branchEnabled) Modifier.clickable(onClick = onBranch)
-                        else Modifier,
-                    )
-                    .padding(horizontal = 8.dp, vertical = 4.dp)
-                    .semantics { contentDescription = label }
-                    .testTag("messageBranch"),
-            )
-        }
-        if (canFeedback && onLike != null && onDislike != null) {
-            Spacer(Modifier.width(4.dp))
-            Text(
-                if (rating == "positive") L.undoRating() else L.like(),
-                fontSize = 12.sp,
-                color = if (rating == "positive") T.Accent else T.Text3,
-                modifier = Modifier.clip(T.R8).clickable(onClick = onLike).padding(horizontal = 8.dp, vertical = 4.dp)
-                    .testTag("messageLike"),
-            )
-            Text(
-                if (rating == "negative") L.undoRating() else L.dislike(),
-                fontSize = 12.sp,
-                color = if (rating == "negative") T.Err else T.Text3,
-                modifier = Modifier.clip(T.R8).clickable {
+            // Desktop order: copy → feedback (extraActions) → branch
+            if (canFeedback && onLike != null && onDislike != null) {
+                val likeLabel = if (rating == "positive") L.undoRating() else L.like()
+                ActionIconButton(
+                    icon = if (rating == "positive") D.likeFill else D.like,
+                    label = likeLabel,
+                    tint = if (rating == "positive") T.Accent else T.Caption,
+                    iconSize = iconDp,
+                    testTag = "messageLike",
+                    onClick = onLike,
+                )
+                val dislikeLabel = if (rating == "negative") L.undoRating() else L.dislike()
+                ActionIconButton(
+                    icon = if (rating == "negative") D.dislikeFill else D.dislike,
+                    label = dislikeLabel,
+                    tint = if (rating == "negative") T.Err else T.Caption,
+                    iconSize = iconDp,
+                    testTag = "messageDislike",
+                ) {
                     if (rating == "negative") Pocket.setMessageFeedback(messageId!!, null) else onDislike()
-                }.padding(horizontal = 8.dp, vertical = 4.dp).testTag("messageDislike"),
-            )
+                }
+            }
+            if (onBranch != null) {
+                val tip = if (branchUnavailable) L.branchUnavailable() else L.branch()
+                ActionIconButton(
+                    icon = D.branch,
+                    label = tip,
+                    ariaLabel = L.branch(),
+                    tint = T.Caption,
+                    iconSize = iconDp,
+                    enabled = branchEnabled,
+                    alpha = if (branchUnavailable) 0.4f else 1f,
+                    testTag = "messageBranch",
+                    onClick = onBranch,
+                )
+            }
         }
         if (clock == MessageClock.End && timeMs != null) {
-            Spacer(Modifier.width(8.dp))
-            Text(formatMessageClock(timeMs), fontSize = 12.sp, color = T.Caption)
+            Text(
+                formatMessageClock(timeMs),
+                fontSize = 12.sp,
+                color = T.Caption,
+                maxLines = 1,
+                softWrap = false,
+                modifier = Modifier.padding(start = 8.dp),
+            )
+        }
+    }
+}
+
+/** 28dp hit target matching desktop `.action`; tooltip = long-press / contentDescription. */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun ActionIconButton(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    label: String,
+    tint: Color,
+    iconSize: androidx.compose.ui.unit.Dp,
+    modifier: Modifier = Modifier,
+    ariaLabel: String = label,
+    enabled: Boolean = true,
+    alpha: Float = 1f,
+    testTag: String? = null,
+    onClick: () -> Unit,
+) {
+    val tipState = rememberTooltipState()
+    TooltipBox(
+        positionProvider = TooltipDefaults.rememberPlainTooltipPositionProvider(),
+        tooltip = { PlainTooltip { Text(label, fontSize = 12.sp) } },
+        state = tipState,
+    ) {
+        Box(
+            modifier
+                .size(28.dp)
+                .clip(T.R8)
+                .then(if (enabled) Modifier.clickable(onClick = onClick) else Modifier)
+                .semantics { contentDescription = ariaLabel }
+                .then(if (testTag != null) Modifier.testTag(testTag) else Modifier),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(icon, contentDescription = null, tint = tint.copy(alpha = alpha), modifier = Modifier.size(iconSize))
         }
     }
 }
@@ -927,20 +978,21 @@ private fun Composer(
         Row(verticalAlignment = Alignment.CenterVertically) {
             Box(Modifier.size(32.dp).clip(CircleShape).background(T.Fill).clickable(onClick = onPlus), contentAlignment = Alignment.Center) { Icon(D.plus, L.sectionAdd(), tint = T.Ink, modifier = Modifier.size(18.dp)) }
             Spacer(Modifier.width(8.dp))
-            BoxWithConstraints(Modifier.weight(1f)) {
-                val roomy = maxWidth >= 300.dp
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    val danger = perm == "danger-full-access"
-                    Row(Modifier.clip(T.R8).clickable(onClick = onPerm).padding(horizontal = 6.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
-                        Icon(if (danger) D.warning else D.shield, permissionLabel(perm), tint = if (danger) T.WarnText else T.Text2, modifier = Modifier.size(17.dp))
-                        if (roomy) { Spacer(Modifier.width(5.dp)); Text(permissionLabel(perm), fontSize = 14.sp, color = T.Text2, maxLines = 1) }
-                        Icon(D.chevronDown, null, tint = T.Text2, modifier = Modifier.size(16.dp))
-                    }
-                    Row(Modifier.weight(1f), horizontalArrangement = Arrangement.End) { Row(Modifier.clip(T.R8).clickable(onClick = onModel).padding(horizontal = 6.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+            Row(Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically) {
+                val danger = perm == "danger-full-access"
+                // Desktop always shows shield + permission label (e.g. 工作区内修改).
+                Row(Modifier.clip(T.R8).clickable(onClick = onPerm).padding(horizontal = 6.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Icon(if (danger) D.warning else D.shield, permissionLabel(perm), tint = if (danger) T.WarnText else T.Text2, modifier = Modifier.size(17.dp))
+                    Spacer(Modifier.width(5.dp))
+                    Text(permissionLabel(perm), fontSize = 14.sp, color = T.Text2, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Icon(D.chevronDown, null, tint = T.Text2, modifier = Modifier.size(16.dp))
+                }
+                Row(Modifier.weight(1f), horizontalArrangement = Arrangement.End) {
+                    Row(Modifier.clip(T.R8).clickable(onClick = onModel).padding(horizontal = 6.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
                         Text(model?.let { shortModelName(it.name) } ?: "选择模型", fontSize = 14.sp, color = T.Text2, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
                         model?.effort?.let { Spacer(Modifier.width(5.dp)); Text(it.replaceFirstChar(Char::uppercase), fontSize = 14.sp, color = T.Caption, maxLines = 1, softWrap = false) }
                         Icon(D.chevronDown, null, tint = T.Text2, modifier = Modifier.size(16.dp))
-                    } }
+                    }
                 }
             }
             Spacer(Modifier.width(8.dp))
@@ -965,7 +1017,7 @@ private fun Composer(
                         .testTag("composerSend"),
                     contentAlignment = Alignment.Center,
                 ) {
-                    Icon(Icons.Rounded.ArrowUpward, sendLabel, tint = Color.White, modifier = Modifier.size(16.dp))
+                    Icon(D.send, sendLabel, tint = Color.White, modifier = Modifier.size(16.dp))
                 }
             }
         }

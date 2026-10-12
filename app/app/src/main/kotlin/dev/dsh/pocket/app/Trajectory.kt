@@ -13,8 +13,6 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.outlined.Search
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -688,7 +686,7 @@ private fun TrajectoryToolbar(
                 .padding(horizontal = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Icon(Icons.Outlined.Search, contentDescription = TrajL.toolbarSearch, tint = T.Caption, modifier = Modifier.size(14.dp))
+            Icon(D.search, contentDescription = TrajL.toolbarSearch, tint = T.Caption, modifier = Modifier.size(14.dp))
             Spacer(Modifier.width(4.dp))
             Box(Modifier.weight(1f)) {
                 if (searchQuery.isEmpty()) {

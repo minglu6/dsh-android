@@ -18,18 +18,32 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.selection.SelectionContainer
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
+import androidx.compose.material3.PlainTooltip
 import androidx.compose.material3.Text
+import androidx.compose.material3.TooltipBox
+import androidx.compose.material3.TooltipDefaults
+import androidx.compose.material3.rememberTooltipState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalUriHandler
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.TextStyle
@@ -40,6 +54,7 @@ import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import kotlinx.coroutines.delay
 import org.commonmark.ext.gfm.tables.TableBlock
 import org.commonmark.ext.gfm.tables.TableBody
 import org.commonmark.ext.gfm.tables.TableCell
@@ -367,9 +382,20 @@ private fun MdBlockView(block: MdBlock, bodySp: TextUnit) {
     }
 }
 
+/** Desktop CodeToolbar: language + wrap/copy icon actions (tooltips only). */
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun FencedCode(language: String?, literal: String, incomplete: Boolean) {
     val highlighted = remember(literal, language) { highlightCode(literal, language) }
+    val clip = LocalClipboardManager.current
+    var wrapped by remember { mutableStateOf(true) }
+    var copied by remember { mutableStateOf(false) }
+    LaunchedEffect(copied) {
+        if (copied) {
+            delay(1000)
+            copied = false
+        }
+    }
     SelectionContainer {
         Column(
             Modifier
@@ -378,9 +404,32 @@ private fun FencedCode(language: String?, literal: String, incomplete: Boolean) 
                 .background(TokyoNight.Bg)
                 .padding(horizontal = 14.dp, vertical = 12.dp),
         ) {
-            if (!language.isNullOrBlank()) {
-                Text(language, style = T.Mono.copy(color = TokyoNight.Ansi[8], fontFamily = MesloNerdFamily, fontSize = 11.sp))
-                Spacer(Modifier.height(8.dp))
+            Row(
+                Modifier.fillMaxWidth().padding(bottom = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    language?.takeIf { it.isNotBlank() } ?: "code",
+                    style = T.Mono.copy(color = TokyoNight.Ansi[8], fontFamily = MesloNerdFamily, fontSize = 11.sp),
+                    modifier = Modifier.weight(1f),
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(4.dp), verticalAlignment = Alignment.CenterVertically) {
+                    val wrapTip = if (wrapped) L.unwrapLines() else L.wrapLines()
+                    CodeHeaderIcon(
+                        icon = if (wrapped) D.nowrap else D.wrap,
+                        label = wrapTip,
+                        ariaLabel = L.wrapLines(),
+                    ) { wrapped = !wrapped }
+                    CodeHeaderIcon(
+                        icon = if (copied) D.check else D.copy,
+                        label = if (copied) L.copied() else L.copy(),
+                    ) {
+                        if (!copied) {
+                            clip.setText(AnnotatedString(literal))
+                            copied = true
+                        }
+                    }
+                }
             }
             Text(
                 highlighted,
@@ -390,12 +439,39 @@ private fun FencedCode(language: String?, literal: String, incomplete: Boolean) 
                     lineHeight = 20.sp,
                     color = TokyoNight.Fg,
                 ),
-                modifier = Modifier.horizontalScroll(rememberScrollState()),
+                modifier = if (wrapped) Modifier.fillMaxWidth() else Modifier.horizontalScroll(rememberScrollState()),
             )
             if (incomplete) {
                 Spacer(Modifier.height(4.dp))
                 Text("…", color = TokyoNight.Ansi[8], fontFamily = MesloNerdFamily, fontSize = 13.sp)
             }
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun CodeHeaderIcon(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    label: String,
+    ariaLabel: String = label,
+    onClick: () -> Unit,
+) {
+    val tipState = rememberTooltipState()
+    TooltipBox(
+        positionProvider = TooltipDefaults.rememberPlainTooltipPositionProvider(),
+        tooltip = { PlainTooltip { Text(label, fontSize = 12.sp) } },
+        state = tipState,
+    ) {
+        Box(
+            Modifier
+                .size(24.dp)
+                .clip(T.R8)
+                .clickable(onClick = onClick)
+                .semantics { contentDescription = ariaLabel },
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(icon, contentDescription = null, tint = TokyoNight.Ansi[8], modifier = Modifier.size(14.dp))
         }
     }
 }
