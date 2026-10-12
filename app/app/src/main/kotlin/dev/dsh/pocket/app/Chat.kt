@@ -35,7 +35,7 @@ import dev.dsh.pocket.protocol.Item
 import dev.dsh.pocket.protocol.ToolStatus
 import kotlinx.coroutines.delay
 
-enum class Sheet { None, Model, Permission, FullAccess, Preset, Plus, More, Panel, Team, Workspace, Goal, Feedback, Files, Jobs }
+enum class Sheet { None, Model, Permission, FullAccess, Preset, Plus, More, Panel, Team, Workspace, Goal, Feedback, Files, Jobs, Terminal }
 
 @Composable
 fun ChatRoot(onMenu: () -> Unit) {
@@ -95,7 +95,7 @@ fun ChatRoot(onMenu: () -> Unit) {
     val summary = sessions.firstOrNull { it.sessionId == sid }
     val dot = status[active]
     val workspaces = sessions.mapNotNull { it.cwd }.distinct()
-    val showPanel = "files.list" in ops || "jobs.list" in ops
+    val showPanel = "files.list" in ops || "jobs.list" in ops || "terminal.create" in ops
 
     Column(Modifier.fillMaxSize().background(Color.White).systemBarsPadding().imePadding()) {
         TopBar(summary?.title ?: chat?.title, sid != null, dot, chat?.running == true, onMenu, onMore = { sheet = Sheet.More },
@@ -146,13 +146,17 @@ fun ChatRoot(onMenu: () -> Unit) {
             onExport = { doExport() },
         )
         Sheet.More -> MoreSheet(chat, onDismiss = { sheet = Sheet.None }, onFeedback = { sheet = Sheet.Feedback }, onExport = { doExport() })
-        Sheet.Panel -> PanelSheet(summary?.cwd, onDismiss = { sheet = Sheet.None }, onFiles = { sheet = Sheet.Files }, onJobs = { sheet = Sheet.Jobs })
+        Sheet.Panel -> PanelSheet(
+            summary?.cwd, onDismiss = { sheet = Sheet.None },
+            onFiles = { sheet = Sheet.Files }, onTerminal = { sheet = Sheet.Terminal }, onJobs = { sheet = Sheet.Jobs },
+        )
         Sheet.Team -> TeamSheet(onDismiss = { sheet = Sheet.None })
         Sheet.Workspace -> WorkspaceSheet(workspaces, draftCwd ?: workspaces.firstOrNull(), onDismiss = { sheet = Sheet.None }) { draftCwd = it }
         Sheet.Goal -> GoalSheet(onDismiss = { sheet = Sheet.None })
         Sheet.Feedback -> FeedbackSheet(onDismiss = { sheet = Sheet.None })
         Sheet.Files -> sid?.let { FilesSheet(it, onDismiss = { sheet = Sheet.None }) } ?: run { sheet = Sheet.None }
         Sheet.Jobs -> sid?.let { JobsSheet(it, onDismiss = { sheet = Sheet.None }) } ?: run { sheet = Sheet.None }
+        Sheet.Terminal -> sid?.let { TerminalSheet(it, onDismiss = { sheet = Sheet.None }) } ?: run { sheet = Sheet.None }
         Sheet.None -> {}
     }
 }

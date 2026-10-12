@@ -122,6 +122,18 @@ class PocketClient(
         call("jobs.list", jsonOf("sessionId" to sessionId))
     suspend fun killJob(sessionId: String, jobId: String): JsonElement =
         call("jobs.kill", jsonOf("sessionId" to sessionId, "jobId" to jobId))
+    suspend fun listTerminals(sessionId: String): JsonElement =
+        call("terminal.list", jsonOf("sessionId" to sessionId))
+    suspend fun createTerminal(sessionId: String, cols: Int = 80, rows: Int = 24, id: String? = null): JsonElement =
+        call("terminal.create", jsonOf("sessionId" to sessionId, "cols" to cols, "rows" to rows, "id" to id))
+    suspend fun followTerminal(sessionId: String, id: String, attachmentId: String? = null): JsonElement =
+        call("terminal.follow", jsonOf("sessionId" to sessionId, "id" to id, "attachmentId" to attachmentId))
+    suspend fun writeTerminal(sessionId: String, id: String, attachmentId: String, data: String): JsonElement =
+        call("terminal.write", jsonOf("sessionId" to sessionId, "id" to id, "attachmentId" to attachmentId, "data" to data))
+    suspend fun resizeTerminal(sessionId: String, id: String, attachmentId: String, cols: Int, rows: Int): JsonElement =
+        call("terminal.resize", jsonOf("sessionId" to sessionId, "id" to id, "attachmentId" to attachmentId, "cols" to cols, "rows" to rows))
+    suspend fun closeTerminal(sessionId: String, id: String): JsonElement =
+        call("terminal.close", jsonOf("sessionId" to sessionId, "id" to id))
     suspend fun modelCatalog(): ModelCatalog = ModelCatalog.parse(call("models.catalog"))
     suspend fun selectModel(sessionId: String, provider: String, model: String, effort: String?) =
         call("models.select", jsonOf("sessionId" to sessionId, "provider" to provider, "model" to model, "reasoningEffort" to effort))

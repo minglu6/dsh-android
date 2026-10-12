@@ -43,11 +43,15 @@ object Pocket {
     val permission = MutableStateFlow<Map<String, String>>(emptyMap())
     val model = MutableStateFlow<Map<String, ModelChoice>>(emptyMap())
     val errors = MutableSharedFlow<String>(extraBufferCapacity = 8)
+    /** Live host PTY screen text for the open terminal sheet (ANSI stripped). */
+    val terminalScreen = MutableStateFlow("")
+    val terminalMeta = MutableStateFlow<TerminalMeta?>(null)
 
     private var client: PocketClient? = null
     private var connJob: Job? = null
     private var reducer = TranscriptReducer()
     private var subId: String? = null
+    private var terminalSubId: String? = null
     private val stray = HashMap<String, MutableList<JsonObject>>()
 
     fun init(ctx: Context) {
@@ -123,6 +127,32 @@ object Pocket {
             }
             "approval" -> { val a = Approval.parse(m); approvals.value = approvals.value.filter { it.approvalId != a.approvalId } + a }
             "approval.closed" -> approvals.value = approvals.value.filter { it.approvalId != m["approvalId"].str() }
+            "terminal" -> if (m["subId"].str() == terminalSubId) applyTerminalFrame(m["frame"])
+            "terminal.end", "terminal.error" -> if (m["subId"].str() == terminalSubId) {
+                m["error"]["message"].str()?.let { errors.tryEmit(it) }
+                terminalSubId = null
+            }
+        }
+    }
+
+    private fun applyTerminalFrame(frame: kotlinx.serialization.json.JsonElement?) {
+        when (frame["type"].str()) {
+            "snapshot" -> {
+                terminalScreen.value = stripAnsi(frame["screen"].str().orEmpty())
+                frame["info"]?.let { info ->
+                    terminalMeta.value = terminalMeta.value?.copy(
+                        title = info["title"].str() ?: terminalMeta.value?.title,
+                        state = info["state"].str() ?: terminalMeta.value?.state,
+                    )
+                }
+            }
+            "output" -> terminalScreen.value = (terminalScreen.value + stripAnsi(frame["data"].str().orEmpty())).takeLast(80_000)
+            "state" -> frame["info"]?.let { info ->
+                terminalMeta.value = terminalMeta.value?.copy(
+                    title = info["title"].str() ?: terminalMeta.value?.title,
+                    state = info["state"].str() ?: terminalMeta.value?.state,
+                )
+            }
         }
     }
 
@@ -245,6 +275,40 @@ object Pocket {
         runCatching { client?.killJob(sessionId, jobId) }.onFailure { errors.tryEmit(it.message ?: "终止失败") }
     }
 
+    /** Open (or reuse) a host PTY for [sessionId] and start following its screen. */
+    fun openTerminal(sessionId: String) = main.launch {
+        val c = client ?: run { errors.tryEmit("未连接"); return@launch }
+        if (!hasOp("terminal.create") || !hasOp("terminal.follow")) {
+            errors.tryEmit("桌面端未提供终端"); return@launch
+        }
+        runCatching {
+            terminalSubId?.let { old -> runCatching { c.unfollow(old) } }
+            terminalSubId = null
+            terminalScreen.value = ""
+            val existing = c.listTerminals(sessionId)["terminals"].arr().orEmpty()
+                .firstOrNull { it["state"].str() == "running" }
+            val info = existing ?: c.createTerminal(sessionId)["terminal"]
+            val id = info["id"].str() ?: error("no terminal id")
+            val follow = c.followTerminal(sessionId, id)
+            val attachmentId = follow["attachmentId"].str() ?: error("no attachmentId")
+            terminalSubId = follow["subId"].str()
+            terminalMeta.value = TerminalMeta(sessionId, id, attachmentId, info["title"].str(), info["state"].str())
+        }.onFailure { errors.tryEmit(it.message ?: "打开终端失败") }
+    }
+
+    fun writeTerminal(data: String) = main.launch {
+        val c = client ?: return@launch
+        val meta = terminalMeta.value ?: return@launch
+        runCatching { c.writeTerminal(meta.sessionId, meta.id, meta.attachmentId, data) }
+            .onFailure { errors.tryEmit(it.message ?: "终端输入失败") }
+    }
+
+    fun closeTerminalFollow() = main.launch {
+        val c = client ?: return@launch
+        terminalSubId?.let { runCatching { c.unfollow(it) } }
+        terminalSubId = null
+    }
+
     /** Pair with a desktop: exchanges the 6-digit code for a device token and saves a profile. */
     suspend fun pair(name: String, host: String, port: Int, code: String): Result<Profile> = withContext(Dispatchers.IO) {
         val c = PocketClient()
@@ -280,3 +344,13 @@ object Pocket {
         }
     }
 }
+
+data class TerminalMeta(val sessionId: String, val id: String, val attachmentId: String, val title: String? = null, val state: String? = null)
+
+/** Strip CSI / OSC sequences so a host PTY is readable without a full emulator. */
+internal fun stripAnsi(s: String): String =
+    s.replace(Regex("\\u001B\\][^\\u0007]*\\u0007"), "")
+        .replace(Regex("\\u001B\\[[0-9;?]*[ -/]*[@-~]"), "")
+        .replace(Regex("\\u001B."), "")
+        .replace("\r\n", "\n")
+        .replace('\r', '\n')

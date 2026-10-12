@@ -261,16 +261,71 @@ fun FeedbackSheet(onDismiss: () -> Unit) {
 private fun kfmt(n: Long) = if (n >= 1000) "${"%.1f".format(n / 1000.0)}k" else "$n"
 
 @Composable
-fun PanelSheet(cwd: String?, onDismiss: () -> Unit, onFiles: () -> Unit, onJobs: () -> Unit) {
+fun PanelSheet(cwd: String?, onDismiss: () -> Unit, onFiles: () -> Unit, onTerminal: () -> Unit, onJobs: () -> Unit) {
     val files = "files.list" in Pocket.ops.value
+    val terminal = "terminal.create" in Pocket.ops.value
     val jobs = "jobs.list" in Pocket.ops.value
     PocketSheet(onDismiss) {
         SheetTitle("右侧边栏")
         cwd?.let { Text(it, style = T.Mono.copy(color = T.Text3), modifier = Modifier.padding(horizontal = 22.dp, vertical = 4.dp)) }
         SectionLabel("开始")
         if (files) OptionRow("工作区文件", "浏览会话工作区的文件", D.folderOpen) { onFiles(); onDismiss() }
+        if (terminal) OptionRow("终端", "在会话工作区运行命令", D.code) { onTerminal(); onDismiss() }
         if (jobs) OptionRow("后台任务", "查看后台任务", D.clock) { onJobs(); onDismiss() }
-        if (!files && !jobs) Text("当前连接未提供面板", fontSize = 13.sp, color = T.Caption, modifier = Modifier.padding(horizontal = 22.dp, vertical = 10.dp))
+        if (!files && !terminal && !jobs) Text("当前连接未提供面板", fontSize = 13.sp, color = T.Caption, modifier = Modifier.padding(horizontal = 22.dp, vertical = 10.dp))
+    }
+}
+
+@Composable
+fun TerminalSheet(sessionId: String, onDismiss: () -> Unit) {
+    val screen by Pocket.terminalScreen.collectAsState()
+    val meta by Pocket.terminalMeta.collectAsState()
+    var input by remember { mutableStateOf("") }
+    val list = rememberScrollState()
+    LaunchedEffect(sessionId) { Pocket.openTerminal(sessionId) }
+    LaunchedEffect(screen) { list.animateScrollTo(list.maxValue) }
+    PocketSheet({
+        Pocket.closeTerminalFollow()
+        onDismiss()
+    }) {
+        Row(Modifier.padding(horizontal = 22.dp), verticalAlignment = Alignment.CenterVertically) {
+            SheetTitle(meta?.title ?: "终端")
+            Spacer(Modifier.weight(1f))
+            Text(meta?.state ?: "…", fontSize = 12.sp, color = T.Text3)
+        }
+        Text(
+            screen.ifBlank { "连接主机 shell…" },
+            style = T.Mono.copy(lineHeight = 18.sp, fontSize = 12.sp),
+            modifier = Modifier
+                .padding(horizontal = 22.dp)
+                .fillMaxWidth()
+                .heightIn(min = 180.dp, max = 360.dp)
+                .clip(T.R12)
+                .background(T.Fill2)
+                .verticalScroll(list)
+                .padding(12.dp),
+        )
+        Row(
+            Modifier.padding(horizontal = 22.dp, vertical = 12.dp).fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            OutlinedTextField(
+                input, { input = it },
+                singleLine = true,
+                placeholder = { Text("输入命令") },
+                shape = T.R12,
+                modifier = Modifier.weight(1f),
+            )
+            Button({
+                val line = input
+                if (line.isNotEmpty()) {
+                    Pocket.writeTerminal("$line\r")
+                    input = ""
+                }
+            }, enabled = meta != null && input.isNotBlank(), shape = T.R12, colors = PrimaryColors(),
+                modifier = Modifier.height(52.dp)) { Text("发送") }
+        }
     }
 }
 

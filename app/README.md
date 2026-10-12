@@ -29,4 +29,4 @@ cd ../plugin && node test/integration/kotlin-live.mjs
 
 ## 功能对齐
 
-见 [docs/feature-parity.md](../docs/feature-parity.md)。桌面专属入口（终端 / 浏览器 / 插件管理 / 自动化 / 打开配置文件 / 设置里的模型凭据）已隐藏；可通过插件 RPC 落地的能力（轨迹、指令、导出、工作区文件、后台任务、通用设置等）已接通。智能体团队列出 `parentSessionId` 子会话。
+见 [docs/feature-parity.md](../docs/feature-parity.md)。仅隐藏需「本地应用/编辑器/内嵌浏览器」的入口（浏览器面板、插件管理、自动化、打开配置文件、设置里的模型凭据）；主机 PTY 终端经插件接通，可在手机上远程使用。轨迹、指令、导出、工作区文件、后台任务、通用设置等已接通。智能体团队列出 `parentSessionId` 子会话。

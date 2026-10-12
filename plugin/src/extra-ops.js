@@ -1,3 +1,5 @@
+import { randomUUID } from 'node:crypto'
+
 const str = (v) => typeof v === 'string' && v.length > 0
 const bad = (m) => Object.assign(new Error(m), { code: 'bad-request' })
 
@@ -7,6 +9,14 @@ function sessionOf(agents, sessionId) {
   const agent = agents.get(sessionId)
   if (!agent) throw Object.assign(new Error('session has no live agent'), { code: 'session/not-found' })
   return agent.session
+}
+
+/** Live Agent for terminal / command ops that need the Gateway Agent handle. */
+function agentOf(agents, sessionId) {
+  if (!str(sessionId)) throw bad('sessionId required')
+  const agent = agents.get(sessionId)
+  if (!agent) throw Object.assign(new Error('session has no live agent'), { code: 'session/not-found' })
+  return agent
 }
 
 /** permissions.* over the in-process permissionPresets service. */
@@ -67,6 +77,86 @@ export function filesOps(workspaceFiles, sessions, sandboxPolicy) {
       if (!str(a.path)) throw bad('path required')
       const scope = await scopeOf(a.sessionId)
       return workspaceFiles.read(scope, a.path, a.range, signal)
+    },
+  }
+}
+
+/**
+ * Host shell on the desktop machine (`terminalController`). Remote PTY is useful
+ * on the phone; only local-app/editor launchers stay hidden.
+ *
+ * `terminal.follow` starts a background pump and returns `{subId, attachmentId}`
+ * immediately; frames arrive as `{ev:"terminal", subId, frame}`. Cancel with
+ * the existing `unfollow {subId}` (shared abort map on the WS client).
+ */
+export function terminalOps(terminalController, agents) {
+  return {
+    'terminal.list': (a) => {
+      if (!str(a.sessionId)) throw bad('sessionId required')
+      return { terminals: terminalController.list(a.sessionId) ?? [] }
+    },
+    'terminal.create': async (a, signal) => {
+      const agent = agentOf(agents, a.sessionId)
+      const id = str(a.id) ? a.id : randomUUID().replace(/-/g, '').slice(0, 16)
+      const cols = Number.isSafeInteger(a.cols) ? a.cols : 80
+      const rows = Number.isSafeInteger(a.rows) ? a.rows : 24
+      const info = await terminalController.create(agent, {
+        id, cols, rows,
+        ...(str(a.shellPath) ? { shellPath: a.shellPath } : {}),
+      }, signal)
+      return { terminal: info }
+    },
+    'terminal.write': async (a) => {
+      const agent = agentOf(agents, a.sessionId)
+      if (!str(a.id) || !str(a.attachmentId) || typeof a.data !== 'string') {
+        throw bad('sessionId, id, attachmentId, data required')
+      }
+      await terminalController.write(agent, a.id, a.attachmentId, a.data)
+      return { accepted: true }
+    },
+    'terminal.resize': async (a) => {
+      const agent = agentOf(agents, a.sessionId)
+      if (!str(a.id) || !str(a.attachmentId)) throw bad('sessionId, id, attachmentId required')
+      const cols = Number.isSafeInteger(a.cols) ? a.cols : 80
+      const rows = Number.isSafeInteger(a.rows) ? a.rows : 24
+      await terminalController.resize(agent, a.id, a.attachmentId, cols, rows)
+      return { accepted: true }
+    },
+    'terminal.close': async (a) => {
+      const agent = agentOf(agents, a.sessionId)
+      if (!str(a.id)) throw bad('id required')
+      await terminalController.close(agent, a.id)
+      return { closed: true }
+    },
+    'terminal.follow': async (a, _signal, client) => {
+      const agent = agentOf(agents, a.sessionId)
+      if (!str(a.id)) throw bad('id required')
+      if (!client?.subs || typeof client.push !== 'function') {
+        throw Object.assign(new Error('terminal.follow requires a live pocket client'), { code: 'internal' })
+      }
+      const attachmentId = str(a.attachmentId) ? a.attachmentId : randomUUID().replace(/-/g, '').slice(0, 16)
+      const subId = `t${client.nextSub++}`
+      const ac = new AbortController()
+      client.subs.set(subId, ac)
+      void (async () => {
+        try {
+          for await (const frame of terminalController.follow(agent, a.id, attachmentId, ac.signal)) {
+            if (ac.signal.aborted) break
+            client.push({ ev: 'terminal', subId, frame })
+          }
+          if (!ac.signal.aborted) client.push({ ev: 'terminal.end', subId })
+        } catch (error) {
+          if (!ac.signal.aborted) {
+            client.push({
+              ev: 'terminal.error', subId,
+              error: { code: error?.code ?? 'internal', message: String(error?.message ?? error) },
+            })
+          }
+        } finally {
+          client.subs.delete(subId)
+        }
+      })()
+      return { subId, attachmentId }
     },
   }
 }

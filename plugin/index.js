@@ -8,7 +8,7 @@ import { createPairing } from './src/pairing.js'
 import { createPocketServer } from './src/server.js'
 import { loadOrCreateToken } from './src/token.js'
 import { zipSync, strToU8 } from 'fflate'
-import { permissionOps, presetOps, commandOps, filesOps, jobsOps, exportOps } from './src/extra-ops.js'
+import { permissionOps, presetOps, commandOps, filesOps, jobsOps, exportOps, terminalOps } from './src/extra-ops.js'
 import { registerPairRoute } from './src/web-route.js'
 import { createManageApi, pairingUri } from './src/manage.js'
 
@@ -59,6 +59,9 @@ export function apply(ctx, config = {}) {
     c.effect(() => server.registerOps(filesOps(c.workspaceFiles, c.sessions, c.get?.('sandboxPolicy'))))
   })
   ctx.inject(['jobController'], (c) => { c.effect(() => server.registerOps(jobsOps(c.jobController))) })
+  ctx.inject(['terminalController', 'agents'], (c) => {
+    c.effect(() => server.registerOps(terminalOps(c.terminalController, c.agents)))
+  })
   server.registerOps(exportOps(ctx.sessionController, { zipSync, strToU8 }))
   ctx.inject(['webServer'], (webCtx) => registerPairRoute(webCtx, manage))
 

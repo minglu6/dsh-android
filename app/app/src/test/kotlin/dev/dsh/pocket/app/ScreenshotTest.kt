@@ -107,4 +107,10 @@ class ScreenshotTest {
         }
     }
     @Test fun s15_generalWired() = show("15-general-settings") { GeneralSettingsScreen {} }
+    @Test fun s16_panelWithTerminal() {
+        Pocket.ops.value = setOf("files.list", "terminal.create", "jobs.list")
+        showWithDialogs("16-panel-terminal") {
+            PanelSheet("/tmp/ws", {}, {}, {}, {})
+        }
+    }
 }
