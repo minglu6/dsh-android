@@ -31,6 +31,7 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import androidx.compose.ui.window.SecureFlagPolicy
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.google.mlkit.vision.barcode.BarcodeScannerOptions
@@ -98,7 +99,15 @@ fun CameraPermissionSheet(onDismiss: () -> Unit, onOpenSettings: () -> Unit) {
 @Composable
 private fun QrScannerDialog(onResult: (PairingLink) -> Unit, onDismiss: () -> Unit) {
     BackHandler(onBack = onDismiss)
-    Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false)) {
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(
+            usePlatformDefaultWidth = false,
+            decorFitsSystemWindows = false,
+            // Pairing QR must remain screenshot-able; do not set FLAG_SECURE.
+            securePolicy = SecureFlagPolicy.SecureOff,
+        ),
+    ) {
         Box(Modifier.fillMaxSize().background(Color.Black)) {
             CameraPreview(onBarcode = { text ->
                 PairingLink.parse(text)?.let(onResult)

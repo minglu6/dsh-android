@@ -4,6 +4,7 @@ import android.Manifest
 import android.content.Intent
 import android.os.Build
 import android.os.Bundle
+import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
@@ -14,6 +15,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalView
 import dev.dsh.pocket.protocol.PairingLink
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
@@ -27,13 +29,38 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        allowScreenshotsAndRecording()
         enableEdgeToEdge()
         handle(intent)
-        setContent { PocketTheme { Root(deepLink) } }
+        setContent {
+            // Re-assert on composition: camera / OEM code must not leave FLAG_SECURE on.
+            AllowScreenshotsEffect()
+            PocketTheme { Root(deepLink) }
+        }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        allowScreenshotsAndRecording()
     }
 
     override fun onNewIntent(intent: Intent) { super.onNewIntent(intent); handle(intent) }
     private fun handle(i: Intent?) { i?.dataString?.let(PairingLink::parse)?.let { deepLink.value = it } }
+
+    /** Screenshots and screen recording must always work (pairing codes, terminal, tokens included). */
+    private fun allowScreenshotsAndRecording() {
+        window.clearFlags(WindowManager.LayoutParams.FLAG_SECURE)
+        if (Build.VERSION.SDK_INT >= 33) setRecentsScreenshotEnabled(true)
+    }
+}
+
+/** Clears FLAG_SECURE on the host activity window if anything re-set it. */
+@Composable
+fun AllowScreenshotsEffect() {
+    val view = LocalView.current
+    SideEffect {
+        (view.context as? android.app.Activity)?.window?.clearFlags(WindowManager.LayoutParams.FLAG_SECURE)
+    }
 }
 
 @Composable
