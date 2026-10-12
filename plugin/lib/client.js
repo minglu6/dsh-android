@@ -227,7 +227,7 @@ const styles = {
 	dialogMask: {
 		position: "fixed",
 		inset: 0,
-		zIndex: 120,
+		zIndex: 1100,
 		display: "flex",
 		alignItems: "center",
 		justifyContent: "center",

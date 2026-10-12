@@ -71,7 +71,8 @@ export const styles = {
   dialogMask: {
     position: 'fixed' as const,
     inset: 0,
-    zIndex: 120,
+    // Above dsh Modal / settings panel (z-index 1000); same band as Toast / Menu portal
+    zIndex: 1100,
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
