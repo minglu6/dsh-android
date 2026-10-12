@@ -17,12 +17,14 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.rotate
 import androidx.compose.foundation.layout.offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontFamily
@@ -374,8 +376,8 @@ private fun Composer(placeholder: String, running: Boolean, perm: String, model:
     Column(Modifier.padding(horizontal = 14.dp, vertical = 4.dp).fillMaxWidth().clip(T.R20).border(1.dp, T.Border, T.R20).padding(start = 16.dp, end = 10.dp, top = 14.dp, bottom = 10.dp)) {
         Box {
             if (text.isEmpty()) Text(placeholder, fontSize = 16.sp, color = T.Caption, maxLines = 2, overflow = TextOverflow.Ellipsis)
-            BasicTextField(text, { text = it }, textStyle = MaterialTheme.typography.bodyLarge, cursorBrush = SolidColor(T.Accent),
-                modifier = Modifier.fillMaxWidth().heightIn(max = 160.dp))
+            BasicTextField(text, { text = it }, textStyle = MaterialTheme.typography.bodyLarge.copy(color = T.Ink), cursorBrush = SolidColor(T.Accent),
+                modifier = Modifier.fillMaxWidth().heightIn(max = 160.dp).testTag("composerInput"))
         }
         Spacer(Modifier.height(12.dp))
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -399,12 +401,19 @@ private fun Composer(placeholder: String, running: Boolean, perm: String, model:
                 }
             }
             Spacer(Modifier.width(8.dp))
-            // Desktop InputBar `.primary`: 34px circle, button-info-fill (#4176E6 / #7AAAFF),
-            // white 16px glyph; stop uses the same fill (not brand-primary/ink). Disabled = 0.4 opacity.
+            // Desktop InputBar `.primary`: 34px circle, button-info-fill (#4176E6), white 16px glyph;
+            // stop uses the same fill. Disabled = 0.4 opacity via *color* alpha — not Modifier.alpha,
+            // which creates a graphics layer that some OEM GPUs (e.g. ColorOS) fail to composite
+            // after focus/IME, leaving a tappable but invisible control.
+            // Chrome stays light (Color.White); always use T.Accent so dark Material primary cannot wash out.
             val canSend = enabled && text.isNotBlank()
-            val primaryFill = MaterialTheme.colorScheme.primary
+            val primaryFill = T.Accent.copy(alpha = if (canSend || running) 1f else 0.4f)
             if (running && text.isBlank()) {
-                Box(Modifier.size(34.dp).clip(CircleShape).background(primaryFill).clickable(onClick = onStop), contentAlignment = Alignment.Center) {
+                Box(
+                    Modifier.size(34.dp).clip(CircleShape).background(primaryFill).clickable(onClick = onStop)
+                        .semantics { contentDescription = "终止" },
+                    contentAlignment = Alignment.Center,
+                ) {
                     // svg rect x=3 y=3 w=10 h=10 rx=3 in 16×16 viewBox
                     Box(Modifier.size(10.dp).clip(RoundedCornerShape(3.dp)).background(Color.White))
                 }
@@ -414,7 +423,6 @@ private fun Composer(placeholder: String, running: Boolean, perm: String, model:
                         .size(34.dp)
                         .clip(CircleShape)
                         .background(primaryFill)
-                        .alpha(if (canSend) 1f else 0.4f)
                         .clickable(enabled = canSend) { onSend(text.trim()); text = "" },
                     contentAlignment = Alignment.Center,
                 ) {

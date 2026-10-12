@@ -187,9 +187,13 @@ class TranscriptReducer {
         when (f["type"].str()) {
             "start" -> { live = LiveAttempt(f["attemptId"].str() ?: "live"); running = true }
             "chunk" -> { val l = live ?: LiveAttempt(f["attemptId"].str() ?: "live").also { live = it }; l.chunk(f["chunk"], f["time"].long()) }
-            "end" -> if (f["outcome"]["kind"].str() == "abandoned") live = null
+            // Cancel / abort ends the attempt with abandoned; clear running even if turn/end is delayed.
+            "end" -> if (f["outcome"]["kind"].str() == "abandoned") { live = null; running = false }
         }
     }
+
+    /** Host session status reported idle (e.g. after `cancel`); keep reducer in sync with chat UI. */
+    fun markIdle() { running = false; live = null }
 
     companion object {
         /** Reasoning duration from compacted stream records (time0 + Σdt). */
