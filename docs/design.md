@@ -189,7 +189,7 @@ interface Transport { suspend fun connect(): Channel; val kind: Kind }   // Chan
 - **M0 (2–3 d) Plugin skeleton**: npm package plus patch. Loopback WS listener. hello with a static token from config. Ops: `sessions.list`, `sessions.create`, `prompt`, `cancel`, `follow`. Verify in the dsh 0.2.1-alpha.2 web profile with a node test client.
 - **M1 (3–4 d) Approvals plus models plus pairing**: approval broker, model ops, device store, pairing window (code plus QR).
 - **M2 (1 wk) Android MVP**: design system, connections, drawer, chat with reducer, tool sheet, approval card plus notification, foreground service.
-- **M3 (1 wk) iroh** ✅: Pure iroh (no Tailscale). `plugin/iroh` pocket-host (ALPN `dsh-pocket/1`). Pairing: tether-style `nodeId#code` / QR `dshpocket://pair?n=&c=`. Dial iroh only (loopback WS for tests). CI bundles `libpocket_iroh.so`; prebuilt `pocket-host` for linux/darwin-arm64.
+- **M3 (1 wk) iroh** ✅: Pure iroh (no Tailscale). `plugin/iroh` pocket-host (ALPN `dsh-pocket/1`). Pairing: tether-style `nodeId#code` / QR `dshpocket://pair?n=&c=`. Dial iroh only (loopback WS for tests). CI bundles `libpocket_iroh.so`; prebuilt `pocket-host` for linux/darwin-arm64. Frame line cap `MAX_LINE` = 1 MiB (host + Android FFI); `sessions.list` is slimmed to `SessionSummary` fields.
 - **M4 (1 wk) Local mode**: port tether's runtime build script and local.rs. Bundle the plugin with `mode: local`. Lifecycle management.
 - **M5 Polish**: server-side transcript reducer, history paging, user-questions, image prompts, reconnect hardening, per-dsh-version CI matrix.
 

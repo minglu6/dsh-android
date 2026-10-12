@@ -9,8 +9,11 @@ use anyhow::{bail, Context as _, Result};
 use iroh::endpoint::{presets, Connection, RecvStream, SendStream};
 use iroh::{Endpoint, SecretKey};
 pub const ALPN: &[u8] = b"dsh-pocket/1";
-pub const MAX_LINE: usize = 64 * 1024;
-pub const MAX_UNPAIRED_LINE: usize = 64 * 1024;
+/// Per-line cap for pocket JSON frames over iroh (host + Android FFI share this).
+/// 64 KiB was too small for a real `sessions.list` (~47 KiB @ 33 sessions with full
+/// projections); 1 MiB leaves headroom for catalog + history pages.
+pub const MAX_LINE: usize = 1024 * 1024;
+pub const MAX_UNPAIRED_LINE: usize = 1024 * 1024;
 
 /// Termux / Android JNI DNS can panic before ndk-context init; pin Google DNS.
 #[cfg(target_os = "android")]
@@ -160,6 +163,12 @@ mod tests {
     #[test]
     fn alpn_is_pocket() {
         assert_eq!(ALPN, b"dsh-pocket/1");
+    }
+
+    #[test]
+    fn max_line_is_at_least_1_mib() {
+        assert!(MAX_LINE >= 1024 * 1024, "MAX_LINE={MAX_LINE}");
+        assert!(MAX_UNPAIRED_LINE >= 1024 * 1024, "MAX_UNPAIRED_LINE={MAX_UNPAIRED_LINE}");
     }
 
     #[test]

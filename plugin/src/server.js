@@ -18,11 +18,41 @@ class OpError extends Error {
 const need = (cond, msg) => { if (!cond) throw new OpError('bad-request', msg) }
 const str = (v) => typeof v === 'string' && v.length > 0
 
+/**
+ * Keep only fields Android `SessionSummary.parse` reads.
+ * Full dsh list items carry tokenUsage / turnOutline / contextBreakdown and can
+ * push a multi-session `sessions.list` reply near the iroh MAX_LINE cap.
+ */
+export function slimSessionSummary(item) {
+  if (!item || typeof item !== 'object') return item
+  const title = item.projections?.values?.title
+  const out = {
+    sessionId: item.sessionId,
+    updatedAt: item.updatedAt,
+    running: item.running,
+    blank: item.blank,
+    cwd: item.cwd,
+    parentSessionId: item.parentSessionId,
+  }
+  if (title !== undefined && title !== null) {
+    out.projections = { values: { title } }
+  }
+  return out
+}
+
+export function slimSessionsList(result) {
+  if (!result || typeof result !== 'object') return result
+  if (!Array.isArray(result.items)) return result
+  return { ...result, items: result.items.map(slimSessionSummary) }
+}
+
 /** Build the op table over an in-process sessionController. */
 export function createOps(sc, { timeZone } = {}) {
   const tz = timeZone ?? Intl.DateTimeFormat().resolvedOptions().timeZone
   return {
-    'sessions.list': (a, signal) => sc.list({ ...(str(a.cursor) ? { cursor: a.cursor } : {}) }, signal),
+    'sessions.list': async (a, signal) => slimSessionsList(
+      await sc.list({ ...(str(a.cursor) ? { cursor: a.cursor } : {}) }, signal),
+    ),
     'sessions.create': (a) => sc.create({
       ...(str(a.cwd) ? { cwd: a.cwd } : {}),
       ...(str(a.workspaceId) ? { workspaceId: a.workspaceId } : {}),
@@ -380,7 +410,7 @@ export function createPocketServer(opts) {
 
 function sessionEventPayload(kind, args) {
   switch (kind) {
-    case 'added': return { kind, summary: args[0] }
+    case 'added': return { kind, summary: slimSessionSummary(args[0]) }
     case 'removed': return { kind, sessionId: args[0] }
     case 'status': return { kind, sessionId: args[0], running: args[1] }
     case 'activity': return { kind, sessionId: args[0], updatedAt: args[1] }
