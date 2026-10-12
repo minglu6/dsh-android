@@ -24,7 +24,10 @@ export async function bootDsh(t, { plugins, patch }) {
     const on = (d) => {
       log += d
       const m = log.match(/dsh web: (http:\/\/\S+\?token=\S+)/)
-      if (m && log.includes('[pocket] listening')) { clearTimeout(timer); ok(m[1]) }
+      // Ready once dsh web URL is up and pocket has bound its loopback WS (or legacy "listening" log).
+      if (m && (log.includes('[pocket] local ws://') || log.includes('[pocket] listening'))) {
+        clearTimeout(timer); ok(m[1])
+      }
     }
     proc.stdout.on('data', on); proc.stderr.on('data', on)
     proc.on('exit', (c) => fail(new Error(`dsh exited ${c}:\n${log}`)))
