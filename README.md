@@ -12,7 +12,7 @@
 
 ## 安装桥接插件（电脑端）
 
-需要 dsh 0.2.1-alpha.2，Node ≥ 22.19。
+需要 dsh 0.2.1-alpha.2、Node ≥ 22.19；`dsh plugin` 依赖 PATH 上的 pnpm。
 
 ```bash
 git clone https://github.com/minglu6/dsh-android && cd dsh-android/plugin && npm install

@@ -21,6 +21,6 @@ jobs:
       - uses: actions/setup-node@v4
         with: { node-version: 22 }
       - run: npm install
-      - run: npm install -g @deepseek-ai/dsh@0.2.1-alpha.2
+      - run: npm install -g pnpm@10 @deepseek-ai/dsh@0.2.1-alpha.2
       - run: dsh --version
       - run: npm run test:integration
