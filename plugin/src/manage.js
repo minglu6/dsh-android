@@ -1,52 +1,42 @@
 import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { isTailscaleHost } from './advertise-host.js'
 import { normalizeTransport } from './transport-pref.js'
 
 const PKG = JSON.parse(readFileSync(join(dirname(fileURLToPath(import.meta.url)), '..', 'package.json'), 'utf8'))
 
 /**
- * Phone QR / deep link for the selected transport only (never both).
+ * Phone QR / deep link — host:port only.
  *
- * - iroh: `dshpocket://pair?n=<nodeId>&c=<code>`
- * - Tailscale: `dshpocket://pair?h=<host:port>&c=<code>`
+ * `dshpocket://pair?h=<host:port>&c=<code>`
  *
- * @param {{ code?: string, nodeId?: string, host?: string, port?: number, transport?: string }} opts
+ * @param {{ code?: string, host?: string, port?: number, transport?: string }} opts
  */
-export function pairingUri({ code, nodeId, host, port, transport }) {
+export function pairingUri({ code, host, port, transport }) {
   if (!code) return undefined
-  const mode = normalizeTransport(transport) ?? (nodeId ? 'iroh' : (host ? 'tailscale' : null))
-  if (mode === 'iroh') {
-    if (!nodeId) return undefined
-    return `dshpocket://pair?n=${encodeURIComponent(nodeId)}&c=${encodeURIComponent(code)}`
-  }
-  if (mode === 'tailscale') {
-    if (!host || !port) return undefined
-    return `dshpocket://pair?h=${encodeURIComponent(`${host}:${port}`)}&c=${encodeURIComponent(code)}`
-  }
-  return undefined
+  const mode = normalizeTransport(transport) ?? (host ? 'tailscale' : null)
+  if (mode !== 'tailscale') return undefined
+  if (!host || !port) return undefined
+  return `dshpocket://pair?h=${encodeURIComponent(`${host}:${port}`)}&c=${encodeURIComponent(code)}`
 }
 
 /**
- * Pasteable one-liner for the selected transport.
- * - iroh: `<nodeId>#<code>`
- * - Tailscale: `ws://host:port` is not used; return the same URI (or host:port + code via fields).
+ * Pasteable one-liner — same URI shape as the QR payload.
  *
- * @param {{ code?: string, nodeId?: string, host?: string, port?: number, transport?: string }} opts
+ * @param {{ code?: string, host?: string, port?: number, transport?: string }} opts
  */
-export function pairingString({ code, nodeId, host, port, transport }) {
-  if (!code) return undefined
-  const mode = normalizeTransport(transport) ?? (nodeId ? 'iroh' : (host ? 'tailscale' : null))
-  if (mode === 'iroh') {
-    if (!nodeId) return undefined
-    return `${nodeId}#${code}`
-  }
-  if (mode === 'tailscale') {
-    if (!host || !port) return undefined
-    // Same shape as QR payload so phone paste/scan share one parser path.
-    return `dshpocket://pair?h=${encodeURIComponent(`${host}:${port}`)}&c=${encodeURIComponent(code)}`
-  }
-  return undefined
+export function pairingString({ code, host, port, transport }) {
+  return pairingUri({ code, host, port, transport })
+}
+
+/**
+ * Report how phones reach this host:port — Tailscale CGNAT/MagicDNS vs LAN/other.
+ * @param {string} host
+ * @returns {'tailscale'|'lan'}
+ */
+export function connectionTypeForHost(host) {
+  return isTailscaleHost(host) ? 'tailscale' : 'lan'
 }
 
 /**
@@ -58,15 +48,13 @@ export function pairingString({ code, nodeId, host, port, transport }) {
  *   pairing: any,
  *   server: any,
  *   openPairing: Function,
- *   getNodeId?: () => string|null|undefined,
- *   getTransport: () => 'iroh'|'tailscale',
- *   setTransport?: (mode: string) => 'iroh'|'tailscale',
+ *   getTransport: () => 'tailscale',
+ *   setTransport?: (mode: string) => 'tailscale',
  * }} opts
  */
 export function createManageApi({
-  host, port, devices, pairing, server, openPairing, getNodeId, getTransport, setTransport,
+  host, port, devices, pairing, server, openPairing, getTransport, setTransport,
 }) {
-  const nodeId = () => (typeof getNodeId === 'function' ? getNodeId() : null) || null
   const transport = () => getTransport()
   const withOnline = () => {
     const online = server.onlineDeviceIds()
@@ -76,33 +64,6 @@ export function createManageApi({
     const code = status?.code
     if (!code) return status?.open ? status : { open: false }
     const mode = transport()
-    const n = nodeId()
-    if (mode === 'iroh') {
-      if (!n) {
-        return {
-          open: true,
-          ...status,
-          code,
-          transport: mode,
-          nodeId: undefined,
-          uri: undefined,
-          pairingString: undefined,
-          irohReady: false,
-          error: 'iroh-not-ready',
-        }
-      }
-      return {
-        open: true,
-        ...status,
-        code,
-        transport: mode,
-        nodeId: n,
-        uri: pairingUri({ code, nodeId: n, transport: mode }),
-        pairingString: pairingString({ code, nodeId: n, transport: mode }),
-        irohReady: true,
-      }
-    }
-    // Tailscale mode — advertise host:port only; iroh not required.
     return {
       open: true,
       ...status,
@@ -110,18 +71,12 @@ export function createManageApi({
       transport: mode,
       host,
       port,
-      nodeId: n || undefined,
       uri: pairingUri({ code, host, port, transport: mode }),
       pairingString: pairingString({ code, host, port, transport: mode }),
-      irohReady: Boolean(n),
     }
   }
   return {
     openPairing: () => {
-      const mode = transport()
-      if (mode === 'iroh' && !nodeId()) {
-        throw new Error('iroh sidecar is not ready — cannot open remote pairing')
-      }
       openPairing()
       return enrichPairing(pairing.status())
     },
@@ -139,21 +94,16 @@ export function createManageApi({
       const listening = addr !== null
       const listenHost = listening && typeof addr === 'object' ? addr.address : host
       const listenPort = listening && typeof addr === 'object' ? addr.port : port
-      const n = nodeId()
       const mode = transport()
-      const remoteReady = mode === 'iroh' ? Boolean(n) : listening
       return {
-        running: remoteReady || listening,
+        running: listening,
         version: PKG.version,
         plugin: PKG.name,
         transport: mode,
-        host: listenHost,
+        host,
         port: listenPort,
-        nodeId: n,
-        irohReady: Boolean(n),
-        /** `direct` | `relay` | null — from pocket-host PeerPath reports. */
-        connectionType: typeof server.connectionType === 'function' ? server.connectionType() : null,
-        irohConnections: typeof server.irohConnections === 'function' ? server.irohConnections() : [],
+        /** Phone path: `tailscale` | `lan` from the advertised pairing host. */
+        connectionType: connectionTypeForHost(host),
         listen: listening
           ? [{ host: listenHost, port: listenPort, address: typeof addr === 'string' ? addr : `${listenHost}:${listenPort}` }]
           : [],

@@ -3,13 +3,11 @@ export type PairingStatus = {
   code?: string
   expiresInSec?: number
   attemptsLeft?: number
-  transport?: 'iroh' | 'tailscale'
+  transport?: 'tailscale'
   host?: string
   port?: number
-  nodeId?: string
   uri?: string
   pairingString?: string
-  irohReady?: boolean
   error?: string
 }
 
@@ -25,12 +23,10 @@ export type PocketStatus = {
   running: boolean
   version: string
   plugin: string
-  /** Selected remote path: `iroh` | `tailscale` (no auto-fallback). */
-  transport?: 'iroh' | 'tailscale'
+  /** Phone path is always host:port WebSocket. */
+  transport?: 'tailscale'
   host: string
   port: number
-  nodeId?: string | null
-  irohReady?: boolean
   listen: Array<{ host: string, port: number, address: string }>
   pairing: PairingStatus
   devices: DeviceRow[]
@@ -63,15 +59,8 @@ export function createPocketApi(base = '') {
   const get = async <T>(path: string, init?: RequestInit) => parse<T>(await fetch(url(path), init))
   return {
     status: () => get<PocketStatus>('/pocket/status'),
-    setTransport: (transport: 'iroh' | 'tailscale') => get<PocketStatus>(
-      '/pocket/status', {
-        method: 'PATCH',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ transport }),
-      },
-    ),
     pairStatus: () => get<PairingStatus>('/pocket/pair'),
-    openPair: () => get<PairingStatus & { nodeId?: string, uri?: string, pairingString?: string }>(
+    openPair: () => get<PairingStatus & { uri?: string, pairingString?: string }>(
       '/pocket/pair', { method: 'POST' },
     ),
     closePair: () => get<{ open: false }>('/pocket/pair', { method: 'DELETE' }),

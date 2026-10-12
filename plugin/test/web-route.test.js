@@ -51,15 +51,10 @@ test('management routes: status, pair, rename, revoke, Origin fence', async (t) 
   t.after(() => server.close())
   const host = '127.0.0.1'
   const port = Number(String(addr).split(':').pop())
-  const NODE = 'abcdefghijklmnopqrstuvwxyz012345'
-  const openPairing = () => {
-    const w = pairing.open()
-    return { ...w, nodeId: NODE }
-  }
+  const openPairing = () => pairing.open()
   const manage = createManageApi({
     host, port, devices, pairing, server, openPairing,
-    getNodeId: () => NODE,
-    getTransport: () => 'iroh',
+    getTransport: () => 'tailscale',
   })
 
   // Minimal fake webServer.register that mounts onto a real http server
@@ -90,12 +85,14 @@ test('management routes: status, pair, rename, revoke, Origin fence', async (t) 
   assert.equal(st.running, true)
   assert.equal(st.version, '0.1.0')
   assert.ok(Array.isArray(st.listen))
-  assert.equal(st.connectionType, null)
-  assert.deepEqual(st.irohConnections, [])
-  server.noteIrohPath('peer-status', 'relay')
+  // Advertise host is loopback in this test → LAN (not Tailscale CGNAT).
+  assert.equal(st.connectionType, 'lan')
+  assert.equal(st.host, '127.0.0.1')
+  // Legacy iroh path reports must not affect /pocket/status connectionType.
+  server.noteIrohPath?.('peer-status', 'relay')
   const st2 = await (await fetch(`${base}/pocket/status`)).json()
-  assert.equal(st2.connectionType, 'relay')
-  assert.equal(st2.irohConnections[0].kind, 'relay')
+  assert.equal(st2.connectionType, 'lan')
+
 
   const cross = await fetch(`${base}/pocket/status`, { headers: { origin: 'http://evil.example' } })
   assert.equal(cross.status, 403)
@@ -103,8 +100,9 @@ test('management routes: status, pair, rename, revoke, Origin fence', async (t) 
   const pr = await (await fetch(`${base}/pocket/pair`, { method: 'POST' })).json()
   assert.match(pr.code, /^\d{6}$/)
   assert.ok(pr.uri?.includes(pr.code))
-  assert.ok(pr.uri?.includes('n='))
-  assert.equal(pr.pairingString, `${NODE}#${pr.code}`)
+  assert.ok(pr.uri?.includes('h='))
+  assert.ok(!pr.uri?.includes('n='))
+  assert.equal(pr.pairingString, pr.uri)
   const get = await (await fetch(`${base}/pocket/pair`)).json()
   assert.equal(get.open, true)
   assert.equal(get.code, pr.code)

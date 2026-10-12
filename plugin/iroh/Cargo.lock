@@ -2210,17 +2210,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "pocket-ffi"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "iroh",
- "jni 0.21.1",
- "pocket-iroh",
- "tokio",
-]
-
-[[package]]
 name = "pocket-host"
 version = "0.1.0"
 dependencies = [

@@ -8,7 +8,6 @@ import { join } from 'node:path'
 import { createDeviceStore } from '../src/devices.js'
 import { createPairing } from '../src/pairing.js'
 import { createPocketServer } from '../src/server.js'
-import { pairingString, pairingUri } from '../src/manage.js'
 import { resolveHostBinary, startIrohSidecar } from '../src/iroh.js'
 
 const OWNER = 'owner-token-iroh-pair'
@@ -52,8 +51,9 @@ test('iroh host↔phone-sim pairs over ALPN without shared network / WS', {
   ])
 
   const window = pairing.open()
-  const line = pairingString({ code: window.code, nodeId: endpointId })
-  const uri = pairingUri({ code: window.code, nodeId: endpointId })
+  // Legacy iroh paste/QR shapes (phone path no longer emits these).
+  const line = `${endpointId}#${window.code}`
+  const uri = `dshpocket://pair?n=${encodeURIComponent(endpointId)}&c=${window.code}`
   assert.match(line, /#\d{6}$/)
   assert.equal(uri, `dshpocket://pair?n=${encodeURIComponent(endpointId)}&c=${window.code}`)
 

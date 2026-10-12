@@ -24,8 +24,7 @@ data class HelloResult(val raw: JsonObject, val route: Route? = null) {
 
 /**
  * Client for the dsh-plugin-pocket protocol v1 over any [FrameTransport]
- * (WebSocket text frames or iroh newline-JSON). Auth tokens are identical
- * across transports.
+ * (WebSocket text frames). Auth tokens are identical on LAN and Tailscale.
  */
 class PocketClient(
     private val scope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.IO),
@@ -42,14 +41,14 @@ class PocketClient(
     /** Server pushes (`ev` frames). */
     val events: SharedFlow<JsonObject> = _events
     @Volatile var closeReason: String? = null; private set
-    /** Live route from the active transport (iroh may upgrade relay→direct). */
+    /** Live route from the active transport (Tailscale / LAN / local). */
     val route: Route? get() = transport?.route
 
     /** Connect over loopback WebSocket (dev/tests only). */
     suspend fun connect(url: String, auth: Auth, timeoutMs: Long = 10_000): HelloResult =
         connect(listOf(WsTransport.factory(url)), auth, timeoutMs)
 
-    /** Connect using an ordered list of transports (iroh first; optional loopback WS). */
+    /** Connect using an ordered list of transports (host:port WebSocket). */
     suspend fun connect(factories: List<TransportFactory>, auth: Auth, timeoutMs: Long = 10_000): HelloResult =
         withTimeout(timeoutMs) {
             close()

@@ -1,6 +1,5 @@
 package dev.dsh.pocket.app
 
-import dev.dsh.pocket.protocol.RemoteTransport
 import org.junit.Assert.*
 import org.junit.Test
 
@@ -12,19 +11,21 @@ class FormatTest {
         assertNull(primaryArg("x", ""))
     }
 
-    @Test fun profileIrohAndTailscaleModes() {
-        val ok = Profile("a", "desk", nodeId = "abcdefghijklmnopqrst")
-        assertEquals("iroh", ok.kind)
-        assertEquals(false, ok.needsRepair)
-        assertEquals(RemoteTransport.Iroh, ok.remote)
-
+    @Test fun profileHostPortModes() {
         val ts = Profile("b", "old", host = "100.106.128.87", port = 7690)
         assertEquals(false, ts.needsRepair)
         assertEquals("Tailscale", ts.kind)
-        assertEquals(RemoteTransport.Tailscale, ts.remote)
         assertEquals("100.106.128.87:7690", ts.subtitle)
 
-        val broken = Profile("c", "empty")
+        val lan = Profile("c", "lan", host = "192.168.1.10", port = 7690)
+        assertEquals(false, lan.needsRepair)
+        assertEquals("LAN", lan.kind)
+
+        val legacyIroh = Profile("a", "desk", nodeId = "abcdefghijklmnopqrst")
+        assertEquals(true, legacyIroh.needsRepair)
+        assertEquals("需重新配对", legacyIroh.kind)
+
+        val broken = Profile("d", "empty")
         assertEquals(true, broken.needsRepair)
     }
 }

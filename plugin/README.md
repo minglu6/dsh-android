@@ -10,47 +10,31 @@ dsh plugin --profile web add /path/to/dsh-android/plugin # 从源码安装
 dsh web
 ```
 
-启动后日志会出现 `[pocket] remote transport: iroh|tailscale`。第一次运行时会生成 token，保存在 `$DSH_HOME/pocket/token`，文件权限 0600。
+启动后日志会出现 `[pocket] remote transport: tailscale (advertise host:port, bind …)`。第一次运行时会生成 token，保存在 `$DSH_HOME/pocket/token`，文件权限 0600。
 
 ## 配置（`$DSH_HOME/profiles/web/cordis.patch.yml`）
 
 ```yaml
 - id: dsh-pocket
   config:
-    # transport: iroh          # 或 tailscale；不写则默认 iroh，UI 选择会写入 $DSH_HOME/pocket/transport
-    # host: 127.0.0.1          # WS 监听；Tailscale 模式请改成 Tailscale IP / MagicDNS
+    # transport: tailscale     # 手机路径仅 host:port WS
+    # host:                    # 不写则自动选 Tailscale IP，否则局域网 IP；绑定默认 0.0.0.0
     # port: 7690
     # token: 固定 token；不填则使用自动生成的那个
-    # iroh: true               # 默认启用 sidecar（iroh 模式需要）
+    # iroh: true               # 可选：启动遗留 pocket-host sidecar（不参与手机配对）
     # hostBinary: /path/to/pocket-host
 ```
 
-## 传输选择（iroh **或** Tailscale，互不兜底）
+## 传输（Tailscale / 局域网）
 
-用户在「手机连接」里显式选择一种远程路径。**不会**在 Tailscale 失败后自动改走 iroh，也不会在 iroh 失败后自动改走 Tailscale。
+手机只走 **host:port WebSocket**。插件默认：
 
-| 模式 | 桌面侧 | 手机配对 | 说明 |
-|---|---|---|---|
-| **iroh**（默认） | `pocket-host` sidecar；本机 `ws://127.0.0.1:7690` 仅开发/测试 | `<nodeId>#<code>` / `dshpocket://pair?n=&c=` | 打洞失败时走东京自建 relay `https://iroh.9643275.xyz.`（仍属 iroh 路径内） |
-| **Tailscale** | WS 监听 `config.host:port`（设为 Tailscale IP） | `dshpocket://pair?h=<host:port>&c=<code>` | 手机与电脑需在同一 tailnet；不要求 iroh |
+1. 若配置了 `host`，用该地址做配对广告（并按该地址绑定）。
+2. 否则优先检测本机 Tailscale IP（`100.64.0.0/10` / `.ts.net`），没有则用局域网 IPv4；WS 绑定 `0.0.0.0`。
 
-上次选择会持久化到 `$DSH_HOME/pocket/transport`。若 patch 里写了 `transport:`，则锁定该模式（UI 无法覆盖）。
+配对 URI：`dshpocket://pair?h=<host:port>&c=<6位码>`（不再使用 `n=` / `nodeId#code`）。
 
-### iroh 模式
-
-桌面侧跑 Rust sidecar（`plugin/iroh`，ALPN `dsh-pocket/1`）。桌面可用环境变量 `DSH_IROH_RELAY_URLS`（逗号分隔）覆盖中继；Android 与 sidecar 共用同一默认。
-
-```bash
-cd plugin && npm run build:iroh
-```
-
-也可不预编译：启动时插件会尝试下载 CI 预编译包或自动 `cargo build`。
-
-### Tailscale 模式
-
-1. 电脑与手机都加入同一 Tailscale tailnet。
-2. 在 patch 里把 `host` 设为电脑的 Tailscale IP（或 MagicDNS），例如 `100.x.y.z`。
-3. 在「手机连接」选择 **Tailscale**，开始配对；手机扫码或粘贴 `h=` URI。
+电脑与手机需在同一 Tailscale tailnet，或同一局域网。
 
 ## 管理 UI（桌面 / `dsh web`）
 
@@ -64,9 +48,8 @@ cd plugin && npm run build:iroh
 该弹层由 `@deepseek-ai/dsh-client-ui-settings-account` 的 `AccountMenu` 占用 `settings.launcher`（`kind: 'single'`）。菜单项是写死的数组（`settings` → `contact` → `signout`），**没有**类似 `settings.launcher.item` 的 list slot。替换整个 `settings.launcher` 会盖掉官方 AccountMenu，不算合法扩展。要在「设置」与「意见反馈」之间加一行，需要上游 dsh 新增扩展点。本插件因此**不**往侧栏 footer / 账号菜单乱挂入口。
 
 面板功能：
-- 传输选择：iroh / Tailscale（互斥，持久化）
-- 连接器状态（当前模式、监听地址、iroh 节点 id 前缀、插件版本）
-- 打开配对窗口：6 位码 + 倒计时 + QR + 可复制配对串（内容随模式变化）
+- 连接器状态（配对广告地址、插件版本）
+- 打开配对窗口：6 位码 + 倒计时 + QR + 可复制配对串（`h=` URI）
 - 已配对设备：名称、最近活跃、是否在线；可重命名 / 撤销
 
 文案走 `ctx.locale.register('pocket', { zh, en })`，跟随 dsh 的语言设置。样式只用 `--dsw-alias-*` 主题 token。
@@ -98,52 +81,8 @@ dsh 发起 `approval/request` 时，如果有已登录的设备在线，插件�
 
 ## 断点续订
 
-`follow {sessionId, afterSeq}` 返回的第一帧是 `{"type":"resume", afterSeq, cursor, records:[seq>afterSeq…], projections…}`。如果快照窗口没覆盖到 afterSeq，插件会用 `page` 往前补齐，最多补 10 页；补不齐就退回发完整的 `snapshot`。
+`sessions.follow` 支持 `fromSeq`。手机断线重连后带上次 cursor 续订；服务端按 seq 补帧。
 
-## 协议速览（v1）
+## 遗留 iroh sidecar
 
-- 收发的都是 WebSocket 文本帧，内容为 JSON。
-- 请求格式：`{"id":1,"op":"…","args":{…}}`。成功返回 `{"id":1,"ok":true,"result":…}`，失败返回 `{"id":1,"ok":false,"error":{"code","message"}}`。
-- 连上后第一帧必须是 `hello {proto:1, token}`。其他帧或 token 错误都会以 4401 关闭连接；10 秒内没发 hello 也会被断开。
-- 支持的操作：
-
-| 操作 | 说明 |
-|---|---|
-| `sessions.list` | 会话列表 |
-| `sessions.create` | 新建会话（可传 `cwd`） |
-| `sessions.rename` | 重命名会话 |
-| `prompt` | 发送消息，`mode` 为 `queue` 或 `steer`；`text` 和 `images` 至少给一个 |
-| `queue.update` | 调整排队中的消息 |
-| `cancel` | 取消当前回复 |
-| `history.page` | 翻页拉取历史 |
-| `models.catalog` | 模型列表 |
-| `models.select` | 切换模型 |
-| `follow` | 订阅会话，返回 `subId` |
-| `unfollow` | 取消订阅 |
-| `permissions.catalog` / `permissions.get` / `permissions.set` | 访问模式（`read-only` / `workspace-write` / `danger-full-access`），走 dsh 的 `permissionPresets` 服务 |
-| `presets.list` | Agent 预设列表（standard / ptc / minimal / cordis） |
-| `commands.execute` | 斜杠指令（`/compact`、`/plan`、`/goal …`、`/feedback …`），需 `commands` + `agents` |
-| `session.export` | 将会话历史打成 ZIP（JSONL），手机端分享/保存 |
-| `files.list` / `files.read` | 工作区文件浏览（`workspaceFiles`） |
-| `jobs.list` / `jobs.kill` | 后台任务列表与终止（`jobController`） |
-| `terminal.list` / `create` / `follow` / `write` / `resize` / `close` | 桌面主机上的真实 PTY（`terminalController`）；`follow` 推送 `{ev:"terminal",subId,frame}`，用 `unfollow` 取消 |
-
-`permissions.*`、`presets.list`、`commands.execute`、`files.*`、`jobs.*`、`terminal.*` 依赖可选服务，服务不在时不出现在 hello 的 `ops` 里。`session.export` 始终注册。
-
-- 服务端推送：
-
-| 推送 | 说明 |
-|---|---|
-| `{"ev":"follow",subId,frame}` | 原样转发 dsh 的 SessionFollowFrame |
-| `follow.end` / `follow.error` | 订阅结束 / 出错 |
-| `{"ev":"session",kind,…}` | 会话增删和状态变化 |
-| `{"ev":"ping"}` | 每 20 秒一次；60 秒收不到客户端任何消息就断开 |
-
-## 开发
-
-```bash
-npm install
-npm run build:client       # 生成 lib/client.js
-npm run lint && npm test
-npm run test:integration   # 需要 PATH 上有 dsh 0.2.1-alpha.2（Node ≥22.19）
-```
+`plugin/iroh`（`pocket-host`）仍可在 `config.iroh: true` 时启动，供桌面侧实验；**不**再参与手机配对，Android APK 也不再打包 `libpocket_iroh.so` / JNI。

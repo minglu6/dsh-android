@@ -14,8 +14,6 @@ enum class Route {
     WsTailscale,
     /** Remote WebSocket that is not clearly Tailscale (LAN / other). */
     WsLan,
-    IrohDirect,
-    IrohRelay,
     ;
 
     /** Short label for the connections chip (no emoji). */
@@ -23,16 +21,12 @@ enum class Route {
         WsLocal -> "local"
         WsTailscale -> "Tailscale"
         WsLan -> "LAN"
-        IrohDirect -> "iroh"
-        IrohRelay -> "iroh relay"
     }
-
-    val isRelay: Boolean get() = this == IrohRelay
 }
 
 /**
- * One bidirectional channel of pocket JSON text frames (WS text frames or
- * iroh newline-delimited lines). Auth (hello/pair tokens) is identical on every transport.
+ * One bidirectional channel of pocket JSON text frames (WS text frames).
+ * Auth (hello/pair tokens) is identical on every path.
  */
 interface FrameTransport {
     val route: Route
@@ -50,8 +44,6 @@ fun interface TransportFactory {
 
 /**
  * Try factories in order; return the first that opens.
- * Callers must pass factories for **one** [RemoteTransport] only — never
- * Tailscale WS and iroh together (no cross-mode fallback).
  */
 suspend fun dialInOrder(factories: List<TransportFactory>): FrameTransport {
     require(factories.isNotEmpty()) { "no transports" }
@@ -71,11 +63,16 @@ suspend fun dialInOrder(factories: List<TransportFactory>): FrameTransport {
 fun isLoopbackHost(host: String): Boolean =
     host == "127.0.0.1" || host == "localhost" || host == "::1" || host.equals("0:0:0:0:0:0:0:1", ignoreCase = true)
 
+fun isTailscaleHost(host: String): Boolean {
+    if (host.endsWith(".ts.net")) return true
+    val p = host.split('.').mapNotNull { it.toIntOrNull() }
+    return p.size == 4 && p[0] == 100 && p[1] in 64..127
+}
+
 fun classifyWsRoute(host: String): Route {
     if (isLoopbackHost(host)) return Route.WsLocal
-    if (host.endsWith(".ts.net")) return Route.WsTailscale
-    val p = host.split('.').mapNotNull { it.toIntOrNull() }
-    return if (p.size == 4 && p[0] == 100 && p[1] in 64..127) Route.WsTailscale else Route.WsLan
+    if (isTailscaleHost(host)) return Route.WsTailscale
+    return Route.WsLan
 }
 
 /** OkHttp WebSocket frame transport. */
@@ -145,31 +142,9 @@ class WsTransport private constructor(
     }
 }
 
-/**
- * Build factories for **exactly one** remote mode.
- *
- * - [RemoteTransport.Iroh]: iroh only (optional loopback WS for tests). Never remote Tailscale WS.
- * - [RemoteTransport.Tailscale]: remote WS only. Never iroh.
- */
-fun transportPlan(
-    remote: RemoteTransport,
-    nodeId: String? = null,
-    host: String? = null,
-    port: Int = 0,
-    irohFactory: TransportFactory? = null,
-    loopbackWsUrl: String? = null,
-): List<TransportFactory> = when (remote) {
-    RemoteTransport.Iroh -> {
-        val list = mutableListOf<TransportFactory>()
-        if (!nodeId.isNullOrBlank() && irohFactory != null) list += irohFactory
-        if (!loopbackWsUrl.isNullOrBlank()) list += WsTransport.factory(loopbackWsUrl)
-        list
-    }
-    RemoteTransport.Tailscale -> {
-        if (host.isNullOrBlank() || port !in 1..65535) emptyList()
-        else {
-            val url = "ws://${if (':' in host) "[$host]" else host}:$port"
-            listOf(WsTransport.factory(url, host))
-        }
-    }
+/** Build a single host:port WebSocket factory (Tailscale or LAN). */
+fun transportPlan(host: String?, port: Int): List<TransportFactory> {
+    if (host.isNullOrBlank() || port !in 1..65535) return emptyList()
+    val url = "ws://${if (':' in host) "[$host]" else host}:$port"
+    return listOf(WsTransport.factory(url, host))
 }

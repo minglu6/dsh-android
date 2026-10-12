@@ -13,6 +13,7 @@ import { registerPairRoute } from './src/web-route.js'
 import { createManageApi, pairingUri, pairingString } from './src/manage.js'
 import { startIrohSidecar } from './src/iroh.js'
 import { loadTransport, saveTransport, normalizeTransport } from './src/transport-pref.js'
+import { pickAdvertiseHost, pickBindHost } from './src/advertise-host.js'
 
 export const name = 'dsh-plugin-pocket'
 // webServer is optional: Cordis `inject` entries are all required, so the
@@ -35,16 +36,15 @@ export function apply(ctx, config = {}) {
   const pairing = createPairing()
   const listeners = new Set()
 
-  // Config `transport` forces the mode; otherwise last UI choice in dataDir/transport.
+  // Phone path is host:port WS only (Tailscale or LAN). Config may lock transport=tailscale.
   let remoteTransport = loadTransport(dataDir, config.transport)
   const configLocksTransport = Boolean(normalizeTransport(config.transport))
 
-  // Bind address from config. Tailscale mode: set host to your Tailscale IP / MagicDNS.
-  // iroh mode: leave at 127.0.0.1 (phones use iroh; WS is local/dev only).
-  const host = config.host ?? '127.0.0.1'
   const port = config.port ?? 7690
+  const advertiseHost = pickAdvertiseHost(config.host)
+  const bindHost = pickBindHost(config.host)
   const server = createPocketServer({
-    sessionController: ctx.sessionController, token, host, port, devices, pairing,
+    sessionController: ctx.sessionController, token, host: bindHost, port, devices, pairing,
     info: { plugin: PKG.name, version: PKG.version },
     onSessionEvent: (fn) => { listeners.add(fn); return () => listeners.delete(fn) },
   })
@@ -54,10 +54,8 @@ export function apply(ctx, config = {}) {
   // prepend: run outside the web UI forwarder so we can race it.
   ctx.on('approval/request', createApprovalHook(server, { log }), { prepend: true })
 
-  /** @type {{ endpointId: Promise<string>, close: () => Promise<void> } | null} */
+  /** Optional legacy desktop iroh sidecar — off unless config.iroh === true. Not on the phone path. */
   let iroh = null
-  /** @type {string | null} */
-  let nodeId = null
 
   const getTransport = () => remoteTransport
   const setTransportMode = (mode) => {
@@ -71,22 +69,14 @@ export function apply(ctx, config = {}) {
 
   const openPairing = () => {
     const mode = remoteTransport
-    if (mode === 'iroh' && !nodeId) {
-      throw new Error('iroh sidecar is not ready — cannot open remote pairing')
-    }
     const w = pairing.open()
-    const uri = mode === 'iroh'
-      ? pairingUri({ code: w.code, nodeId, transport: mode })
-      : pairingUri({ code: w.code, host, port, transport: mode })
-    const line = mode === 'iroh'
-      ? pairingString({ code: w.code, nodeId, transport: mode })
-      : pairingString({ code: w.code, host, port, transport: mode })
+    const uri = pairingUri({ code: w.code, host: advertiseHost, port, transport: mode })
+    const line = pairingString({ code: w.code, host: advertiseHost, port, transport: mode })
     log(`pairing (${mode}, ${Math.round(w.expiresInSec / 60)} min): ${line}`)
-    return { ...w, transport: mode, nodeId, host, port, uri, pairingString: line }
+    return { ...w, transport: mode, host: advertiseHost, port, uri, pairingString: line }
   }
   const manage = createManageApi({
-    host, port, devices, pairing, server, openPairing,
-    getNodeId: () => nodeId,
+    host: advertiseHost, port, devices, pairing, server, openPairing,
     getTransport,
     setTransport: setTransportMode,
   })
@@ -105,10 +95,10 @@ export function apply(ctx, config = {}) {
 
   ctx.effect(() => {
     const start = async () => {
-      log(`remote transport: ${remoteTransport}`)
+      log(`remote transport: ${remoteTransport} (advertise ${advertiseHost}:${port}, bind ${bindHost})`)
 
-      // Sidecar unless disabled — needed for iroh mode; kept warm so UI can switch modes.
-      if (config.iroh !== false) {
+      // Legacy opt-in only — phone APK no longer ships iroh; keep server code dormant by default.
+      if (config.iroh === true) {
         iroh = await startIrohSidecar({
           server,
           dataDir: join(dataDir, 'iroh'),
@@ -117,32 +107,24 @@ export function apply(ctx, config = {}) {
         })
         if (iroh) {
           try {
-            nodeId = await Promise.race([
+            await Promise.race([
               iroh.endpointId,
               new Promise((_, rej) => setTimeout(() => rej(new Error('iroh ready timeout')), 60_000)),
             ])
+            log('legacy iroh sidecar ready (not used for phone pairing)')
           } catch (e) {
             console.error('[pocket] iroh sidecar did not become ready:', e.message ?? e)
             await iroh.close()
             iroh = null
-            nodeId = null
           }
         }
       }
 
       const addr = await server.listen()
-      if (remoteTransport === 'tailscale') {
-        log(`ws listening on ws://${addr} (Tailscale mode — set config.host to your Tailscale IP if needed)`)
-      } else {
-        log(`local ws://${addr} (dev/loopback; phones use iroh in iroh mode)`)
-      }
+      log(`ws listening on ws://${addr} (pairing advertises ${advertiseHost}:${port})`)
       log(created ? `new owner token written to ${path}: ${token}` : `owner token: ${path}`)
-      if (remoteTransport === 'iroh' && !nodeId) {
-        log('iroh not ready — remote phone pairing unavailable until pocket-host starts')
-      }
 
-      const canAutoPair = remoteTransport === 'iroh' ? Boolean(nodeId) : true
-      if (canAutoPair && (config.pair || devices.list().length === 0)) {
+      if (config.pair || devices.list().length === 0) {
         try { openPairing() } catch (e) { console.error('[pocket]', e.message ?? e) }
       }
     }

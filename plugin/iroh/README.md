@@ -1,33 +1,18 @@
-# pocket-iroh
+# pocket-iroh (legacy desktop sidecar)
 
-Desktop sidecar + Android JNI client for dsh-plugin-pocket over iroh (ALPN `dsh-pocket/1`).
+Optional desktop sidecar for dsh-plugin-pocket over iroh (ALPN `dsh-pocket/1`).
 
-Modeled on [dsh-tether](https://github.com/zexadev/dsh-tether): N0 discovery + **custom Tokyo relay** (`https://iroh.9643275.xyz.`, FQDN trailing-dot per iroh 1.3), 8s path upgrade (`direct` if IP, else `relay`). Pairing string is `nodeId#code` (QR: `dshpocket://pair?n=&c=`). The sidecar is a dumb pipe of pocket JSON frames — same `hello` / `pair` token auth as before.
+**Phone path no longer uses this.** Enable only with plugin `config.iroh: true`. Android does not ship `libpocket_iroh.so` / JNI.
 
-**Relay:** both `pocket-host` and Android `pocket-ffi` bake in the Tokyo relay via shared `endpoint_builder()`. Desktop can override with `DSH_IROH_RELAY_URLS` (comma-separated HTTPS URLs).
-
-**Line limit:** `MAX_LINE` / `MAX_UNPAIRED_LINE` are **1 MiB** in `pocket-iroh` (shared by `pocket-host` and Android `pocket-ffi`). The plugin also slims `sessions.list` to the fields Android `SessionSummary` needs so a large desktop session roster stays well under the cap.
-
-## Crates
+Modeled on [dsh-tether](https://github.com/zexadev/dsh-tether): N0 discovery + custom Tokyo relay (`https://iroh.9643275.xyz.`). Pairing string was historically `nodeId#code`; the current phone happy path is `dshpocket://pair?h=host:port&c=`.
 
 | Crate | Role |
 |---|---|
 | `pocket-iroh` | ALPN, secret key, line IO, path probe |
 | `pocket-host` | stdio JSON ↔ plugin; accept iroh peers |
-| `pocket-ffi` | `libpocket_iroh.so` JNI for Android (`IrohNative`) |
-
-## Desktop sidecar (one-line install)
 
 ```bash
 cd plugin && npm run build:iroh
 ```
 
-Needs [rustup](https://rustup.rs). On `dsh web` start the plugin also resolves → downloads CI prebuilt → `cargo build` if needed. Without a sidecar, remote phone pairing is unavailable (no Tailscale fallback).
-
-## Android JNI
-
-CI builds `arm64-v8a` + `x86_64` with NDK + cargo-ndk into the debug APK. Locally:
-
-```bash
-cd plugin && npm run build:iroh:android
-```
+**Line limit:** `MAX_LINE` / `MAX_UNPAIRED_LINE` are **1 MiB** in `pocket-iroh`.

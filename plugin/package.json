@@ -40,7 +40,6 @@
   "scripts": {
     "build:client": "tsdown",
     "build:iroh": "cargo build --release -p pocket-host --manifest-path iroh/Cargo.toml",
-    "build:iroh:android": "bash scripts/build-android-jni.sh",
     "pretest": "npm run build:client",
     "lint": "eslint .",
     "test": "node --test --test-timeout=60000 test/*.test.js",
