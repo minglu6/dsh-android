@@ -28,6 +28,8 @@ object T {
     val WarnBorder = Color(0xFFF7AD31)
     val WarnTint = Color(0xFFFEF5E7)
     val WarnText = Color(0xFFB7791F)
+    /** Sheet backdrop: ink at 28%, matches the mockups (not M3's flat 32% black). */
+    val Scrim = Color(0x470F1115)
     val Ok = Color(0xFF22C55E)
     val Err = Color(0xFFEC1313)
     val R4 = RoundedCornerShape(4.dp); val R8 = RoundedCornerShape(8.dp); val R12 = RoundedCornerShape(12.dp)

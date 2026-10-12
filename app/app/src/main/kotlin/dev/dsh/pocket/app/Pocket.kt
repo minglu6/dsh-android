@@ -205,6 +205,7 @@ object Pocket {
             Result.failure(Exception(when {
                 e.code.contains("expired") -> "配对码已过期"
                 e.code.startsWith("pair/") -> "配对码错误或未开启配对"
+                e.code == "transport" -> "无法连接 $host:$port，请确认 Tailscale 已连接且电脑端 dsh 正在运行"
                 else -> e.message
             }))
         } catch (e: Exception) { Result.failure(Exception("无法连接 $host:$port")) } finally { c.close() }

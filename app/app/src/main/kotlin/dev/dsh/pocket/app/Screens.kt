@@ -137,7 +137,16 @@ fun ConnectionsScreen(pairLink: PairingLink?, onPairLinkConsumed: () -> Unit, ca
     Column(Modifier.fillMaxSize().background(Color.White).systemBarsPadding()) {
         Header("连接", if (canBack) onBack else null)
         if (profiles.isEmpty()) {
-            Box(Modifier.weight(1f)) { EmptyState(Icons.Outlined.Devices, "连接到桌面端 dsh", "在电脑上运行 dsh-pocket pair 获取配对码") }
+            Card {
+                Row(Modifier.fillMaxWidth().padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Box(Modifier.size(40.dp).clip(CircleShape).background(T.Fill2), contentAlignment = Alignment.Center) { Icon(Icons.Outlined.Devices, null, tint = T.Text3, modifier = Modifier.size(20.dp)) }
+                    Spacer(Modifier.width(14.dp))
+                    Column {
+                        Text("连接到桌面端 dsh", fontSize = 16.sp, color = T.Ink)
+                        Text("在电脑上运行 dsh-pocket pair 获取配对码", fontSize = 13.sp, color = T.Text3, modifier = Modifier.padding(top = 2.dp))
+                    }
+                }
+            }
         } else {
             Card {
                 profiles.forEachIndexed { i, p ->
@@ -149,8 +158,6 @@ fun ConnectionsScreen(pairLink: PairingLink?, onPairLinkConsumed: () -> Unit, ca
                     }) } }
                 }
             }
-            // Overlay status/addresses under titles (kept separate for clarity of Row2).
-            Spacer(Modifier.weight(1f))
         }
         Row(Modifier.padding(18.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
             OutlinedButton({ pairing = null; showPair = true }, Modifier.weight(1f).height(52.dp), shape = T.R12, border = BorderStroke(1.dp, T.Border),
@@ -158,6 +165,7 @@ fun ConnectionsScreen(pairLink: PairingLink?, onPairLinkConsumed: () -> Unit, ca
             OutlinedButton({ showScan = true }, Modifier.weight(1f).height(52.dp), shape = T.R12, border = BorderStroke(1.dp, T.Border),
                 colors = ButtonDefaults.outlinedButtonColors(contentColor = T.Ink)) { Text("扫码配对", fontSize = 15.sp) }
         }
+        Spacer(Modifier.weight(1f))
     }
     if (showPair) PairSheet(pairing, onDismiss = { showPair = false }) { p -> showPair = false; Pocket.connect(p.id); onConnected() }
     if (showScan) PocketSheet({ showScan = false }) {
@@ -218,8 +226,8 @@ fun PairSheet(link: PairingLink?, onDismiss: () -> Unit, onPaired: (Profile) -> 
                 busy = false
             }
         }, Modifier.padding(horizontal = 18.dp, vertical = 16.dp).fillMaxWidth().height(52.dp), enabled = ready, shape = T.R12,
-            colors = ButtonDefaults.buttonColors(containerColor = T.Ink, disabledContainerColor = T.Caption, disabledContentColor = Color.White)) {
-            if (busy) CircularProgressIndicator(Modifier.size(18.dp), color = Color.White, strokeWidth = 2.dp) else Text("配对", fontSize = 16.sp)
+            colors = PrimaryColors()) {
+            if (busy) CircularProgressIndicator(Modifier.size(18.dp), color = Color.White, strokeWidth = 2.dp) else Text("配对", fontSize = 16.sp, color = Color.White)
         }
     }
     LaunchedEffect(Unit) { if (link != null) runCatching { focus.requestFocus() } }

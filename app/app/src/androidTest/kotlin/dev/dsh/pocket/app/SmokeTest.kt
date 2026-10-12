@@ -17,5 +17,7 @@ class SmokeTest {
         rule.onNodeWithText("输入配对码").performClick()
         rule.waitUntil(10_000) { rule.onAllNodesWithText("100.x.y.z:7690").fetchSemanticsNodes().isNotEmpty() }
         rule.onAllNodesWithText("配对").fetchSemanticsNodes().let { assert(it.isNotEmpty()) }
+        // primary button carries its label
+        rule.onNode(hasText("配对") and hasClickAction()).assertExists()
     }
 }

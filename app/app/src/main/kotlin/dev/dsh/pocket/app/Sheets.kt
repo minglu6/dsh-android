@@ -31,6 +31,7 @@ import dev.dsh.pocket.protocol.ToolStatus
 @Composable
 fun PocketSheet(onDismiss: () -> Unit, content: @Composable ColumnScope.() -> Unit) {
     ModalBottomSheet(onDismiss, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true), shape = T.Sheet, containerColor = Color.White,
+        scrimColor = T.Scrim, tonalElevation = 0.dp,
         dragHandle = { Box(Modifier.padding(top = 10.dp, bottom = 14.dp).size(40.dp, 4.dp).clip(CircleShape).background(T.Border)) }) {
         Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(bottom = 24.dp), content = content)
     }
@@ -138,7 +139,7 @@ fun FullAccessSheet(onDismiss: () -> Unit, onConfirm: () -> Unit) {
         }
         Row(Modifier.padding(horizontal = 22.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
             OutlinedButton(onDismiss, Modifier.weight(1f).height(50.dp), shape = T.R12, border = BorderStroke(1.dp, T.Border), colors = ButtonDefaults.outlinedButtonColors(contentColor = T.Ink)) { Text("取消") }
-            Button(onConfirm, Modifier.weight(1f).height(50.dp), enabled = ack, shape = T.R12, colors = ButtonDefaults.buttonColors(containerColor = T.Ink)) { Text("启用完全权限") }
+            Button(onConfirm, Modifier.weight(1f).height(50.dp), enabled = ack, shape = T.R12, colors = PrimaryColors()) { Text("启用完全权限") }
         }
     }
 }
@@ -187,7 +188,7 @@ fun MoreSheet(chat: ChatState?, onDismiss: () -> Unit) {
             SheetTitle("重命名会话")
             OutlinedTextField(t, { t = it }, singleLine = true, shape = T.R12, modifier = Modifier.padding(horizontal = 22.dp).fillMaxWidth())
             Button({ Pocket.rename(chat.sessionId, t.trim()); onDismiss() }, Modifier.padding(22.dp).fillMaxWidth().height(50.dp), enabled = t.isNotBlank(), shape = T.R12,
-                colors = ButtonDefaults.buttonColors(containerColor = T.Ink)) { Text("保存") }
+                colors = PrimaryColors()) { Text("保存") }
             return@PocketSheet
         }
         if (chat != null) {
@@ -232,3 +233,7 @@ fun TeamSheet(onDismiss: () -> Unit) {
         children.forEach { s -> OptionRow(s.title ?: "子智能体", if (s.running) "运行中" else "空闲", Icons.Outlined.SmartToy) { Pocket.openSession(s.sessionId); onDismiss() } }
     }
 }
+
+/** Black primary button; label/progress always white (also under OEM force-dark). */
+@Composable
+fun PrimaryColors() = ButtonDefaults.buttonColors(containerColor = T.Ink, contentColor = Color.White, disabledContainerColor = T.Caption, disabledContentColor = Color.White)
