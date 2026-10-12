@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <!-- Space lets launchers wrap to two lines (DeepSeek / Harness) instead of ellipsizing mid-word. -->
-    <string name="app_name">DeepSeek Harness</string>
+    <!-- Short launcher label: full "DeepSeek Harness" is truncated on many home screens. -->
+    <string name="app_name">dsh</string>
     <string name="camera_permission_title">需要相机权限</string>
     <string name="camera_permission_body">扫码配对需要使用相机读取桌面端显示的配对二维码。请允许相机权限后重试。</string>
     <string name="camera_permission_settings">去设置</string>

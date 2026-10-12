@@ -267,7 +267,7 @@ fun SettingsScreen(onBack: () -> Unit, onGeneral: () -> Unit, onConnections: () 
             Row2("Agent 预设", icon = D.agentPreset, value = "标准模式", divider = false, onClick = { sheet = true })
         }
         Card { Row2("打开配置文件", icon = D.plan, enabled = false, divider = false, onClick = {}) }
-        Text("DeepSeek Harness", fontSize = 13.sp, color = T.Text3, modifier = Modifier.padding(start = 22.dp, top = 12.dp, bottom = 2.dp))
+        Text("dsh-android", fontSize = 13.sp, color = T.Text3, modifier = Modifier.padding(start = 22.dp, top = 12.dp, bottom = 2.dp))
         Card {
             Row2("连接", icon = D.rightUp, value = profile?.name ?: "未连接", onClick = onConnections)
             Row2("审批通知", divider = false, trailing = {
