@@ -37,7 +37,7 @@ Tags used below:
 
 **iroh layer** [src tether-core/src/lib.rs, host/src/main.rs]
 - ALPN is `dsh-tether/0`.
-- Endpoint uses `presets::N0`, i.e. n0's public discovery and relays [main.rs:347].
+- Endpoint uses `presets::N0` discovery with `RelayMode::Custom` pointing at the Tokyo self-hosted relay (`https://iroh.9643275.xyz.`; override via `DSH_IROH_RELAY_URLS` on pocket-host).
 - Persistent `SecretKey` is stored in a 0600 file. `paired.json` holds the allow-list of phone node IDs.
 - First bi-stream is the control stream. Its first line is `{"type":"hello",name}` for a paired peer or `{"type":"pair",code,name}`.
 - Pairing:

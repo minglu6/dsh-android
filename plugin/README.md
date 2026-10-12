@@ -27,7 +27,7 @@ dsh web
 
 ## iroh（唯一远程路径）
 
-桌面侧跑 Rust sidecar（`plugin/iroh`，ALPN `dsh-pocket/1`）。手机经 **iroh 打洞（失败则 relay）** 连上，再做同一套 `pair` / `hello` token 鉴权。不依赖 Tailscale / 共享 Wi‑Fi。
+桌面侧跑 Rust sidecar（`plugin/iroh`，ALPN `dsh-pocket/1`）。手机经 **iroh 打洞（失败则走东京自建 relay `https://iroh.9643275.xyz.`）** 连上，再做同一套 `pair` / `hello` token 鉴权。不依赖 Tailscale / 共享 Wi‑Fi。桌面可用环境变量 `DSH_IROH_RELAY_URLS`（逗号分隔）覆盖中继；Android 与 sidecar 共用同一默认。
 
 **一行安装 sidecar（macOS arm64 / Linux）：**
 
