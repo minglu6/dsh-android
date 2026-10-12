@@ -64,7 +64,7 @@ class ConnectionService : Service() {
     private fun openApp() = PendingIntent.getActivity(this, 0, Intent(this, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP), PendingIntent.FLAG_IMMUTABLE)
 
     private fun fgNotification(text: String) = NotificationCompat.Builder(this, CH_CONN)
-        .setSmallIcon(R.drawable.ic_stat_dsh).setContentTitle("dsh").setContentText(text)
+        .setSmallIcon(R.drawable.ic_stat_dsh).setContentTitle(getString(R.string.app_name)).setContentText(text)
         .setOngoing(true).setContentIntent(openApp()).build()
 
     private fun approvalNotification(a: dev.dsh.pocket.protocol.Approval): Notification {

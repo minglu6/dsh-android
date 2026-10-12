@@ -159,7 +159,7 @@ private fun Tabs(sel: Int, onSel: (Int) -> Unit) {
 
 @Composable
 private fun Hero() {
-    // deepseek-harness EmptyHero / HeroShell.module.css: 34px fish, 10px gap, 26px/500 headline, 7px to the badge.
+    // Match desktop EmptyHero: fish + headline + preview badge only — no brand title above.
     Row(verticalAlignment = Alignment.CenterVertically) {
         Icon(D.fish, null, tint = T.Ink, modifier = Modifier.width(34.dp).height(25.dp))
         Spacer(Modifier.width(10.dp))

@@ -24,7 +24,7 @@ cd ../plugin && node test/integration/kotlin-live.mjs
 ## 使用
 
 1. 电脑端：`dsh web` 装好插件后，在 `plugin/` 下运行 `node bin/pocket.js pair` 显示 6 位配对码（10 分钟有效）。
-2. 手机端：连接 → 输入配对码，填 `IP:端口`（Tailscale 填 100.x 地址）；或用相机扫描内容为配对链接的二维码，会打开 `dshpocket://pair?h=…&c=…`。
+2. 手机端：连接 →「输入配对码」手动填写 `IP:端口` 与 6 位码；或点「扫码配对」用应用内相机扫描桌面端二维码（`dshpocket://pair?h=…&c=…`），解析后自动填入配对表单。
 3. token 用 Android Keystore 的 AES-GCM 密钥加密保存。
 
 ## 暂未实现（界面已放置，置灰）
