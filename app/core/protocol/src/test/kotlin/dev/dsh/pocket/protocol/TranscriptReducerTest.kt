@@ -132,6 +132,20 @@ class TranscriptReducerTest {
         assertTrue(r.hasMore)
     }
 
+    @Test fun prependMergesOlderStepRecords() {
+        val r = TranscriptReducer()
+        r.apply(j("""{"type":"snapshot","cursor":4,"hasMore":true,"records":[
+            {"type":"event","event":{"type":"assistant/message","seq":4,"time":4,"data":{"turn":2,"step":1,"stream":[],"message":{"content":[{"type":"text","text":"newer"}],"source":{"provider":"p","model":"m"}},"usage":{"inputTokens":1,"outputTokens":2}}}}
+        ],"projections":{}}"""))
+        assertEquals(listOf("newer"), r.stepRecords().map { it.replyText })
+        val older = j("""[
+            {"type":"event","event":{"type":"assistant/message","seq":2,"time":2,"data":{"turn":1,"step":1,"stream":[],"message":{"content":[{"type":"text","text":"older"}],"source":{"provider":"p","model":"m"}},"usage":{"inputTokens":3,"outputTokens":4}}}}
+        ]""")
+        assertTrue(r.prepend(older, pageHasMore = false))
+        assertEquals(listOf("older", "newer"), r.stepRecords().map { it.replyText })
+        assertEquals(2L, r.firstSeq)
+    }
+
     @Test fun hidesInjectedContextAndMarksToolErrors() {
         val r = TranscriptReducer()
         r.apply(j("""{"type":"snapshot","cursor":0,"records":[],"projections":{}}"""))
