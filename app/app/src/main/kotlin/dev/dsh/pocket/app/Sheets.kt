@@ -278,9 +278,10 @@ fun PanelSheet(cwd: String?, onDismiss: () -> Unit, onFiles: () -> Unit, onTermi
         SheetTitle("右侧边栏")
         cwd?.let { Text(it, style = T.Mono.copy(color = T.Text3), modifier = Modifier.padding(horizontal = 22.dp, vertical = 4.dp)) }
         SectionLabel("开始")
-        if (files) OptionRow("工作区文件", "浏览会话工作区的文件", D.folderOpen) { onFiles(); onDismiss() }
-        if (terminal) OptionRow("终端", "在会话工作区运行命令", D.code) { onTerminal(); onDismiss() }
-        if (jobs) OptionRow("后台任务", "查看后台任务", D.clock) { onJobs(); onDismiss() }
+        // Navigate by replacing Sheet.Panel — do not call onDismiss() (that would clear to Sheet.None).
+        if (files) OptionRow("工作区文件", "浏览会话工作区的文件", D.folderOpen) { onFiles() }
+        if (terminal) OptionRow("终端", "在会话工作区运行命令", D.code) { onTerminal() }
+        if (jobs) OptionRow("后台任务", "查看后台任务", D.clock) { onJobs() }
         if (!files && !terminal && !jobs) Text("当前连接未提供面板", fontSize = 13.sp, color = T.Caption, modifier = Modifier.padding(horizontal = 22.dp, vertical = 10.dp))
     }
 }
