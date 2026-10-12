@@ -117,6 +117,8 @@ sealed interface Item {
         val turn: Int,
         val count: Int = 0,
         val name: String? = null,
+        /** Event seq for `workspaceChanges.summary`. */
+        val seq: Long? = null,
     ) : Item
 }
 
@@ -682,7 +684,7 @@ class TranscriptReducer {
                 val name = data["files"].arr()?.singleOrNull()?.let { f ->
                     f["display"].str() ?: f["path"].str()?.substringAfterLast('/')
                 }
-                committed += Item.Changes(key = "ch$seq", turn = turn, count = count, name = name)
+                committed += Item.Changes(key = "ch$seq", turn = turn, count = count, name = name, seq = seq)
             }
         }
     }

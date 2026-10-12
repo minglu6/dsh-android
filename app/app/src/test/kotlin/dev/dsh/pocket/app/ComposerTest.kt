@@ -41,7 +41,8 @@ class ComposerTest {
         rule.setContent { PocketTheme { ChatRoot(onMenu = {}) } }
         rule.waitForIdle()
 
-        val send = rule.onNodeWithContentDescription("发送")
+        // Desktop locale input.send = 发送消息 (also exposed as testTag composerSend).
+        val send = rule.onNodeWithTag("composerSend")
         send.assertIsDisplayed()
         send.assertIsNotEnabled()
 
@@ -69,6 +70,6 @@ class ComposerTest {
         Pocket.chat.value = ChatState("s1", running = false, loaded = true)
         rule.setContent { PocketTheme { ChatRoot(onMenu = {}) } }
         rule.waitForIdle()
-        rule.onNodeWithContentDescription("发送").assertIsDisplayed()
+        rule.onNodeWithTag("composerSend").assertIsDisplayed()
     }
 }

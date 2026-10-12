@@ -2,7 +2,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import {
   searchOps, workspaceOps, feedbackOps, fileReferenceOps, sessionReferenceOps,
-  attachmentOps, uploadOps, userQuestionOps,
+  attachmentOps, workspaceChangesOps, uploadOps, userQuestionOps,
 } from '../src/parity-ops.js'
 import { createUserQuestionHook } from '../src/user-question-hook.js'
 
@@ -93,6 +93,16 @@ test('references.files / references.sessions forward to Host services', async ()
   assert.equal(files.items[0].path, 'src/a.ts')
   const sessions = await sessionOps['references.sessions']({ sessionId: 's1', query: 'chat' }, AbortSignal.timeout(500))
   assert.equal(sessions.items[0].mention, '@chat')
+})
+
+test('workspaceChanges.summary forwards Host summary', () => {
+  const ops = workspaceChangesOps({
+    summary: (sessionId, seq) => ({ turn: 1, total: 2, files: [{ path: 'a.ts', display: 'a.ts' }], sessionId, seq }),
+  })
+  const r = ops['workspaceChanges.summary']({ sessionId: 's1', seq: 42 })
+  assert.equal(r.summary.total, 2)
+  assert.equal(r.summary.seq, 42)
+  assert.throws(() => ops['workspaceChanges.summary']({ sessionId: 's1' }), /seq required/)
 })
 
 test('session.attachment and attachments.upload forward', async () => {
