@@ -122,16 +122,13 @@ dsh process (profile web)
 2. Server → `{"ok":true,"result":{"proto":1,"dsh":"0.2.1-alpha.2","plugin":"0.1.0","host":"<hostname>","caps":[...]}}`.
    Any frame before a successful hello closes the connection with code 4401. The server enforces a 10 s hello timeout and a 64 KiB frame cap.
 
-**Pairing (Tailscale/LAN/local)**
-- The desktop opens a pairing window: CLI log line, `/pocket/pair` route on dsh webServer gated by loopback, or the patch `pair: true`.
-- The window shows a 6-digit code and a QR containing `dshpocket://pair?h=<host:port>&n=<irohNodeId>&c=<code>&fp=<pubkey-hash>`.
-- Phone → `{"op":"pair","args":{"code":"123456","name":"Pixel 9","pub":"<device X25519/ed25519 pub>"}}`.
-- Server → `{"result":{"device":"<id>","token":"<32B random b64>"}}`. The token is stored hashed (sha256) server-side.
+**Pairing (pure iroh)**
+- The desktop opens a pairing window: settings UI, CLI, `/pocket/pair` on dsh webServer (loopback), or `pair: true`.
+- Shows 6-digit code, paste line `<nodeId>#<code>`, and QR `dshpocket://pair?n=<irohNodeId>&c=<code>` (tether-style; no Tailscale/LAN host).
+- Phone connects over iroh, then `{"op":"pair","args":{"code":"123456","name":"Pixel 9"}}`.
+- Server → `{"result":{"deviceId":"<id>","token":"<…>"}}` (token hashed sha256 server-side).
 - Same window rules as tether: 600 s TTL, 3 attempts, 200 ms failure delay.
-- `devices.list` and `devices.forget` are available to an authenticated client and to the desktop.
-- **[design] Transport security**:
-  - Tailscale is already WireGuard-encrypted.
-  - Plain LAN WS is not, so for LAN we either require the pairing-derived token over `wss` with a self-signed cert pinned by `fp` from the QR, or make LAN opt-in. This is open question Q3.
+- Transport security: iroh TLS; relay carries ciphertext only.
 
 **Ops**
 - `sessions.list {cursor?}` → `{items: SessionSummary[]}` (passed through from `sessionController.list`)
@@ -199,7 +196,7 @@ interface Transport { suspend fun connect(): Channel; val kind: Kind }   // Chan
 - **M0 (2–3 d) Plugin skeleton**: npm package plus patch. Loopback WS listener. hello with a static token from config. Ops: `sessions.list`, `sessions.create`, `prompt`, `cancel`, `follow`. Verify in the dsh 0.2.1-alpha.2 web profile with a node test client.
 - **M1 (3–4 d) Approvals plus models plus pairing**: approval broker, model ops, device store, pairing window (code plus QR), listen on Tailscale IP. Ships a usable desktop side.
 - **M2 (1 wk) Android MVP over WS**: design system, connections (Tailscale/LAN profiles plus pairing), drawer, chat with reducer, tool sheet, approval card plus notification, foreground service.
-- **M3 (1 wk) iroh** ✅: `plugin/iroh` pocket-host sidecar (ALPN `dsh-pocket/1`, dumb JSON pipe). Android `IrohNative` JNI + dial order WS→iroh. Pairing URI carries optional `n=<NodeId>`. Relay shown as amber status + `iroh relay` chip. CI builds `libpocket_iroh.so` (arm64-v8a + x86_64) into the debug APK and publishes `pocket-host-{linux-x64,darwin-arm64}` prebuilts; plugin auto-downloads or `cargo build`s on first start, WS-only if missing.
+- **M3 (1 wk) iroh** ✅: Pure iroh (no Tailscale). `plugin/iroh` pocket-host (ALPN `dsh-pocket/1`). Pairing: tether-style `nodeId#code` / QR `dshpocket://pair?n=&c=`. Dial iroh only (loopback WS for tests). CI bundles `libpocket_iroh.so`; prebuilt `pocket-host` for linux/darwin-arm64.
 - **M4 (1 wk) Local mode**: port tether's runtime build script and local.rs. Bundle the plugin with `mode: local`. Lifecycle management.
 - **M5 Polish**: server-side transcript reducer, history paging, user-questions, image prompts, reconnect hardening, per-dsh-version CI matrix.
 

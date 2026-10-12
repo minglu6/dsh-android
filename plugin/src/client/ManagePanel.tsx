@@ -181,11 +181,11 @@ export function ManagePanel({
     }
   }
 
-  const copyUri = async () => {
-    const uri = status?.pairing.uri
-    if (!uri) return
+  const copyPairing = async () => {
+    const line = status?.pairing.pairingString || status?.pairing.uri
+    if (!line) return
     try {
-      await navigator.clipboard.writeText(uri)
+      await navigator.clipboard.writeText(line)
       setCopied(true)
       setTimeout(() => setCopied(false), 1500)
     } catch { /* ignore */ }
@@ -195,7 +195,8 @@ export function ManagePanel({
   const expires = pairing?.open ? Math.max(0, pairing.expiresInSec ?? 0) : 0
   void tick
 
-  const connectorOk = Boolean(status?.running) && !error
+  const irohOk = Boolean(status?.irohReady || status?.nodeId)
+  const connectorOk = irohOk && !error
 
   return (
     <div style={styles.settingsRoot}>
@@ -207,13 +208,15 @@ export function ManagePanel({
           <div style={{ flex: 1, minWidth: 0 }}>
             <div style={styles.rowTitle}>{t('statusTitle')}</div>
             <div style={{ ...styles.valueLine, marginTop: 6 }}>
-              {status.running ? t('statusRunning') : t('statusStopped')}
+              {irohOk ? t('irohReady') : t('irohMissing')}
               <StatusDot state={connectorOk ? 'done' : 'error'} />
             </div>
             <div style={styles.metaStack}>
-              <div style={styles.metaLine}>
-                {t('listen')}: {status.listen.map((l) => l.address).join(', ') || `${status.host}:${status.port}`}
-              </div>
+              {status.nodeId ? (
+                <div style={styles.metaLine}>
+                  {t('nodeId')}: {String(status.nodeId).slice(0, 16)}…
+                </div>
+              ) : null}
               <div style={styles.metaLine}>{t('version')}: {status.version}</div>
             </div>
           </div>
@@ -223,7 +226,7 @@ export function ManagePanel({
 
       <div style={styles.settingsBlock}>
         <div style={styles.rowTitle}>{t('code')}</div>
-        {pairing?.open && pairing.code ? (
+        {pairing?.open && pairing.code && pairing.uri ? (
           <>
             <div style={styles.code}>{pairing.code}</div>
             <div style={{ ...styles.hint, textAlign: 'center' }}>
@@ -231,30 +234,33 @@ export function ManagePanel({
               {' · '}
               {t('expiresMin', { n: Math.max(1, Math.round(expires / 60)) })}
             </div>
-            {pairing.uri ? (
-              <>
-                <div style={styles.qrWrap}>
-                  <div
-                    style={styles.qrBox}
-                    dangerouslySetInnerHTML={{ __html: qrSvg(pairing.uri, 168) }}
-                  />
-                </div>
-                <div style={{ ...styles.rowDescription, textAlign: 'center' }}>{t('scanHint')}</div>
-                <div style={{ ...styles.actionRow, justifyContent: 'center' }}>
-                  <button type="button" style={styles.outlineBtn} onClick={() => void copyUri()}>
-                    {copied ? t('copied') : t('copy')}
-                  </button>
-                  <button type="button" style={styles.outlineBtn} onClick={() => void closePair()}>{t('pairClose')}</button>
-                  <button type="button" style={styles.primaryBtn} onClick={() => void openPair()}>{t('pairAgain')}</button>
-                </div>
-              </>
+            <div style={styles.qrWrap}>
+              <div
+                style={styles.qrBox}
+                dangerouslySetInnerHTML={{ __html: qrSvg(pairing.uri, 168) }}
+              />
+            </div>
+            <div style={{ ...styles.rowDescription, textAlign: 'center' }}>{t('scanHint')}</div>
+            {pairing.pairingString ? (
+              <div style={{ ...styles.metaLine, textAlign: 'center', wordBreak: 'break-all', marginTop: 8 }}>
+                {pairing.pairingString}
+              </div>
             ) : null}
+            <div style={{ ...styles.actionRow, justifyContent: 'center' }}>
+              <button type="button" style={styles.outlineBtn} onClick={() => void copyPairing()}>
+                {copied ? t('copied') : t('copy')}
+              </button>
+              <button type="button" style={styles.outlineBtn} onClick={() => void closePair()}>{t('pairClose')}</button>
+              <button type="button" style={styles.primaryBtn} onClick={() => void openPair()}>{t('pairAgain')}</button>
+            </div>
           </>
         ) : (
           <>
-            <div style={{ ...styles.rowDescription, marginTop: 4 }}>{t('noCode')}</div>
+            <div style={{ ...styles.rowDescription, marginTop: 4 }}>
+              {irohOk ? t('noCode') : t('irohMissing')}
+            </div>
             <div style={styles.actionRow}>
-              <button type="button" style={styles.primaryBtn} onClick={() => void openPair()}>{t('pair')}</button>
+              <button type="button" style={styles.primaryBtn} disabled={!irohOk} onClick={() => void openPair()}>{t('pair')}</button>
             </div>
           </>
         )}

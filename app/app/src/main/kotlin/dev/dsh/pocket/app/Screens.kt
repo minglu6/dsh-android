@@ -142,7 +142,7 @@ fun ConnectionsScreen(pairLink: PairingLink?, onPairLinkConsumed: () -> Unit, ca
                     Spacer(Modifier.width(14.dp))
                     Column {
                         Text("连接到桌面端 dsh", fontSize = 16.sp, color = T.Ink)
-                        Text("在电脑上运行 dsh-pocket pair 获取配对码", fontSize = 13.sp, color = T.Text3, modifier = Modifier.padding(top = 2.dp))
+                        Text("扫码或粘贴电脑「手机连接」里的配对串", fontSize = 13.sp, color = T.Text3, modifier = Modifier.padding(top = 2.dp))
                     }
                 }
             }
@@ -152,8 +152,8 @@ fun ConnectionsScreen(pairLink: PairingLink?, onPairLinkConsumed: () -> Unit, ca
                     val d = status[p.id]
                     val route = routes[p.id]
                     Row(verticalAlignment = Alignment.CenterVertically) { Spacer(Modifier.width(16.dp)); StatusDot(d, relay = route?.isRelay == true); Box(Modifier.weight(1f)) {
-                    Row2(p.name + if (p.id == active) "  · 当前" else "", "${p.host}:${p.port} · ${dotLabel(d)}", icon = null, divider = i < profiles.lastIndex, onClick = { manage = p }, trailing = {
-                        Text(route?.label ?: p.kind, fontSize = 12.sp, color = T.Text2, modifier = Modifier.border(1.dp, T.Border, T.R8).padding(horizontal = 8.dp, vertical = 4.dp))
+                    Row2(p.name + if (p.id == active) "  · 当前" else "", "${p.subtitle} · ${dotLabel(d)}", icon = null, divider = i < profiles.lastIndex, onClick = { manage = p }, trailing = {
+                        Text(route?.label ?: p.kind, fontSize = 12.sp, color = if (p.needsRepair) T.WarnBorder else T.Text2, modifier = Modifier.border(1.dp, T.Border, T.R8).padding(horizontal = 8.dp, vertical = 4.dp))
                         Icon(D.chevronRight, null, tint = T.Text3, modifier = Modifier.padding(start = 8.dp).size(20.dp))
                     }) } }
                 }
@@ -161,7 +161,7 @@ fun ConnectionsScreen(pairLink: PairingLink?, onPairLinkConsumed: () -> Unit, ca
         }
         Row(Modifier.padding(18.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
             OutlinedButton({ pairing = null; showPair = true }, Modifier.weight(1f).height(52.dp), shape = T.R12, border = BorderStroke(1.dp, T.Border),
-                colors = ButtonDefaults.outlinedButtonColors(contentColor = T.Ink)) { Text("输入配对码", fontSize = 15.sp) }
+                colors = ButtonDefaults.outlinedButtonColors(contentColor = T.Ink)) { Text("粘贴配对串", fontSize = 15.sp) }
             OutlinedButton({ showScan = true }, Modifier.weight(1f).height(52.dp), shape = T.R12, border = BorderStroke(1.dp, T.Border),
                 colors = ButtonDefaults.outlinedButtonColors(contentColor = T.Ink)) { Text("扫码配对", fontSize = 15.sp) }
         }
@@ -178,9 +178,13 @@ fun ConnectionsScreen(pairLink: PairingLink?, onPairLinkConsumed: () -> Unit, ca
                 StatusDot(status[p.id]); Spacer(Modifier.width(10.dp)); SheetTitle(p.name)
                 if (p.id == active) Text("当前", fontSize = 12.sp, color = T.Accent, modifier = Modifier.background(T.Tint, T.R4).padding(horizontal = 6.dp, vertical = 2.dp))
             }
-            Text("${p.host}:${p.port} · ${dotLabel(status[p.id])}", style = T.Mono.copy(color = T.Text3), modifier = Modifier.padding(horizontal = 22.dp, vertical = 4.dp))
+            Text("${p.subtitle} · ${dotLabel(status[p.id])}", style = T.Mono.copy(color = T.Text3), modifier = Modifier.padding(horizontal = 22.dp, vertical = 4.dp))
             Spacer(Modifier.height(8.dp))
-            if (p.id != active || status[p.id] != Dot.Online) OptionRow("连接", icon = D.link) { Pocket.connect(p.id); manage = null; onConnected() }
+            if (p.needsRepair) {
+                Text("此连接来自旧版方案，请删除后重新扫码配对。", fontSize = 13.sp, color = T.Text3, modifier = Modifier.padding(start = 22.dp, end = 22.dp, bottom = 8.dp))
+            } else if (p.id != active || status[p.id] != Dot.Online) {
+                OptionRow("连接", icon = D.link) { Pocket.connect(p.id); manage = null; onConnected() }
+            }
             OptionRow("删除", icon = D.trash) { Pocket.removeProfile(p.id); manage = null }
         }
     }
@@ -190,18 +194,27 @@ private fun dotLabel(d: Dot?) = when (d) { Dot.Online -> "在线"; Dot.Connectin
 
 @Composable
 fun PairSheet(link: PairingLink?, onDismiss: () -> Unit, onPaired: (Profile) -> Unit) {
-    var host by remember { mutableStateOf(link?.let { "${it.host}:${it.port}" } ?: "") }
+    var ticket by remember { mutableStateOf(link?.let { "${it.nodeId}#${it.code}" } ?: "") }
     var name by remember { mutableStateOf("") }
     var code by remember { mutableStateOf(link?.code ?: "") }
     var busy by remember { mutableStateOf(false) }
     var err by remember { mutableStateOf<String?>(null) }
     val scope = rememberCoroutineScope()
     val focus = remember { FocusRequester() }
-    val hp = parseHostPort(host)
+    val parsed = remember(ticket, code) {
+        PairingLink.parse(ticket.trim())
+            ?: ticket.trim().takeIf { it.length >= 16 }?.let { n ->
+                code.takeIf { it.length == 6 }?.let { PairingLink(n, it) }
+            }
+    }
     PocketSheet(onDismiss) {
         SheetTitle("配对")
-        Field("地址", host, "100.x.y.z:7690") { host = it; err = null }
-        Field("名称", name, hp?.first ?: "例如 Mac mini") { name = it }
+        Field("配对串", ticket, "粘贴电脑上显示的整行") {
+            ticket = it
+            err = null
+            PairingLink.parse(it.trim())?.let { link -> code = link.code }
+        }
+        Field("名称", name, "例如 Mac mini") { name = it }
         Spacer(Modifier.height(14.dp))
         Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
             BasicTextField(code, { v -> code = v.filter(Char::isDigit).take(6); err = null }, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword),
@@ -218,11 +231,12 @@ fun PairSheet(link: PairingLink?, onDismiss: () -> Unit, onPaired: (Profile) -> 
                 })
         }
         err?.let { Text(it, color = T.Err, fontSize = 13.sp, modifier = Modifier.padding(horizontal = 22.dp, vertical = 8.dp)) }
-        val ready = hp != null && code.length == 6 && !busy
+        val ready = parsed != null && !busy
         Button({
             busy = true
             scope.launch {
-                Pocket.pair(name.trim(), hp!!.first, hp.second, code, link?.nodeId).onSuccess(onPaired).onFailure { err = it.message }
+                val p = parsed!!
+                Pocket.pair(name.trim(), p.nodeId, p.code).onSuccess(onPaired).onFailure { err = it.message }
                 busy = false
             }
         }, Modifier.padding(horizontal = 18.dp, vertical = 16.dp).fillMaxWidth().height(52.dp), enabled = ready, shape = T.R12,
@@ -242,13 +256,6 @@ private fun Field(label: String, v: String, hint: String, onChange: (String) -> 
             BasicTextField(v, onChange, singleLine = true, textStyle = MaterialTheme.typography.bodyMedium.copy(fontSize = 15.sp), cursorBrush = SolidColor(T.Accent), modifier = Modifier.fillMaxWidth())
         }
     }
-}
-
-fun parseHostPort(s: String): Pair<String, Int>? {
-    val t = s.trim().removePrefix("ws://")
-    val m = Regex("^\\[?([^\\[\\]]+?)]?:(\\d{1,5})$").find(t) ?: return null
-    val port = m.groupValues[2].toInt().takeIf { it in 1..65535 } ?: return null
-    return m.groupValues[1] to port
 }
 
 // ---------- Settings ----------

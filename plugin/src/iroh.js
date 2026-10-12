@@ -144,8 +144,8 @@ function missingSidecarHelp() {
   const plat = platKey()
   const asset = PREBUILT_ASSET[plat]
   return [
-    `iroh sidecar not found for ${plat} — continuing in WebSocket-only mode.`,
-    'Tailscale/LAN pairing and RPC still work; P2P/relay needs pocket-host.',
+    `iroh sidecar not found for ${plat} — remote phone pairing is unavailable.`,
+    'Phones connect only over iroh (direct hole-punch, else relay); no Tailscale/VPN.',
     'One-line install (from repo):  cd plugin && npm run build:iroh',
     asset
       ? `Or wait for / download the CI prebuilt: ${PREBUILT_BASE}/${asset}`

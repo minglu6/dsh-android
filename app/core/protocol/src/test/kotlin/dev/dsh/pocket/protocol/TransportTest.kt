@@ -1,8 +1,5 @@
 package dev.dsh.pocket.protocol
 
-import kotlinx.coroutines.channels.Channel
-import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.runBlocking
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -11,67 +8,68 @@ import kotlin.test.assertTrue
 
 class TransportTest {
     private class FakeTransport(override val route: Route) : FrameTransport {
-        private val ch = Channel<String>(Channel.UNLIMITED)
-        override val incoming: Flow<String> = ch.receiveAsFlow()
-        override var closeReason: String? = null
-        override suspend fun send(text: String) { ch.send(text) }
-        override fun close() { ch.close() }
+        override suspend fun send(text: String) {}
+        override val incoming = kotlinx.coroutines.flow.emptyFlow<String>()
+        override fun close() {}
+        override val closeReason: String? = null
     }
 
-    @Test fun classifyTailscaleAndLan() {
-        assertEquals(Route.WsTailscale, classifyWsRoute("100.64.1.2"))
-        assertEquals(Route.WsTailscale, classifyWsRoute("foo.ts.net"))
-        assertEquals(Route.WsLan, classifyWsRoute("192.168.1.1"))
-        assertEquals(Route.WsLan, classifyWsRoute("127.0.0.1"))
+    @Test fun isLoopback() {
+        assertTrue(isLoopbackHost("127.0.0.1"))
+        assertTrue(isLoopbackHost("localhost"))
+        assertTrue(isLoopbackHost("::1"))
+        assertEquals(false, isLoopbackHost("100.64.1.2"))
+        assertEquals(false, isLoopbackHost("192.168.1.1"))
     }
 
-    @Test fun transportPlanOrdersWsThenIroh() {
-        val plan = transportPlan("100.1.2.3", 7690, "nodeabc", TransportFactory { FakeTransport(Route.IrohDirect) })
-        assertEquals(2, plan.size)
-        val noIroh = transportPlan("100.1.2.3", 7690, null, TransportFactory { FakeTransport(Route.IrohDirect) })
-        assertEquals(1, noIroh.size)
-        val missingFactory = transportPlan("100.1.2.3", 7690, "nodeabc", null)
-        assertEquals(1, missingFactory.size)
+    @Test fun transportPlanIrohFirst() {
+        val iroh = TransportFactory { FakeTransport(Route.IrohDirect) }
+        val plan = transportPlan("nodeabc", iroh, null)
+        assertEquals(1, plan.size)
+        val withLocal = transportPlan("nodeabc", iroh, "ws://127.0.0.1:7690")
+        assertEquals(2, withLocal.size)
+        val noIroh = transportPlan(null, iroh, null)
+        assertTrue(noIroh.isEmpty())
+        val missingFactory = transportPlan("nodeabc", null, null)
+        assertTrue(missingFactory.isEmpty())
     }
 
-    @Test fun dialInOrderFallsBack() = runBlocking {
-        var tried = 0
+    @Test fun dialInOrderUsesFirstSuccess() = runBlocking {
+        var hits = 0
         val fail = TransportFactory {
-            tried++
-            error("ws down")
+            hits++
+            throw PocketError("transport", "fail")
         }
         val ok = TransportFactory {
-            tried++
+            hits++
             FakeTransport(Route.IrohRelay)
         }
         val t = dialInOrder(listOf(fail, ok))
         assertEquals(Route.IrohRelay, t.route)
-        assertEquals(2, tried)
+        assertEquals(2, hits)
     }
 
-    @Test fun dialInOrderAllFail() = runBlocking {
-        val err = assertFailsWith<IllegalStateException> {
-            dialInOrder(listOf(TransportFactory { error("a") }, TransportFactory { error("b") }))
-        }
-        assertTrue(err.message?.contains("b") == true)
+    @Test fun dialInOrderEmptyThrows() = runBlocking {
+        assertFailsWith<IllegalArgumentException> { dialInOrder(emptyList()) }
     }
 
     @Test fun routeLabels() {
-        assertEquals("Tailscale", Route.WsTailscale.label)
-        assertEquals("LAN", Route.WsLan.label)
+        assertEquals("local", Route.WsLocal.label)
         assertEquals("iroh", Route.IrohDirect.label)
         assertEquals("iroh relay", Route.IrohRelay.label)
         assertTrue(Route.IrohRelay.isRelay)
+        assertEquals(false, Route.IrohDirect.isRelay)
     }
 
-    @Test fun pairingLinkKeepsNodeIdOptional() {
+    @Test fun pairingLinkPureIroh() {
         assertEquals(
-            PairingLink("100.1.2.3", 7690, "123456", null),
-            PairingLink.parse("dshpocket://pair?h=100.1.2.3:7690&c=123456"),
+            PairingLink("abcdefghijklmnopqrst", "123456"),
+            PairingLink.parse("dshpocket://pair?n=abcdefghijklmnopqrst&c=123456"),
         )
         assertEquals(
-            PairingLink("100.1.2.3", 7690, "123456", "abcNode"),
-            PairingLink.parse("dshpocket://pair?h=100.1.2.3:7690&c=123456&n=abcNode"),
+            PairingLink("abcdefghijklmnopqrst", "123456"),
+            PairingLink.parse("abcdefghijklmnopqrst#123456"),
         )
+        assertEquals(null, PairingLink.parse("dshpocket://pair?h=100.1.2.3:7690&c=123456"))
     }
 }

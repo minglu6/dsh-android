@@ -3,9 +3,11 @@ export type PairingStatus = {
   code?: string
   expiresInSec?: number
   attemptsLeft?: number
-  host?: string
-  port?: number
+  nodeId?: string
   uri?: string
+  pairingString?: string
+  irohReady?: boolean
+  error?: string
 }
 
 export type DeviceRow = {
@@ -22,6 +24,8 @@ export type PocketStatus = {
   plugin: string
   host: string
   port: number
+  nodeId?: string | null
+  irohReady?: boolean
   listen: Array<{ host: string, port: number, address: string }>
   pairing: PairingStatus
   devices: DeviceRow[]
@@ -55,7 +59,7 @@ export function createPocketApi(base = '') {
   return {
     status: () => get<PocketStatus>('/pocket/status'),
     pairStatus: () => get<PairingStatus>('/pocket/pair'),
-    openPair: () => get<PairingStatus & { host: string, port: number, uri: string }>(
+    openPair: () => get<PairingStatus & { nodeId?: string, uri?: string, pairingString?: string }>(
       '/pocket/pair', { method: 'POST' },
     ),
     closePair: () => get<{ open: false }>('/pocket/pair', { method: 'DELETE' }),

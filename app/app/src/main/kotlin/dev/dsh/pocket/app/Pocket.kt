@@ -9,8 +9,6 @@ import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
 import kotlinx.serialization.json.JsonObject
 import java.io.File
-import java.net.InetSocketAddress
-import java.net.Socket
 import java.util.UUID
 
 enum class Dot { Online, Connecting, Offline, Unauthorized }
@@ -85,20 +83,35 @@ object Pocket {
     }
 
     private fun factoriesFor(p: Profile): List<TransportFactory> {
-        val iroh = p.nodeId?.let { n -> irohDir?.let { dir -> IrohTransport.factory(n, dir) } }
-        return transportPlan(p.host, p.port, p.nodeId, iroh)
+        if (p.needsRepair) return emptyList()
+        val iroh = irohDir?.let { dir -> IrohTransport.factory(p.nodeId, dir) }
+        // Loopback WS only when a legacy/test profile still points at localhost.
+        val loopback = p.host.takeIf { isLoopbackHost(it) && p.port in 1..65535 }?.let {
+            "ws://${if (':' in it) "[$it]" else it}:${p.port}"
+        }
+        return transportPlan(p.nodeId, iroh, loopback)
     }
 
     private suspend fun runConnection(profileId: String) {
         var backoff = 1000L
         while (currentCoroutineContext().isActive) {
             val p = profiles.value.firstOrNull { it.id == profileId } ?: return
+            if (p.needsRepair) {
+                setDot(p.id, Dot.Unauthorized)
+                return
+            }
             val token = tokens.get(p.id) ?: run { setDot(p.id, Dot.Unauthorized); return }
             setDot(p.id, Dot.Connecting)
             val c = PocketClient()
             try {
-                // Order: Tailscale/LAN WS first, then iroh (direct→relay inside the transport).
-                val hello = c.connect(factoriesFor(p), Auth.Token(token))
+                val factories = factoriesFor(p)
+                if (factories.isEmpty()) {
+                    setDot(p.id, Dot.Offline)
+                    errors.tryEmit("iroh 不可用：请确认 APK 含原生库，或重新配对")
+                    return
+                }
+                // Pure iroh (direct→relay); WS only if loopback for local/dev.
+                val hello = c.connect(factories, Auth.Token(token))
                 client = c; ops.value = hello.ops
                 setRoute(p.id, c.route ?: hello.route)
                 setDot(p.id, Dot.Online); backoff = 1000L
@@ -334,14 +347,23 @@ object Pocket {
         terminalSubId = null
     }
 
-    /** Pair with a desktop: exchanges the 6-digit code for a device token and saves a profile. */
-    suspend fun pair(name: String, host: String, port: Int, code: String, nodeId: String? = null): Result<Profile> = withContext(Dispatchers.IO) {
+    /** Pair over iroh: exchanges the 6-digit code for a device token and saves a profile. */
+    suspend fun pair(name: String, nodeId: String, code: String): Result<Profile> = withContext(Dispatchers.IO) {
+        if (nodeId.isBlank()) return@withContext Result.failure(Exception("配对串不完整：需要桌面端显示的整行或扫码"))
+        if (!IrohNative.available) return@withContext Result.failure(Exception("本机缺少 iroh 原生库，无法配对"))
         val c = PocketClient()
         try {
-            val draft = Profile("", name, host, port, nodeId = nodeId)
-            val hello = c.connect(factoriesFor(draft), Auth.Pair(code, Build.MODEL ?: "Android"))
+            val draft = Profile("", name.ifBlank { "电脑" }, nodeId = nodeId)
+            val factories = factoriesFor(draft)
+            if (factories.isEmpty()) return@withContext Result.failure(Exception("无法建立 iroh 连接"))
+            val hello = c.connect(factories, Auth.Pair(code, Build.MODEL ?: "Android"))
             val token = hello.issuedToken ?: error("服务端未返回令牌")
-            val p = Profile(UUID.randomUUID().toString(), name.ifBlank { host }, host, port, hello.deviceId, nodeId)
+            val p = Profile(
+                id = UUID.randomUUID().toString(),
+                name = name.ifBlank { "电脑" },
+                nodeId = nodeId,
+                deviceId = hello.deviceId,
+            )
             tokens.put(p.id, token)
             withContext(main.coroutineContext) { profiles.value = profiles.value + p; prefs.profiles = profiles.value }
             Result.success(p)
@@ -349,10 +371,12 @@ object Pocket {
             Result.failure(Exception(when {
                 e.code.contains("expired") -> "配对码已过期"
                 e.code.startsWith("pair/") -> "配对码错误或未开启配对"
-                e.code == "transport" -> "无法连接 $host:$port，请确认 Tailscale 已连接且电脑端 dsh 正在运行"
+                e.code == "transport" -> "无法经 iroh 连上桌面端，请确认电脑已打开配对且网络可达"
                 else -> e.message
             }))
-        } catch (e: Exception) { Result.failure(Exception("无法连接 $host:$port")) } finally { c.close() }
+        } catch (e: Exception) {
+            Result.failure(Exception(e.message ?: "配对失败"))
+        } finally { c.close() }
     }
 
     fun removeProfile(id: String) = main.launch {
@@ -360,13 +384,11 @@ object Pocket {
         tokens.remove(id); profiles.value = profiles.value.filter { it.id != id }; prefs.profiles = profiles.value
     }
 
-    /** TCP reachability for non-active profiles (status dots on the connections screen). */
+    /** Soft probe for inactive profiles (iroh profiles stay Offline until selected). */
     fun probe() = main.launch {
         profiles.value.filter { it.id != active.value }.forEach { p ->
-            launch(Dispatchers.IO) {
-                val ok = runCatching { Socket().use { it.connect(InetSocketAddress(p.host, p.port), 2500) } }.isSuccess
-                main.launch { if (p.id != active.value) setDot(p.id, if (tokens.get(p.id) == null) Dot.Unauthorized else if (ok) Dot.Online else Dot.Offline) }
-            }
+            if (p.needsRepair || tokens.get(p.id) == null) setDot(p.id, Dot.Unauthorized)
+            else if (status.value[p.id] == null) setDot(p.id, Dot.Offline)
         }
     }
 }

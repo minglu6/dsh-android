@@ -81,7 +81,9 @@ const zh = {
 	statusTitle: "连接器状态",
 	statusRunning: "运行中",
 	statusStopped: "未运行",
-	listen: "监听地址",
+	nodeId: "节点",
+	irohReady: "iroh 已就绪",
+	irohMissing: "iroh 未就绪 — 远程配对不可用",
 	version: "版本",
 	pair: "开始配对",
 	pairAgain: "重新配对",
@@ -90,8 +92,8 @@ const zh = {
 	code: "配对码",
 	expiresIn: "{n} 秒后过期",
 	expiresMin: "约 {n} 分钟有效",
-	scanHint: "用手机 App 扫描二维码，或手动输入配对码",
-	uriHint: "配对链接",
+	scanHint: "用手机扫码，或粘贴下方配对串",
+	uriHint: "配对串",
 	copy: "复制",
 	copied: "已复制",
 	devices: "已配对设备",
@@ -111,7 +113,7 @@ const zh = {
 	loadFailed: "加载失败",
 	refresh: "刷新",
 	close: "关闭",
-	noCode: "点击「开始配对」生成 6 位配对码"
+	noCode: "点击「开始配对」生成二维码与配对串"
 };
 const en = {
 	entry: "Phone connection",
@@ -119,7 +121,9 @@ const en = {
 	statusTitle: "Connector status",
 	statusRunning: "Running",
 	statusStopped: "Stopped",
-	listen: "Listen address",
+	nodeId: "Node",
+	irohReady: "iroh ready",
+	irohMissing: "iroh not ready — remote pairing unavailable",
 	version: "Version",
 	pair: "Start pairing",
 	pairAgain: "Pair again",
@@ -128,8 +132,8 @@ const en = {
 	code: "Pairing code",
 	expiresIn: "Expires in {n}s",
 	expiresMin: "Valid for about {n} min",
-	scanHint: "Scan the QR with the phone app, or enter the code",
-	uriHint: "Pairing link",
+	scanHint: "Scan the QR, or paste the pairing string on the phone",
+	uriHint: "Pairing string",
 	copy: "Copy",
 	copied: "Copied",
 	devices: "Paired devices",
@@ -149,7 +153,7 @@ const en = {
 	loadFailed: "Failed to load",
 	refresh: "Refresh",
 	close: "Close",
-	noCode: "Click “Start pairing” for a 6-digit code"
+	noCode: "Click “Start pairing” for a QR and pairing string"
 };
 
 //#endregion
@@ -1634,18 +1638,19 @@ function ManagePanel({ t, api }) {
 			setError(String(e?.message ?? e));
 		}
 	};
-	const copyUri = async () => {
-		const uri = status?.pairing.uri;
-		if (!uri) return;
+	const copyPairing = async () => {
+		const line = status?.pairing.pairingString || status?.pairing.uri;
+		if (!line) return;
 		try {
-			await navigator.clipboard.writeText(uri);
+			await navigator.clipboard.writeText(line);
 			setCopied(true);
 			setTimeout(() => setCopied(false), 1500);
 		} catch {}
 	};
 	const pairing = status?.pairing;
 	const expires = pairing?.open ? Math.max(0, pairing.expiresInSec ?? 0) : 0;
-	const connectorOk = Boolean(status?.running) && !error;
+	const irohOk = Boolean(status?.irohReady || status?.nodeId);
+	const connectorOk = irohOk && !error;
 	return /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
 		style: styles.settingsRoot,
 		children: [
@@ -1681,18 +1686,19 @@ function ManagePanel({ t, api }) {
 								...styles.valueLine,
 								marginTop: 6
 							},
-							children: [status.running ? t("statusRunning") : t("statusStopped"), /* @__PURE__ */ (0, react_jsx_runtime.jsx)(StatusDot, { state: connectorOk ? "done" : "error" })]
+							children: [irohOk ? t("irohReady") : t("irohMissing"), /* @__PURE__ */ (0, react_jsx_runtime.jsx)(StatusDot, { state: connectorOk ? "done" : "error" })]
 						}),
 						/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
 							style: styles.metaStack,
-							children: [/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
+							children: [status.nodeId ? /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
 								style: styles.metaLine,
 								children: [
-									t("listen"),
+									t("nodeId"),
 									": ",
-									status.listen.map((l) => l.address).join(", ") || `${status.host}:${status.port}`
+									String(status.nodeId).slice(0, 16),
+									"…"
 								]
-							}), /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
+							}) : null, /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
 								style: styles.metaLine,
 								children: [
 									t("version"),
@@ -1714,7 +1720,7 @@ function ManagePanel({ t, api }) {
 				children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
 					style: styles.rowTitle,
 					children: t("code")
-				}), pairing?.open && pairing.code ? /* @__PURE__ */ (0, react_jsx_runtime.jsxs)(react_jsx_runtime.Fragment, { children: [
+				}), pairing?.open && pairing.code && pairing.uri ? /* @__PURE__ */ (0, react_jsx_runtime.jsxs)(react_jsx_runtime.Fragment, { children: [
 					/* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
 						style: styles.code,
 						children: pairing.code
@@ -1730,59 +1736,67 @@ function ManagePanel({ t, api }) {
 							t("expiresMin", { n: Math.max(1, Math.round(expires / 60)) })
 						]
 					}),
-					pairing.uri ? /* @__PURE__ */ (0, react_jsx_runtime.jsxs)(react_jsx_runtime.Fragment, { children: [
-						/* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
-							style: styles.qrWrap,
-							children: /* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
-								style: styles.qrBox,
-								dangerouslySetInnerHTML: { __html: qrSvg(pairing.uri, 168) }
-							})
-						}),
-						/* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
-							style: {
-								...styles.rowDescription,
-								textAlign: "center"
-							},
-							children: t("scanHint")
-						}),
-						/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
-							style: {
-								...styles.actionRow,
-								justifyContent: "center"
-							},
-							children: [
-								/* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
-									type: "button",
-									style: styles.outlineBtn,
-									onClick: () => void copyUri(),
-									children: copied ? t("copied") : t("copy")
-								}),
-								/* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
-									type: "button",
-									style: styles.outlineBtn,
-									onClick: () => void closePair(),
-									children: t("pairClose")
-								}),
-								/* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
-									type: "button",
-									style: styles.primaryBtn,
-									onClick: () => void openPair(),
-									children: t("pairAgain")
-								})
-							]
+					/* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
+						style: styles.qrWrap,
+						children: /* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
+							style: styles.qrBox,
+							dangerouslySetInnerHTML: { __html: qrSvg(pairing.uri, 168) }
 						})
-					] }) : null
+					}),
+					/* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
+						style: {
+							...styles.rowDescription,
+							textAlign: "center"
+						},
+						children: t("scanHint")
+					}),
+					pairing.pairingString ? /* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
+						style: {
+							...styles.metaLine,
+							textAlign: "center",
+							wordBreak: "break-all",
+							marginTop: 8
+						},
+						children: pairing.pairingString
+					}) : null,
+					/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
+						style: {
+							...styles.actionRow,
+							justifyContent: "center"
+						},
+						children: [
+							/* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
+								type: "button",
+								style: styles.outlineBtn,
+								onClick: () => void copyPairing(),
+								children: copied ? t("copied") : t("copy")
+							}),
+							/* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
+								type: "button",
+								style: styles.outlineBtn,
+								onClick: () => void closePair(),
+								children: t("pairClose")
+							}),
+							/* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
+								type: "button",
+								style: styles.primaryBtn,
+								onClick: () => void openPair(),
+								children: t("pairAgain")
+							})
+						]
+					})
 				] }) : /* @__PURE__ */ (0, react_jsx_runtime.jsxs)(react_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
 					style: {
 						...styles.rowDescription,
 						marginTop: 4
 					},
-					children: t("noCode")
+					children: irohOk ? t("noCode") : t("irohMissing")
 				}), /* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
 					style: styles.actionRow,
 					children: /* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
 						type: "button",
 						style: styles.primaryBtn,
+						disabled: !irohOk,
 						onClick: () => void openPair(),
 						children: t("pair")
 					})
