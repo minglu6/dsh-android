@@ -197,75 +197,192 @@ function installPocketNavIcon() {
 
 //#endregion
 //#region src/client/styles.ts
-/** Inline styles using only `--dsw-alias-*` tokens (no literal theme colors). */
+/**
+* Inline styles aligned with dsh settings chrome / ui-primitives tokens.
+* Does not `require` `@deepseek-ai/dsh-client-ui-primitives` (plugin hard rule);
+* geometry mirrors SettingsForm fields, DeveloperToolsRow, Button, StateDot.
+*/
 const styles = {
 	settingsRoot: {
 		display: "flex",
 		flexDirection: "column",
-		gap: 16,
-		padding: "4px 0 24px"
+		width: "100%",
+		padding: "0 0 24px"
 	},
-	sectionLabel: {
-		fontSize: 12,
-		color: "var(--dsw-alias-label-secondary)",
-		marginBottom: 8
-	},
-	muted: {
-		fontSize: 12,
-		color: "var(--dsw-alias-label-tertiary)"
-	},
-	row: {
+	settingsRow: {
 		display: "flex",
 		alignItems: "center",
 		justifyContent: "space-between",
+		gap: 24,
+		padding: "16px 0",
+		borderBottom: "0.5px solid var(--dsw-alias-border-l2)"
+	},
+	settingsBlock: {
+		display: "flex",
+		flexDirection: "column",
+		gap: 0,
+		padding: "16px 0",
+		borderBottom: "0.5px solid var(--dsw-alias-border-l2)"
+	},
+	rowTitle: {
+		fontSize: 14,
+		lineHeight: "20px",
+		color: "var(--dsw-alias-label-primary)"
+	},
+	rowDescription: {
+		marginTop: 4,
+		fontSize: 12,
+		lineHeight: "18px",
+		color: "var(--dsw-alias-label-secondary)"
+	},
+	hint: {
+		margin: 0,
+		fontSize: 12,
+		lineHeight: "18px",
+		color: "var(--dsw-alias-label-tertiary)"
+	},
+	errorText: {
+		margin: "0 0 12px",
+		fontSize: 12,
+		lineHeight: "18px",
+		color: "var(--dsw-alias-state-error-primary)"
+	},
+	valueLine: {
+		display: "inline-flex",
+		alignItems: "center",
 		gap: 10,
-		fontSize: 13
+		fontSize: 14,
+		lineHeight: "20px",
+		color: "var(--dsw-alias-label-primary)"
+	},
+	stateDotSlot: (state) => ({
+		position: "relative",
+		display: "inline-block",
+		flex: "none",
+		alignSelf: "center",
+		width: 10,
+		height: 10,
+		color: state === "done" ? "var(--dsw-alias-state-success-primary)" : state === "error" ? "var(--dsw-alias-state-error-primary)" : "var(--dsw-alias-state-idle-primary, var(--dsw-alias-label-tertiary))"
+	}),
+	stateDotCore: {
+		position: "absolute",
+		inset: "20%",
+		borderRadius: "50%",
+		background: "currentColor"
+	},
+	metaStack: {
+		display: "flex",
+		flexDirection: "column",
+		gap: 4,
+		marginTop: 10
+	},
+	metaLine: {
+		fontSize: 12,
+		lineHeight: "18px",
+		color: "var(--dsw-alias-label-tertiary)"
 	},
 	primaryBtn: {
 		appearance: "none",
+		boxSizing: "border-box",
+		display: "inline-flex",
+		alignItems: "center",
+		justifyContent: "center",
+		height: 36,
+		padding: "0 14px",
 		border: "none",
-		borderRadius: 8,
-		padding: "8px 14px",
+		borderRadius: "var(--dsw-radius-md, 8px)",
 		background: "var(--dsw-alias-button-primary-fill)",
-		color: "var(--dsw-alias-button-primary-label, var(--dsw-alias-bg-base))",
+		color: "var(--dsw-alias-label-primary-foreground, var(--dsw-alias-bg-base))",
 		cursor: "pointer",
 		font: "inherit",
-		fontSize: 13,
-		fontWeight: 500
+		fontSize: 14,
+		lineHeight: "22px"
 	},
-	ghostBtn: {
+	outlineBtn: {
 		appearance: "none",
-		border: "1px solid var(--dsw-alias-border-l2)",
-		borderRadius: 8,
-		padding: "7px 12px",
+		boxSizing: "border-box",
+		display: "inline-flex",
+		alignItems: "center",
+		justifyContent: "center",
+		height: 36,
+		padding: "0 14px",
+		border: "0.5px solid var(--dsw-alias-border-l3)",
+		borderRadius: "var(--dsw-radius-md, 8px)",
 		background: "transparent",
 		color: "var(--dsw-alias-label-primary)",
 		cursor: "pointer",
 		font: "inherit",
-		fontSize: 13
+		fontSize: 14,
+		lineHeight: "22px"
+	},
+	outlineBtnSm: {
+		appearance: "none",
+		boxSizing: "border-box",
+		display: "inline-flex",
+		alignItems: "center",
+		justifyContent: "center",
+		height: 28,
+		padding: "0 10px",
+		border: "0.5px solid var(--dsw-alias-border-l3)",
+		borderRadius: "var(--dsw-radius-sm, 6px)",
+		background: "transparent",
+		color: "var(--dsw-alias-label-primary)",
+		cursor: "pointer",
+		font: "inherit",
+		fontSize: 12,
+		lineHeight: "18px"
 	},
 	dangerBtn: {
 		appearance: "none",
+		boxSizing: "border-box",
+		display: "inline-flex",
+		alignItems: "center",
+		justifyContent: "center",
+		height: 28,
+		padding: "0 10px",
 		border: "none",
-		borderRadius: 8,
-		padding: "6px 10px",
+		borderRadius: "var(--dsw-radius-sm, 6px)",
 		background: "transparent",
 		color: "var(--dsw-alias-state-error-primary)",
 		cursor: "pointer",
 		font: "inherit",
-		fontSize: 12
+		fontSize: 12,
+		lineHeight: "18px"
 	},
 	destructiveBtn: {
 		appearance: "none",
+		boxSizing: "border-box",
+		display: "inline-flex",
+		alignItems: "center",
+		justifyContent: "center",
+		height: 36,
+		padding: "0 14px",
 		border: "none",
-		borderRadius: 8,
-		padding: "8px 14px",
+		borderRadius: "var(--dsw-radius-md, 8px)",
 		background: "var(--dsw-alias-state-error-primary)",
 		color: "var(--dsw-alias-label-primary-foreground, #fff)",
 		cursor: "pointer",
 		font: "inherit",
-		fontSize: 13,
+		fontSize: 14,
+		lineHeight: "22px",
 		fontWeight: 500
+	},
+	ghostBtn: {
+		appearance: "none",
+		boxSizing: "border-box",
+		display: "inline-flex",
+		alignItems: "center",
+		justifyContent: "center",
+		height: 36,
+		padding: "0 14px",
+		border: "0.5px solid var(--dsw-alias-border-l3)",
+		borderRadius: "var(--dsw-radius-md, 8px)",
+		background: "transparent",
+		color: "var(--dsw-alias-label-primary)",
+		cursor: "pointer",
+		font: "inherit",
+		fontSize: 14,
+		lineHeight: "22px"
 	},
 	dialogMask: {
 		position: "fixed",
@@ -280,11 +397,11 @@ const styles = {
 	},
 	dialogCard: {
 		width: "min(400px, calc(100vw - 48px))",
-		borderRadius: 12,
-		border: "1px solid var(--dsw-alias-border-l2)",
+		borderRadius: "var(--dsw-radius-panel, 12px)",
+		border: "0.5px solid var(--dsw-alias-border-l2)",
 		background: "var(--dsw-alias-bg-base)",
 		color: "var(--dsw-alias-label-primary)",
-		boxShadow: "var(--dsw-elevation-overlay, 0 12px 40px rgba(0,0,0,0.25))",
+		boxShadow: "var(--dsw-elevation-prominent, 0 12px 40px rgba(0,0,0,0.25))",
 		padding: "20px 22px 18px",
 		display: "flex",
 		flexDirection: "column",
@@ -293,7 +410,7 @@ const styles = {
 	dialogTitle: {
 		margin: 0,
 		fontSize: 16,
-		fontWeight: 600,
+		fontWeight: 500,
 		lineHeight: "24px"
 	},
 	dialogBody: {
@@ -310,60 +427,71 @@ const styles = {
 	},
 	code: {
 		fontFamily: "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace",
-		fontSize: 32,
-		letterSpacing: "0.18em",
+		fontSize: 28,
+		letterSpacing: "0.16em",
 		fontWeight: 600,
 		textAlign: "center",
-		padding: "8px 0 4px"
+		color: "var(--dsw-alias-label-primary)",
+		padding: "12px 0 4px"
 	},
 	qrWrap: {
 		display: "flex",
 		justifyContent: "center",
-		padding: "8px 0"
+		padding: "12px 0 4px"
 	},
 	qrBox: {
 		padding: 10,
-		borderRadius: 10,
+		borderRadius: "var(--dsw-radius-md, 8px)",
 		background: "#fff",
-		border: "1px solid var(--dsw-alias-border-l3)",
+		border: "0.5px solid var(--dsw-alias-border-l3)",
 		lineHeight: 0
+	},
+	actionRow: {
+		display: "flex",
+		flexWrap: "wrap",
+		gap: 8,
+		marginTop: 12
 	},
 	deviceRow: {
 		display: "flex",
 		alignItems: "center",
-		gap: 10,
-		padding: "8px 0",
-		borderTop: "1px solid var(--dsw-alias-border-l3)"
+		gap: 12,
+		padding: "16px 0",
+		borderBottom: "0.5px solid var(--dsw-alias-border-l2)"
 	},
-	dot: (online) => ({
-		flex: "none",
-		width: 8,
-		height: 8,
-		borderRadius: "50%",
-		background: online ? "var(--dsw-alias-state-success-primary)" : "var(--dsw-alias-border-l2)"
-	}),
-	statusDot: (ok) => ({
-		flex: "none",
-		width: 8,
-		height: 8,
-		borderRadius: "50%",
-		background: ok ? "var(--dsw-alias-state-success-primary)" : "var(--dsw-alias-state-error-primary)"
-	}),
-	statusLine: {
-		display: "inline-flex",
+	deviceName: {
+		fontSize: 14,
+		lineHeight: "20px",
+		color: "var(--dsw-alias-label-primary)",
+		overflow: "hidden",
+		textOverflow: "ellipsis",
+		whiteSpace: "nowrap"
+	},
+	deviceMeta: {
+		marginTop: 4,
+		fontSize: 12,
+		lineHeight: "18px",
+		color: "var(--dsw-alias-label-secondary)"
+	},
+	deviceActions: {
+		display: "flex",
 		alignItems: "center",
-		gap: 8
+		gap: 8,
+		flex: "none"
 	},
 	input: {
+		boxSizing: "border-box",
 		flex: 1,
 		minWidth: 0,
-		border: "1px solid var(--dsw-alias-border-l2)",
-		borderRadius: 6,
-		padding: "6px 8px",
-		background: "var(--dsw-alias-bg-base)",
+		height: 34,
+		border: "0.5px solid var(--dsw-alias-border-l4)",
+		borderRadius: "var(--dsw-radius-md, 8px)",
+		padding: "0 12px",
+		background: "var(--dsw-alias-bg-layer-3, var(--dsw-alias-bg-base))",
 		color: "var(--dsw-alias-label-primary)",
 		font: "inherit",
-		fontSize: 13
+		fontSize: 13,
+		lineHeight: "1.5"
 	}
 };
 
@@ -1339,6 +1467,14 @@ function tr(t, key, vars) {
 	return Object.entries(vars).reduce((s, [k, v]) => s.replaceAll(`{${k}}`, String(v)), out === key ? String(zhFallback[key] ?? key) : out);
 }
 const zhFallback = { revokeBody: "将撤销「{name}」。之后该手机需重新配对才能连接。" };
+/** Visual twin of primitives `StateDot` (10px slot / 6px core); no package require. */
+function StatusDot({ state }) {
+	return /* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
+		style: styles.stateDotSlot(state),
+		"aria-hidden": "true",
+		children: /* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", { style: styles.stateDotCore })
+	});
+}
 function DeviceItem({ device, t, api, onChanged }) {
 	const [editing, setEditing] = (0, react.useState)(false);
 	const [name, setName] = (0, react.useState)(device.name);
@@ -1373,10 +1509,7 @@ function DeviceItem({ device, t, api, onChanged }) {
 	return /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
 		style: styles.deviceRow,
 		children: [
-			/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
-				style: styles.dot(device.online),
-				title: device.online ? t("online") : t("offline")
-			}),
+			/* @__PURE__ */ (0, react_jsx_runtime.jsx)(StatusDot, { state: device.online ? "done" : "idle" }),
 			/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
 				style: {
 					flex: 1,
@@ -1396,15 +1529,10 @@ function DeviceItem({ device, t, api, onChanged }) {
 					},
 					autoFocus: true
 				}) : /* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
-					style: {
-						overflow: "hidden",
-						textOverflow: "ellipsis",
-						whiteSpace: "nowrap",
-						fontSize: 13
-					},
+					style: styles.deviceName,
 					children: device.name
 				}), /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
-					style: styles.muted,
+					style: styles.deviceMeta,
 					children: [
 						device.online ? t("online") : t("offline"),
 						" · ",
@@ -1414,34 +1542,37 @@ function DeviceItem({ device, t, api, onChanged }) {
 					]
 				})]
 			}),
-			editing ? /* @__PURE__ */ (0, react_jsx_runtime.jsxs)(react_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
-				type: "button",
-				style: styles.ghostBtn,
-				disabled: busy,
-				onClick: () => void save(),
-				children: t("renameSave")
-			}), /* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
-				type: "button",
-				style: styles.ghostBtn,
-				disabled: busy,
-				onClick: () => {
-					setEditing(false);
-					setName(device.name);
-				},
-				children: t("renameCancel")
-			})] }) : /* @__PURE__ */ (0, react_jsx_runtime.jsxs)(react_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
-				type: "button",
-				style: styles.ghostBtn,
-				disabled: busy,
-				onClick: () => setEditing(true),
-				children: t("rename")
-			}), /* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
-				type: "button",
-				style: styles.dangerBtn,
-				disabled: busy,
-				onClick: () => setConfirmOpen(true),
-				children: t("revoke")
-			})] }),
+			/* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
+				style: styles.deviceActions,
+				children: editing ? /* @__PURE__ */ (0, react_jsx_runtime.jsxs)(react_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
+					type: "button",
+					style: styles.outlineBtnSm,
+					disabled: busy,
+					onClick: () => void save(),
+					children: t("renameSave")
+				}), /* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
+					type: "button",
+					style: styles.outlineBtnSm,
+					disabled: busy,
+					onClick: () => {
+						setEditing(false);
+						setName(device.name);
+					},
+					children: t("renameCancel")
+				})] }) : /* @__PURE__ */ (0, react_jsx_runtime.jsxs)(react_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
+					type: "button",
+					style: styles.outlineBtnSm,
+					disabled: busy,
+					onClick: () => setEditing(true),
+					children: t("rename")
+				}), /* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
+					type: "button",
+					style: styles.dangerBtn,
+					disabled: busy,
+					onClick: () => setConfirmOpen(true),
+					children: t("revoke")
+				})] })
+			}),
 			/* @__PURE__ */ (0, react_jsx_runtime.jsx)(ConfirmDialog, {
 				open: confirmOpen,
 				title: t("revokeTitle"),
@@ -1514,154 +1645,173 @@ function ManagePanel({ t, api }) {
 	};
 	const pairing = status?.pairing;
 	const expires = pairing?.open ? Math.max(0, pairing.expiresInSec ?? 0) : 0;
+	const connectorOk = Boolean(status?.running) && !error;
 	return /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
 		style: styles.settingsRoot,
 		children: [
 			loading && !status ? /* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
-				style: styles.muted,
+				style: styles.hint,
 				children: t("loading")
 			}) : null,
 			error ? /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
-				style: {
-					...styles.muted,
-					color: "var(--dsw-alias-state-error-primary)"
-				},
+				style: styles.errorText,
 				children: [
 					t("loadFailed"),
 					": ",
 					error
 				]
 			}) : null,
-			status ? /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("section", { children: [
-				/* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
-					style: styles.sectionLabel,
-					children: t("statusTitle")
-				}),
-				/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
-					style: styles.row,
-					children: [/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("span", {
-						style: styles.statusLine,
-						children: [status.running ? t("statusRunning") : t("statusStopped"), /* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
-							style: styles.statusDot(status.running && !error),
-							"aria-hidden": "true"
-						})]
-					}), /* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
-						type: "button",
-						style: styles.ghostBtn,
-						onClick: () => void refresh(),
-						children: t("refresh")
-					})]
-				}),
-				/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
+			status ? /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
+				style: {
+					...styles.settingsRow,
+					alignItems: "flex-start"
+				},
+				children: [/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
 					style: {
-						...styles.muted,
-						marginTop: 6
+						flex: 1,
+						minWidth: 0
 					},
 					children: [
-						t("listen"),
-						": ",
-						status.listen.map((l) => l.address).join(", ") || `${status.host}:${status.port}`
-					]
-				}),
-				/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
-					style: styles.muted,
-					children: [
-						t("version"),
-						": ",
-						status.version
-					]
-				})
-			] }) : null,
-			/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("section", { children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
-				style: styles.sectionLabel,
-				children: t("code")
-			}), pairing?.open && pairing.code ? /* @__PURE__ */ (0, react_jsx_runtime.jsxs)(react_jsx_runtime.Fragment, { children: [
-				/* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
-					style: styles.code,
-					children: pairing.code
-				}),
-				/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
-					style: {
-						...styles.muted,
-						textAlign: "center"
-					},
-					children: [
-						t("expiresIn", { n: expires }),
-						" · ",
-						t("expiresMin", { n: Math.max(1, Math.round(expires / 60)) })
-					]
-				}),
-				pairing.uri ? /* @__PURE__ */ (0, react_jsx_runtime.jsxs)(react_jsx_runtime.Fragment, { children: [
-					/* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
-						style: styles.qrWrap,
-						children: /* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
-							style: styles.qrBox,
-							dangerouslySetInnerHTML: { __html: qrSvg(pairing.uri, 168) }
+						/* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
+							style: styles.rowTitle,
+							children: t("statusTitle")
+						}),
+						/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
+							style: {
+								...styles.valueLine,
+								marginTop: 6
+							},
+							children: [status.running ? t("statusRunning") : t("statusStopped"), /* @__PURE__ */ (0, react_jsx_runtime.jsx)(StatusDot, { state: connectorOk ? "done" : "error" })]
+						}),
+						/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
+							style: styles.metaStack,
+							children: [/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
+								style: styles.metaLine,
+								children: [
+									t("listen"),
+									": ",
+									status.listen.map((l) => l.address).join(", ") || `${status.host}:${status.port}`
+								]
+							}), /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
+								style: styles.metaLine,
+								children: [
+									t("version"),
+									": ",
+									status.version
+								]
+							})]
 						})
-					}),
+					]
+				}), /* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
+					type: "button",
+					style: styles.outlineBtnSm,
+					onClick: () => void refresh(),
+					children: t("refresh")
+				})]
+			}) : null,
+			/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
+				style: styles.settingsBlock,
+				children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
+					style: styles.rowTitle,
+					children: t("code")
+				}), pairing?.open && pairing.code ? /* @__PURE__ */ (0, react_jsx_runtime.jsxs)(react_jsx_runtime.Fragment, { children: [
 					/* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
-						style: {
-							...styles.muted,
-							textAlign: "center"
-						},
-						children: t("scanHint")
+						style: styles.code,
+						children: pairing.code
 					}),
 					/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
 						style: {
-							display: "flex",
-							gap: 8,
-							justifyContent: "center",
-							marginTop: 8
+							...styles.hint,
+							textAlign: "center"
 						},
 						children: [
-							/* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
-								type: "button",
-								style: styles.ghostBtn,
-								onClick: () => void copyUri(),
-								children: copied ? t("copied") : t("copy")
-							}),
-							/* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
-								type: "button",
-								style: styles.ghostBtn,
-								onClick: () => void closePair(),
-								children: t("pairClose")
-							}),
-							/* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
-								type: "button",
-								style: styles.primaryBtn,
-								onClick: () => void openPair(),
-								children: t("pairAgain")
-							})
+							t("expiresIn", { n: expires }),
+							" · ",
+							t("expiresMin", { n: Math.max(1, Math.round(expires / 60)) })
 						]
+					}),
+					pairing.uri ? /* @__PURE__ */ (0, react_jsx_runtime.jsxs)(react_jsx_runtime.Fragment, { children: [
+						/* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
+							style: styles.qrWrap,
+							children: /* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
+								style: styles.qrBox,
+								dangerouslySetInnerHTML: { __html: qrSvg(pairing.uri, 168) }
+							})
+						}),
+						/* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
+							style: {
+								...styles.rowDescription,
+								textAlign: "center"
+							},
+							children: t("scanHint")
+						}),
+						/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
+							style: {
+								...styles.actionRow,
+								justifyContent: "center"
+							},
+							children: [
+								/* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
+									type: "button",
+									style: styles.outlineBtn,
+									onClick: () => void copyUri(),
+									children: copied ? t("copied") : t("copy")
+								}),
+								/* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
+									type: "button",
+									style: styles.outlineBtn,
+									onClick: () => void closePair(),
+									children: t("pairClose")
+								}),
+								/* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
+									type: "button",
+									style: styles.primaryBtn,
+									onClick: () => void openPair(),
+									children: t("pairAgain")
+								})
+							]
+						})
+					] }) : null
+				] }) : /* @__PURE__ */ (0, react_jsx_runtime.jsxs)(react_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
+					style: {
+						...styles.rowDescription,
+						marginTop: 4
+					},
+					children: t("noCode")
+				}), /* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
+					style: styles.actionRow,
+					children: /* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
+						type: "button",
+						style: styles.primaryBtn,
+						onClick: () => void openPair(),
+						children: t("pair")
 					})
-				] }) : null
-			] }) : /* @__PURE__ */ (0, react_jsx_runtime.jsxs)(react_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
-				style: styles.muted,
-				children: t("noCode")
-			}), /* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
-				style: { marginTop: 10 },
-				children: /* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
-					type: "button",
-					style: styles.primaryBtn,
-					onClick: () => void openPair(),
-					children: t("pair")
-				})
-			})] })] }),
-			/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("section", { children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
-				style: styles.sectionLabel,
-				children: t("devices")
-			}), (status?.devices.length ?? 0) === 0 ? /* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
-				style: styles.muted,
-				children: t("empty")
-			}) : status.devices.map((d) => /* @__PURE__ */ (0, react_jsx_runtime.jsx)(DeviceItem, {
-				device: d,
-				t,
-				api,
-				onChanged: (devices) => setStatus((s) => s ? {
-					...s,
-					devices
-				} : s)
-			}, d.id))] })
+				})] })]
+			}),
+			/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
+				style: styles.settingsBlock,
+				children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
+					style: styles.rowTitle,
+					children: t("devices")
+				}), (status?.devices.length ?? 0) === 0 ? /* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
+					style: {
+						...styles.rowDescription,
+						marginTop: 8
+					},
+					children: t("empty")
+				}) : /* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
+					style: { marginTop: 4 },
+					children: status.devices.map((d) => /* @__PURE__ */ (0, react_jsx_runtime.jsx)(DeviceItem, {
+						device: d,
+						t,
+						api,
+						onChanged: (devices) => setStatus((s) => s ? {
+							...s,
+							devices
+						} : s)
+					}, d.id))
+				})]
+			})
 		]
 	});
 }
