@@ -34,6 +34,18 @@ fun prettyJson(s: String): String = runCatching {
 
 fun seconds(ms: Long) = "${(ms / 1000).coerceAtLeast(1)}"
 
+/** Compact token count for trajectory / stats columns (`17730` → `17.7k`). */
+fun kfmt(n: Long) = if (n >= 1000) "${"%.1f".format(n / 1000.0)}k" else "$n"
+
+/**
+ * Elapsed wall time for the trajectory time column (desktop duration style with `s` suffix).
+ * Under 10s: two decimals; otherwise one (`2.20s`, `14.6s`).
+ */
+fun formatElapsed(ms: Long): String {
+    val seconds = ms / 1000.0
+    return if (ms < 10_000) "${"%.2f".format(seconds)}s" else "${"%.1f".format(seconds)}s"
+}
+
 fun footerText(turns: Int, steps: Int, hit: Int?) = buildString {
     append("$turns 轮 $steps 步")
     if (hit != null) append(" · 缓存命中 $hit%")

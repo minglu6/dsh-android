@@ -267,7 +267,6 @@ fun FeedbackSheet(onDismiss: () -> Unit) {
 }
 
 @Composable private fun Stat(k: String, v: String) = Column { Text(v, fontSize = 17.sp, fontWeight = FontWeight.Medium); Text(k, fontSize = 12.sp, color = T.Text3) }
-private fun kfmt(n: Long) = if (n >= 1000) "${"%.1f".format(n / 1000.0)}k" else "$n"
 
 @Composable
 fun PanelSheet(cwd: String?, onDismiss: () -> Unit, onFiles: () -> Unit, onTerminal: () -> Unit, onJobs: () -> Unit) {

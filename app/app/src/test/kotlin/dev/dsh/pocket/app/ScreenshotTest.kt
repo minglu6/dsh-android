@@ -66,12 +66,22 @@ class ScreenshotTest {
         usage = Usage(3, 11, 10_000, 9_600, 800),
         items = listOf(
             Item.User("u", "给 pi-rpc-bridge 加上 token 轮换，旧 token 宽限 5 分钟"),
-            Item.Reasoning("r", "先看握手逻辑。", 8000, false),
-            Item.Tool("t1", "c1", "read", """{"path":"bridge/pi-rpc-bridge.mjs"}""", ToolStatus.Ok, "ok"),
-            Item.Tool("t2", "c2", "grep", """{"pattern":"auth"}""", ToolStatus.Ok, "6 matches"),
-            Item.Text("x", "握手在 `handleAuth()` 里一次性比对。我会改成同时接受当前 token 和宽限期内的上一个：\n```js\nconst valid = [current, previous]\n  .filter(t => t && t.expiresAt > now)\n  .some(t => safeEqual(t.value, got))\n```", false),
+            Item.Reasoning("r10", "先看握手逻辑。", 8000, false),
+            Item.Text("t10", "握手在 `handleAuth()` 里一次性比对。我会改成同时接受当前 token 和宽限期内的上一个：\n```js\nconst valid = [current, previous]\n  .filter(t => t && t.expiresAt > now)\n  .some(t => safeEqual(t.value, got))\n```", false),
+            Item.Tool("t1", "c1", "read", """{"path":"bridge/pi-rpc-bridge.mjs"}""", ToolStatus.Ok, "ok", startedAt = 0, endedAt = 40),
+            Item.Tool("t2", "c2", "grep", """{"pattern":"auth"}""", ToolStatus.Ok, "6 matches", startedAt = 40, endedAt = 160),
             Item.Tool("t3", "c3", "edit", """{"path":"bridge/pi-rpc-bridge.mjs"}""", ToolStatus.Running),
             Item.Tool("t4", "c4", "bash", """{"command":"npm install --save-dev vitest@latest && npx vitest run bridge/"}""", ToolStatus.AwaitingApproval),
+        ),
+        steps = listOf(
+            StepRecord(
+                seq = 10, turn = 1, step = 1, stepStartTime = 0, messageTime = 8100,
+                replyText = "握手在 `handleAuth()` 里一次性比对。我会改成同时接受当前 token 和宽限期内的上一个：\n```js\nconst valid = [current, previous]\n  .filter(t => t && t.expiresAt > now)\n  .some(t => safeEqual(t.value, got))\n```",
+                reasoningText = "先看握手逻辑。",
+                usage = StepUsage(inputTokens = 18_200, outputTokens = 431, reasoningTokens = 120),
+                provider = "deepseek", model = "deepseek-v4.1-flash",
+                toolCallIds = listOf("c1", "c2", "c3", "c4"),
+            ),
         ),
     )
 

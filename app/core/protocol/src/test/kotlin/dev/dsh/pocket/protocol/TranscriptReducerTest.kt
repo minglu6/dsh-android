@@ -14,14 +14,17 @@ class TranscriptReducerTest {
         assertEquals("问候", r.title)
         assertEquals(96, r.usage.cacheHitPercent)
         assertTrue(r.running)
-        r.apply(ev(3, "assistant/message", """{"turn":1,"step":1,"stream":[{"type":"reasoning-chunks","time0":100,"index":0,"dt":[0,500,2500],"texts":["a","b","c"]}],
-            "message":{"content":[{"type":"reasoning","text":"think"},{"type":"text","text":"hello"},{"type":"tool-call","id":"c1","name":"bash","arguments":"{\"cmd\":\"ls\"}"}]}}"""))
-        r.apply(ev(4, "tool/call", """{"callId":"c1","name":"bash","arguments":"{\"cmd\":\"ls\"}"}"""))
-        r.apply(ev(5, "approval/asked", """{"id":"a","toolName":"bash","callId":"c1"}"""))
+        r.apply(ev(3, "step/start", """{"turn":1,"step":1}"""))
+        r.apply(ev(4, "assistant/message", """{"turn":1,"step":1,"stream":[{"type":"reasoning-chunks","time0":100,"index":0,"dt":[0,500,2500],"texts":["a","b","c"]}],
+            "usage":{"inputTokens":100,"cacheReadTokens":50,"cacheWriteTokens":10,"outputTokens":20,"reasoningTokens":5},
+            "message":{"source":{"provider":"deepseek","model":"deepseek-v4.1-flash"},
+            "content":[{"type":"reasoning","text":"think"},{"type":"text","text":"hello"},{"type":"tool-call","id":"c1","name":"bash","arguments":"{\"cmd\":\"ls\"}"}]}}"""))
+        r.apply(ev(5, "tool/call", """{"callId":"c1","name":"bash","arguments":"{\"cmd\":\"ls\"}"}"""))
+        r.apply(ev(6, "approval/asked", """{"id":"a","toolName":"bash","callId":"c1"}"""))
         assertEquals(ToolStatus.AwaitingApproval, (r.items().last() as Item.Tool).status)
-        r.apply(ev(6, "approval/decided", """{"id":"a","outcome":"allowed-once"}"""))
-        r.apply(ev(7, "tool/result", """{"message":{"toolCallId":"c1","content":[{"type":"text","text":"a.txt"}]}}"""))
-        r.apply(ev(8, "turn/end", "{}"))
+        r.apply(ev(7, "approval/decided", """{"id":"a","outcome":"allowed-once"}"""))
+        r.apply(ev(8, "tool/result", """{"message":{"toolCallId":"c1","content":[{"type":"text","text":"a.txt"}]}}"""))
+        r.apply(ev(9, "turn/end", "{}"))
         val items = r.items()
         assertEquals(listOf("User", "Reasoning", "Text", "Tool"), items.map { it::class.simpleName })
         assertEquals(3000L, (items[1] as Item.Reasoning).durationMs)
@@ -29,8 +32,18 @@ class TranscriptReducerTest {
         assertEquals(ToolStatus.Ok, tool.status); assertEquals("a.txt", tool.result)
         assertFalse(r.running)
         assertEquals(1, r.usage.turns); assertEquals(1, r.usage.steps)
+        val step = r.stepRecords().single()
+        assertEquals(1, step.turn); assertEquals(1, step.step)
+        assertEquals(1003L, step.stepStartTime) // ev() times are 1000+seq
+        assertEquals(1004L, step.messageTime)
+        assertEquals("hello", step.replyText); assertEquals("think", step.reasoningText)
+        assertEquals(100L, step.usage.inputTokens); assertEquals(50L, step.usage.cacheReadTokens)
+        assertEquals(10L, step.usage.cacheWriteTokens); assertEquals(20L, step.usage.outputTokens)
+        assertEquals(5L, step.usage.reasoningTokens)
+        assertEquals("deepseek", step.provider); assertEquals("deepseek-v4.1-flash", step.model)
+        assertEquals(listOf("c1"), step.toolCallIds)
         // duplicate/old seq ignored
-        r.apply(ev(7, "user/message", """{"content":[{"type":"text","text":"dup"}]}"""))
+        r.apply(ev(8, "user/message", """{"content":[{"type":"text","text":"dup"}]}"""))
         assertEquals(4, r.items().size)
     }
 
