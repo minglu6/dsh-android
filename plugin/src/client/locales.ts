@@ -4,7 +4,9 @@ export const zh = {
   statusTitle: '连接器状态',
   statusRunning: '运行中',
   statusStopped: '未运行',
-  listen: '监听地址',
+  nodeId: '节点',
+  irohReady: 'iroh 已就绪',
+  irohMissing: 'iroh 未就绪 — 远程配对不可用',
   version: '版本',
   pair: '开始配对',
   pairAgain: '重新配对',
@@ -13,8 +15,8 @@ export const zh = {
   code: '配对码',
   expiresIn: '{n} 秒后过期',
   expiresMin: '约 {n} 分钟有效',
-  scanHint: '用手机 App 扫描二维码，或手动输入配对码',
-  uriHint: '配对链接',
+  scanHint: '用手机扫码，或粘贴下方配对串',
+  uriHint: '配对串',
   copy: '复制',
   copied: '已复制',
   devices: '已配对设备',
@@ -34,7 +36,7 @@ export const zh = {
   loadFailed: '加载失败',
   refresh: '刷新',
   close: '关闭',
-  noCode: '点击「开始配对」生成 6 位配对码',
+  noCode: '点击「开始配对」生成二维码与配对串',
 } as const
 
 export const en = {
@@ -43,7 +45,9 @@ export const en = {
   statusTitle: 'Connector status',
   statusRunning: 'Running',
   statusStopped: 'Stopped',
-  listen: 'Listen address',
+  nodeId: 'Node',
+  irohReady: 'iroh ready',
+  irohMissing: 'iroh not ready — remote pairing unavailable',
   version: 'Version',
   pair: 'Start pairing',
   pairAgain: 'Pair again',
@@ -52,8 +56,8 @@ export const en = {
   code: 'Pairing code',
   expiresIn: 'Expires in {n}s',
   expiresMin: 'Valid for about {n} min',
-  scanHint: 'Scan the QR with the phone app, or enter the code',
-  uriHint: 'Pairing link',
+  scanHint: 'Scan the QR, or paste the pairing string on the phone',
+  uriHint: 'Pairing string',
   copy: 'Copy',
   copied: 'Copied',
   devices: 'Paired devices',
@@ -73,7 +77,7 @@ export const en = {
   loadFailed: 'Failed to load',
   refresh: 'Refresh',
   close: 'Close',
-  noCode: 'Click “Start pairing” for a 6-digit code',
+  noCode: 'Click “Start pairing” for a QR and pairing string',
 } as const
 
 export type PocketLocaleKey = keyof typeof zh

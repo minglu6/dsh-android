@@ -45,14 +45,11 @@ class PocketClient(
     /** Live route from the active transport (iroh may upgrade relay→direct). */
     val route: Route? get() = transport?.route
 
-    /** Connect over WebSocket (Tailscale / LAN). */
-    suspend fun connect(url: String, auth: Auth, timeoutMs: Long = 10_000): HelloResult {
-        val host = url.removePrefix("ws://").removePrefix("wss://").substringBefore('/').substringBeforeLast(':')
-            .removePrefix("[").removeSuffix("]")
-        return connect(WsTransport.factory(url, host), auth, timeoutMs)
-    }
+    /** Connect over loopback WebSocket (dev/tests only). */
+    suspend fun connect(url: String, auth: Auth, timeoutMs: Long = 10_000): HelloResult =
+        connect(listOf(WsTransport.factory(url)), auth, timeoutMs)
 
-    /** Connect using an ordered list of transports (WS then iroh). */
+    /** Connect using an ordered list of transports (iroh first; optional loopback WS). */
     suspend fun connect(factories: List<TransportFactory>, auth: Auth, timeoutMs: Long = 10_000): HelloResult =
         withTimeout(timeoutMs) {
             close()
@@ -185,10 +182,7 @@ class PocketClient(
     }
 
     companion object {
-        /**
-         * Always direct: the desktop is reached over Tailscale/LAN, and a system HTTP proxy (e.g. a phone's
-         * Clash/VPN proxy) can't route 100.x/192.168.x and just drops the upgrade ("unexpected end of stream").
-         */
+        /** Loopback WS must bypass system HTTP proxies that break local upgrades. */
         fun defaultHttp(): OkHttpClient = OkHttpClient.Builder()
             .proxy(java.net.Proxy.NO_PROXY)
             .connectTimeout(8, TimeUnit.SECONDS)

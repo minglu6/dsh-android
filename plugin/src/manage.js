@@ -5,13 +5,18 @@ import { fileURLToPath } from 'node:url'
 const PKG = JSON.parse(readFileSync(join(dirname(fileURLToPath(import.meta.url)), '..', 'package.json'), 'utf8'))
 
 /**
- * Build a phone-side deep link for the active pairing window.
- * `n` (iroh node id) is optional for backward compatibility with older phones.
+ * Phone QR / deep link — pure iroh (tether-style). No host/port.
+ * `dshpocket://pair?n=<nodeId>&c=<code>`
  */
-export function pairingUri({ host, port, code, nodeId }) {
-  let uri = `dshpocket://pair?h=${encodeURIComponent(`${host}:${port}`)}&c=${encodeURIComponent(code)}`
-  if (nodeId) uri += `&n=${encodeURIComponent(nodeId)}`
-  return uri
+export function pairingUri({ code, nodeId }) {
+  if (!nodeId || !code) return undefined
+  return `dshpocket://pair?n=${encodeURIComponent(nodeId)}&c=${encodeURIComponent(code)}`
+}
+
+/** Pasteable one-liner, same shape as dsh-tether: `<nodeId>#<code>`. */
+export function pairingString({ code, nodeId }) {
+  if (!nodeId || !code) return undefined
+  return `${nodeId}#${code}`
 }
 
 /**
@@ -25,12 +30,41 @@ export function createManageApi({ host, port, devices, pairing, server, openPair
     return devices.list().map((d) => ({ ...d, online: online.has(d.id) }))
   }
   const enrichPairing = (status) => {
-    if (!status.open || !status.code) return status
+    // `pairing.open()` returns {code,expiresInSec} without `open`; status() includes open:true.
+    const code = status?.code
+    if (!code) return status?.open ? status : { open: false }
     const n = nodeId()
-    return { ...status, host, port, nodeId: n || undefined, uri: pairingUri({ host, port, code: status.code, nodeId: n }) }
+    if (!n) {
+      return {
+        open: true,
+        ...status,
+        code,
+        nodeId: undefined,
+        uri: undefined,
+        pairingString: undefined,
+        irohReady: false,
+        error: 'iroh-not-ready',
+      }
+    }
+    return {
+      open: true,
+      ...status,
+      code,
+      nodeId: n,
+      uri: pairingUri({ code, nodeId: n }),
+      pairingString: pairingString({ code, nodeId: n }),
+      irohReady: true,
+    }
   }
   return {
-    openPairing,
+    openPairing: () => {
+      const n = nodeId()
+      if (!n) {
+        throw new Error('iroh sidecar is not ready — cannot open remote pairing')
+      }
+      openPairing()
+      return enrichPairing(pairing.status())
+    },
     closePairing: () => { pairing.close(); return { open: false } },
     pairingStatus: () => enrichPairing(pairing.status()),
     listDevices: withOnline,
@@ -41,13 +75,16 @@ export function createManageApi({ host, port, devices, pairing, server, openPair
       const listening = addr !== null
       const listenHost = listening && typeof addr === 'object' ? addr.address : host
       const listenPort = listening && typeof addr === 'object' ? addr.port : port
+      const n = nodeId()
       return {
-        running: listening,
+        running: Boolean(n) || listening,
         version: PKG.version,
         plugin: PKG.name,
+        // Loopback WS is internal/dev only — still reported for diagnostics.
         host: listenHost,
         port: listenPort,
-        nodeId: nodeId(),
+        nodeId: n,
+        irohReady: Boolean(n),
         listen: listening
           ? [{ host: listenHost, port: listenPort, address: typeof addr === 'string' ? addr : `${listenHost}:${listenPort}` }]
           : [],

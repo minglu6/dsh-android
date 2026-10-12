@@ -10,7 +10,7 @@ import { loadOrCreateToken } from './src/token.js'
 import { zipSync, strToU8 } from 'fflate'
 import { permissionOps, presetOps, commandOps, filesOps, jobsOps, exportOps, terminalOps } from './src/extra-ops.js'
 import { registerPairRoute } from './src/web-route.js'
-import { createManageApi, pairingUri } from './src/manage.js'
+import { createManageApi, pairingUri, pairingString } from './src/manage.js'
 import { startIrohSidecar } from './src/iroh.js'
 
 export const name = 'dsh-plugin-pocket'
@@ -33,6 +33,7 @@ export function apply(ctx, config = {}) {
   const devices = createDeviceStore({ dataDir, ownerToken: token })
   const pairing = createPairing()
   const listeners = new Set()
+  // Loopback WS is internal/dev only — never advertise a Tailscale/LAN bind by default.
   const host = config.host ?? '127.0.0.1'
   const port = config.port ?? 7690
   const server = createPocketServer({
@@ -52,10 +53,12 @@ export function apply(ctx, config = {}) {
   let nodeId = null
 
   const openPairing = () => {
+    if (!nodeId) throw new Error('iroh sidecar is not ready — cannot open remote pairing')
     const w = pairing.open()
-    const uri = pairingUri({ host, port, code: w.code, nodeId })
-    log(`pairing code ${w.code} (valid ${Math.round(w.expiresInSec / 60)} min) — ${uri}`)
-    return { ...w, host, port, nodeId, uri }
+    const uri = pairingUri({ code: w.code, nodeId })
+    const line = pairingString({ code: w.code, nodeId })
+    log(`pairing string (${Math.round(w.expiresInSec / 60)} min): ${line}`)
+    return { ...w, nodeId, uri, pairingString: line }
   }
   const manage = createManageApi({
     host, port, devices, pairing, server, openPairing,
@@ -76,11 +79,7 @@ export function apply(ctx, config = {}) {
 
   ctx.effect(() => {
     const start = async () => {
-      // WS listen first so Tailscale/LAN pairing works even if iroh setup is slow/missing.
-      const addr = await server.listen()
-      log(`listening on ws://${addr}`)
-      log(created ? `new owner token written to ${path}: ${token}` : `owner token: ${path}`)
-
+      // Start iroh first — remote phones connect only over P2P/relay.
       if (config.iroh !== false) {
         iroh = await startIrohSidecar({
           server,
@@ -90,7 +89,6 @@ export function apply(ctx, config = {}) {
         })
         if (iroh) {
           try {
-            // First cargo build can exceed 15s; give discovery time too.
             nodeId = await Promise.race([
               iroh.endpointId,
               new Promise((_, rej) => setTimeout(() => rej(new Error('iroh ready timeout')), 60_000)),
@@ -104,9 +102,19 @@ export function apply(ctx, config = {}) {
         }
       }
 
-      if (config.pair || devices.list().length === 0) openPairing()
+      // Loopback WS for local tooling / tests (not user-facing remote path).
+      const addr = await server.listen()
+      log(`local ws://${addr} (dev/loopback only)`)
+      log(created ? `new owner token written to ${path}: ${token}` : `owner token: ${path}`)
+      if (!nodeId) {
+        log('iroh not ready — remote phone pairing unavailable until pocket-host starts')
+      }
+
+      if (nodeId && (config.pair || devices.list().length === 0)) {
+        try { openPairing() } catch (e) { console.error('[pocket]', e.message ?? e) }
+      }
     }
-    start().catch((error) => console.error('[pocket] listen failed:', error))
+    start().catch((error) => console.error('[pocket] start failed:', error))
     return () => {
       void iroh?.close()
       void server.close()

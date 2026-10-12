@@ -8,16 +8,15 @@ import java.util.concurrent.atomic.AtomicBoolean
 
 /** How the pocket frames are reaching the desktop. */
 enum class Route {
-    WsTailscale,
-    WsLan,
+    /** Loopback / local-dev WebSocket only — not user-facing. */
+    WsLocal,
     IrohDirect,
     IrohRelay,
     ;
 
     /** Short label for the connections chip (no emoji). */
     val label: String get() = when (this) {
-        WsTailscale -> "Tailscale"
-        WsLan -> "LAN"
+        WsLocal -> "local"
         IrohDirect -> "iroh"
         IrohRelay -> "iroh relay"
     }
@@ -44,8 +43,8 @@ fun interface TransportFactory {
 }
 
 /**
- * Connection order: Tailscale/direct WS first, then iroh (path upgrades direct→relay).
- * Returns the first factory that opens successfully.
+ * Try factories in order; return the first that opens.
+ * Primary path is iroh; WS is only used for loopback/dev.
  */
 suspend fun dialInOrder(factories: List<TransportFactory>): FrameTransport {
     require(factories.isNotEmpty()) { "no transports" }
@@ -62,13 +61,10 @@ suspend fun dialInOrder(factories: List<TransportFactory>): FrameTransport {
     throw last ?: PocketError("transport", "all transports failed")
 }
 
-fun classifyWsRoute(host: String): Route {
-    if (host.endsWith(".ts.net")) return Route.WsTailscale
-    val p = host.split('.').mapNotNull { it.toIntOrNull() }
-    return if (p.size == 4 && p[0] == 100 && p[1] in 64..127) Route.WsTailscale else Route.WsLan
-}
+fun isLoopbackHost(host: String): Boolean =
+    host == "127.0.0.1" || host == "localhost" || host == "::1" || host.equals("0:0:0:0:0:0:0:1", ignoreCase = true)
 
-/** OkHttp WebSocket frame transport. */
+/** OkHttp WebSocket frame transport (loopback/dev only). */
 class WsTransport private constructor(
     private val url: String,
     override val route: Route,
@@ -101,7 +97,7 @@ class WsTransport private constructor(
     companion object {
         suspend fun open(
             url: String,
-            routeHint: Route,
+            routeHint: Route = Route.WsLocal,
             http: OkHttpClient = PocketClient.defaultHttp(),
             timeoutMs: Long = 8_000,
         ): WsTransport = withTimeout(timeoutMs) {
@@ -123,24 +119,22 @@ class WsTransport private constructor(
             t
         }
 
-        fun factory(url: String, host: String): TransportFactory = TransportFactory {
-            open(url, classifyWsRoute(host))
+        fun factory(url: String): TransportFactory = TransportFactory {
+            open(url, Route.WsLocal)
         }
     }
 }
 
 /**
- * Builds the ordered transport list for a profile.
- * [irohFactory] is omitted when null (native lib missing or no node id).
+ * Ordered transports for a profile: **iroh first**, then loopback WS if configured for tests.
  */
 fun transportPlan(
-    host: String,
-    port: Int,
     nodeId: String?,
     irohFactory: TransportFactory?,
+    loopbackWsUrl: String? = null,
 ): List<TransportFactory> {
-    val url = "ws://${if (':' in host) "[$host]" else host}:$port"
-    val list = mutableListOf(WsTransport.factory(url, host))
-    if (nodeId != null && irohFactory != null) list += irohFactory
+    val list = mutableListOf<TransportFactory>()
+    if (!nodeId.isNullOrBlank() && irohFactory != null) list += irohFactory
+    if (!loopbackWsUrl.isNullOrBlank()) list += WsTransport.factory(loopbackWsUrl)
     return list
 }

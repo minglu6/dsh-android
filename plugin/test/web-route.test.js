@@ -51,11 +51,15 @@ test('management routes: status, pair, rename, revoke, Origin fence', async (t) 
   t.after(() => server.close())
   const host = '127.0.0.1'
   const port = Number(String(addr).split(':').pop())
+  const NODE = 'abcdefghijklmnopqrstuvwxyz012345'
   const openPairing = () => {
     const w = pairing.open()
-    return { ...w, host, port, uri: `dshpocket://pair?h=${host}:${port}&c=${w.code}` }
+    return { ...w, nodeId: NODE }
   }
-  const manage = createManageApi({ host, port, devices, pairing, server, openPairing })
+  const manage = createManageApi({
+    host, port, devices, pairing, server, openPairing,
+    getNodeId: () => NODE,
+  })
 
   // Minimal fake webServer.register that mounts onto a real http server
   const routes = new Map()
@@ -91,10 +95,13 @@ test('management routes: status, pair, rename, revoke, Origin fence', async (t) 
 
   const pr = await (await fetch(`${base}/pocket/pair`, { method: 'POST' })).json()
   assert.match(pr.code, /^\d{6}$/)
-  assert.ok(pr.uri.includes(pr.code))
+  assert.ok(pr.uri?.includes(pr.code))
+  assert.ok(pr.uri?.includes('n='))
+  assert.equal(pr.pairingString, `${NODE}#${pr.code}`)
   const get = await (await fetch(`${base}/pocket/pair`)).json()
   assert.equal(get.open, true)
   assert.equal(get.code, pr.code)
+  assert.equal(get.pairingString, pr.pairingString)
 
   const { deviceId } = devices.add('Phone A')
   const renamed = await (await fetch(`${base}/pocket/devices`, {

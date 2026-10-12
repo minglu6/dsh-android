@@ -47,18 +47,20 @@ class SecureTokenStore(ctx: Context) {
 data class Profile(
     val id: String,
     val name: String,
-    val host: String,
-    val port: Int,
+    /** Desktop iroh endpoint id. Blank means a pre-iroh (Tailscale/LAN) profile that must re-pair. */
+    val nodeId: String = "",
     val deviceId: String? = null,
-    /** Desktop iroh endpoint id from the pairing URI (`n=`). Optional for M2 profiles. */
-    val nodeId: String? = null,
+    /** Legacy fields retained for prefs deserialization; unused for dial. */
+    val host: String = "",
+    val port: Int = 0,
 ) {
-    val url get() = "ws://${if (':' in host) "[$host]" else host}:$port"
-    /** Tailscale CGNAT 100.64/10 or MagicDNS (*.ts.net); everything else is LAN. */
-    val kind: String get() {
-        if (host.endsWith(".ts.net")) return "Tailscale"
-        val p = host.split('.').mapNotNull { it.toIntOrNull() }
-        return if (p.size == 4 && p[0] == 100 && p[1] in 64..127) "Tailscale" else "LAN"
+    val needsRepair: Boolean get() = nodeId.isBlank()
+    val kind: String get() = if (needsRepair) "需重新配对" else "iroh"
+    /** One-line subtitle on the connections list. */
+    val subtitle: String get() = when {
+        needsRepair -> "旧连接已停用，请重新扫码配对"
+        nodeId.length > 16 -> nodeId.take(12) + "…"
+        else -> nodeId
     }
 }
 

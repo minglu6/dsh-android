@@ -97,9 +97,9 @@ class TranscriptReducerTest {
     }
 
     @Test fun pairingLink() {
-        assertEquals(PairingLink("100.106.128.87", 7690, "482913"), PairingLink.parse("dshpocket://pair?h=100.106.128.87:7690&c=482913"))
-        assertEquals(PairingLink("::1", 7691, "000001"), PairingLink.parse("dshpocket://pair?h=[::1]:7691&c=000001"))
-        assertEquals(PairingLink("100.1.2.3", 7690, "111111", "nodeIdHere"), PairingLink.parse("dshpocket://pair?h=100.1.2.3:7690&c=111111&n=nodeIdHere"))
+        assertEquals(PairingLink("abcdefghijklmnopqrst", "482913"), PairingLink.parse("dshpocket://pair?n=abcdefghijklmnopqrst&c=482913"))
+        assertEquals(PairingLink("abcdefghijklmnopqrst", "000001"), PairingLink.parse("abcdefghijklmnopqrst#000001"))
+        assertNull(PairingLink.parse("dshpocket://pair?h=100.1.2.3:7690&c=111111"))
         assertNull(PairingLink.parse("dshpocket://pair?h=x:1&c=12"))
     }
 }

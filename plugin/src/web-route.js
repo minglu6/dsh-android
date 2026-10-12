@@ -55,7 +55,13 @@ export function registerPairRoute(ctx, api) {
     kind: 'exact', path: '/pocket/pair',
     handler: (req, res) => {
       if (!gate(req, res)) return
-      if (req.method === 'POST') return json(res, 200, api.openPairing())
+      if (req.method === 'POST') {
+        try {
+          return json(res, 200, api.openPairing())
+        } catch (e) {
+          return json(res, 503, { error: String(e?.message ?? e) })
+        }
+      }
       if (req.method === 'DELETE') return json(res, 200, (api.closePairing ?? (() => ({ open: false })))())
       if (req.method === 'GET') return json(res, 200, api.pairingStatus())
       return json(res, 405, { error: 'method not allowed' })

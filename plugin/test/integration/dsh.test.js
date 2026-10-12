@@ -23,7 +23,12 @@ test('real dsh: hello, list, create, rename, follow, models, select, cancel', { 
   let log = ''
   await new Promise((ok, fail) => {
     const timer = setTimeout(() => fail(new Error('pocket did not start:\n' + log)), 120_000)
-    const on = (d) => { log += d; if (log.includes('[pocket] listening')) { clearTimeout(timer); ok() } }
+    const on = (d) => {
+      log += d
+      if (log.includes('[pocket] local ws://') || log.includes('[pocket] listening')) {
+        clearTimeout(timer); ok()
+      }
+    }
     proc.stdout.on('data', on); proc.stderr.on('data', on)
     proc.on('exit', (c) => fail(new Error(`dsh exited ${c}:\n${log}`)))
   })

@@ -66,25 +66,30 @@ data class Approval(val approvalId: String, val sessionId: String?, val toolName
 /** One image part for `prompt` (base64 payload, no data: URL prefix). */
 data class PromptImage(val mediaType: String, val data: String, val name: String? = null)
 
-data class PairingLink(val host: String, val port: Int, val code: String, val nodeId: String? = null) {
+/**
+ * Pure-iroh pairing (tether-style). No shared network / Tailscale host required.
+ *
+ * - QR / deep link: `dshpocket://pair?n=<irohNodeId>&c=<6-digit>`
+ * - Paste line: `<irohNodeId>#<6-digit>` (same shape as dsh-tether)
+ * - Legacy `h=<host:port>` URIs without `n` are rejected — re-pair on the desktop.
+ */
+data class PairingLink(val nodeId: String, val code: String) {
     companion object {
-        /**
-         * Plugin QR / deep-link payload from `pairingUri`:
-         * `dshpocket://pair?h=<url-encoded host:port>&c=<6-digit>[&n=<irohNodeId>]`
-         * `n` is optional (M2 URIs / older phones). Unknown extra keys (e.g. `fp`) are ignored.
-         */
+        private val CODE = Regex("^\\d{6}$")
+        private val TETHER_LINE = Regex("^([A-Za-z0-9_-]{16,})#(\\d{6})$")
+
         fun parse(text: String): PairingLink? {
             val s = text.trim()
+            TETHER_LINE.matchEntire(s)?.let { m ->
+                return PairingLink(m.groupValues[1], m.groupValues[2])
+            }
             if (!s.startsWith("dshpocket://pair")) return null
             val q = s.substringAfter('?', "").split('&')
                 .filter { it.isNotEmpty() }
                 .associate { it.substringBefore('=') to java.net.URLDecoder.decode(it.substringAfter('=', ""), "UTF-8") }
-            val h = q["h"]?.takeIf { it.isNotBlank() } ?: return null
-            val c = q["c"]?.takeIf { it.matches(Regex("\\d{6}")) } ?: return null
-            val host = h.substringBeforeLast(':').removePrefix("[").removeSuffix("]").takeIf { it.isNotBlank() } ?: return null
-            val port = h.substringAfterLast(':', "7690").toIntOrNull()?.takeIf { it in 1..65535 } ?: return null
-            val nodeId = q["n"]?.takeIf { it.isNotBlank() }
-            return PairingLink(host, port, c, nodeId)
+            val c = q["c"]?.takeIf { CODE.matches(it) } ?: return null
+            val n = q["n"]?.takeIf { it.isNotBlank() } ?: return null
+            return PairingLink(n, c)
         }
     }
 }
