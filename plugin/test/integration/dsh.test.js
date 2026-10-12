@@ -25,7 +25,7 @@ test('real dsh: hello, list, create, rename, follow, models, select, cancel', { 
     const timer = setTimeout(() => fail(new Error('pocket did not start:\n' + log)), 120_000)
     const on = (d) => {
       log += d
-      if (log.includes('[pocket] local ws://') || log.includes('[pocket] listening')) {
+      if (log.includes('[pocket] local ws://') || log.includes('[pocket] listening') || log.includes('[pocket] ws listening')) {
         clearTimeout(timer); ok()
       }
     }

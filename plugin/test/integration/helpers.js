@@ -25,7 +25,7 @@ export async function bootDsh(t, { plugins, patch }) {
       log += d
       const m = log.match(/dsh web: (http:\/\/\S+\?token=\S+)/)
       // Ready once dsh web URL is up and pocket has bound its loopback WS (or legacy "listening" log).
-      if (m && (log.includes('[pocket] local ws://') || log.includes('[pocket] listening'))) {
+      if (m && (log.includes('[pocket] local ws://') || log.includes('[pocket] listening') || log.includes('[pocket] ws listening'))) {
         clearTimeout(timer); ok(m[1])
       }
     }
