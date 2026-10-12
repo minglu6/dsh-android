@@ -7,6 +7,7 @@ import androidx.compose.ui.test.assertWidthIsEqualTo
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.unit.dp
+import dev.dsh.pocket.protocol.SessionSummary
 import org.junit.Assert.assertEquals
 import org.junit.Before
 import org.junit.Rule
@@ -22,7 +23,7 @@ class DrawerWidthTest {
     @get:Rule val rule = createComposeRule()
 
     @Before fun state() {
-        Pocket.profiles.value = listOf(Profile("p1", "Mac mini", nodeId = "abcdefghijklmnopqrstuvwxyz01"))
+        Pocket.profiles.value = listOf(Profile("p1", "Mac mini", host = "100.106.128.87", port = 7690))
         Pocket.active.value = "p1"
         Pocket.status.value = mapOf("p1" to Dot.Online)
         Pocket.sessions.value = listOf(
