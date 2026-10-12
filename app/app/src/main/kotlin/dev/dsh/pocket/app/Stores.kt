@@ -48,6 +48,13 @@ class SecureTokenStore(ctx: Context) {
  * Persisted remote path for a profile.
  * `"iroh"` | `"tailscale"` | `""` (legacy: infer from nodeId / host+port).
  */
+/** Trim + truncate to 64 chars like plugin `devices.js` / `PATCH /pocket/devices`. */
+internal fun clipProfileName(name: String): String {
+    val n = name.trim().take(64)
+    if (n.isEmpty()) error("profile name required")
+    return n
+}
+
 @Serializable
 data class Profile(
     val id: String,

@@ -460,6 +460,18 @@ object Pocket {
         tokens.remove(id); profiles.value = profiles.value.filter { it.id != id }; prefs.profiles = profiles.value
     }
 
+    /**
+     * Rename a local desktop [Profile] label on the phone.
+     * Does not call desktop `PATCH /pocket/devices` (that renames the phone device on the Mac).
+     * Name is trimmed and truncated to 64 chars like plugin `devices.js`.
+     */
+    fun renameProfile(id: String, name: String) {
+        val n = clipProfileName(name)
+        if (profiles.value.none { it.id == id }) error("profile not found: $id")
+        profiles.value = profiles.value.map { if (it.id == id) it.copy(name = n) else it }
+        prefs.profiles = profiles.value
+    }
+
     /** Soft probe: Tailscale profiles get a TCP check; iroh stays offline until selected. */
     fun probe() = main.launch {
         profiles.value.filter { it.id != active.value }.forEach { p ->
