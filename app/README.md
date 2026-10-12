@@ -24,8 +24,9 @@ cd ../plugin && node test/integration/kotlin-live.mjs
 ## 使用
 
 1. 电脑端：`dsh web` 装好插件后，在 `plugin/` 下运行 `node bin/pocket.js pair` 显示 6 位配对码（10 分钟有效）。
-2. 手机端：连接 →「输入配对码」手动填写 `IP:端口` 与 6 位码；或点「扫码配对」用应用内相机扫描桌面端二维码（`dshpocket://pair?h=…&c=…`），解析后自动填入配对表单。
-3. token 用 Android Keystore 的 AES-GCM 密钥加密保存。
+2. 手机端：连接 →「输入配对码」手动填写 `IP:端口` 与 6 位码；或点「扫码配对」用应用内相机扫描桌面端二维码（`dshpocket://pair?h=…&c=…[&n=…]`，`n` 为 iroh node id，可缺省），解析后自动填入配对表单。
+3. 连接顺序：先 WS（Tailscale/LAN），失败再 iroh（打洞 direct，否则 relay）。连接列表上的小标签显示当前路由；relay 时状态点为琥珀色。
+4. token 用 Android Keystore 的 AES-GCM 密钥加密保存（各传输共用）。
 
 ## 功能对齐
 
