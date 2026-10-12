@@ -230,8 +230,9 @@ async fn handle_phone(
         }
     };
     let reader = async {
+        let mut pending = Vec::new();
         loop {
-            match read_line_bounded(&mut recv, MAX_LINE).await {
+            match read_line_bounded(&mut recv, &mut pending, MAX_LINE).await {
                 Ok(line) => emit(&PluginOut::PeerData {
                     id: id.clone(),
                     line,
@@ -272,9 +273,10 @@ async fn phone_sim_main(data_dir: PathBuf, peer: String, first: Option<String>) 
     // the session — otherwise the peer closes before the host accepts the bi-stream.
     let mut stdin = BufReader::new(tokio::io::stdin()).lines();
     let mut stdin_open = true;
+    let mut pending = Vec::new();
     loop {
         tokio::select! {
-            r = read_line_bounded(&mut recv, MAX_LINE) => {
+            r = read_line_bounded(&mut recv, &mut pending, MAX_LINE) => {
                 let line = r?;
                 println!("{line}");
             }

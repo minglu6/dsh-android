@@ -231,6 +231,7 @@ export async function startIrohSidecar(opts) {
       case 'peer-session-end': {
         const client = sessions.get(msg.id)
         sessions.delete(msg.id)
+        if (msg.peer) opts.server.clearIrohPath?.(msg.peer)
         client?.onRemoteClose()
         break
       }
