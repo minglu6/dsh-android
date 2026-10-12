@@ -97,7 +97,7 @@ pub extern "system" fn Java_dev_dsh_pocket_app_iroh_IrohNative_endpointCreate(
     });
     let ep = shared.rt.block_on(async {
         let secret = load_or_create_secret(&dir.join("identity.key"))?;
-        endpoint_builder()
+        endpoint_builder()?
             .secret_key(secret)
             .bind()
             .await

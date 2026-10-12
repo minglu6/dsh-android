@@ -6,14 +6,25 @@ use std::path::Path;
 use std::time::Duration;
 
 use anyhow::{bail, Context as _, Result};
-use iroh::endpoint::{presets, Connection, RecvStream, SendStream};
-use iroh::{Endpoint, SecretKey};
+use iroh::endpoint::{presets, Connection, RecvStream, RelayMode, SendStream};
+use iroh::{Endpoint, RelayUrl, SecretKey};
 pub const ALPN: &[u8] = b"dsh-pocket/1";
 /// Per-line cap for pocket JSON frames over iroh (host + Android FFI share this).
 /// 64 KiB was too small for a real `sessions.list` (~47 KiB @ 33 sessions with full
 /// projections); 1 MiB leaves headroom for catalog + history pages.
 pub const MAX_LINE: usize = 1024 * 1024;
 pub const MAX_UNPAIRED_LINE: usize = 1024 * 1024;
+
+/// Tokyo self-hosted relay used by pocket-host and the Android JNI stack.
+///
+/// Trailing DNS dot is the FQDN form iroh 1.3 encourages on [`RelayUrl`] (same
+/// convention as n0's built-in relay hostnames). Parsing without the dot still
+/// works; we bake the dotted form in to avoid search-domain relative lookups.
+pub const DEFAULT_RELAY_URL: &str = "https://iroh.9643275.xyz.";
+
+/// Optional comma-separated relay URL override for desktop `pocket-host`.
+/// Unset → [`DEFAULT_RELAY_URL`]. Android never reads this (default is baked in).
+pub const RELAY_URLS_ENV: &str = "DSH_IROH_RELAY_URLS";
 
 /// Termux / Android JNI DNS can panic before ndk-context init; pin Google DNS.
 #[cfg(target_os = "android")]
@@ -34,11 +45,50 @@ pub fn android_dns_resolver() -> iroh::dns::DnsResolver {
         .build()
 }
 
-pub fn endpoint_builder() -> iroh::endpoint::Builder {
-    let builder = Endpoint::builder(presets::N0);
+fn parse_relay_urls(raw: &str) -> Result<Vec<RelayUrl>> {
+    let mut urls = Vec::new();
+    for part in raw.split(',') {
+        let part = part.trim();
+        if part.is_empty() {
+            continue;
+        }
+        urls.push(
+            part.parse::<RelayUrl>()
+                .with_context(|| format!("invalid relay URL in {RELAY_URLS_ENV}: {part}"))?,
+        );
+    }
+    if urls.is_empty() {
+        bail!("{RELAY_URLS_ENV} is set but contains no relay URLs");
+    }
+    Ok(urls)
+}
+
+/// Resolve relay URLs: desktop may override via [`RELAY_URLS_ENV`]; Android always
+/// uses [`DEFAULT_RELAY_URL`].
+pub fn relay_urls() -> Result<Vec<RelayUrl>> {
+    #[cfg(not(target_os = "android"))]
+    match std::env::var(RELAY_URLS_ENV) {
+        Ok(raw) => return parse_relay_urls(&raw),
+        Err(std::env::VarError::NotPresent) => {}
+        Err(std::env::VarError::NotUnicode(_)) => {
+            bail!("{RELAY_URLS_ENV} is not valid UTF-8");
+        }
+    }
+    Ok(vec![DEFAULT_RELAY_URL
+        .parse()
+        .expect("DEFAULT_RELAY_URL must parse")])
+}
+
+pub fn relay_mode() -> Result<RelayMode> {
+    Ok(RelayMode::custom(relay_urls()?))
+}
+
+/// Endpoint builder: N0 discovery (pkarr) + Tokyo custom relay (or env override).
+pub fn endpoint_builder() -> Result<iroh::endpoint::Builder> {
+    let builder = Endpoint::builder(presets::N0).relay_mode(relay_mode()?);
     #[cfg(target_os = "android")]
     let builder = builder.dns_resolver(android_dns_resolver());
-    builder
+    Ok(builder)
 }
 
 fn restrict(path: &Path, mode: u32) -> Result<()> {
@@ -169,6 +219,36 @@ mod tests {
     fn max_line_is_at_least_1_mib() {
         assert!(MAX_LINE >= 1024 * 1024, "MAX_LINE={MAX_LINE}");
         assert!(MAX_UNPAIRED_LINE >= 1024 * 1024, "MAX_UNPAIRED_LINE={MAX_UNPAIRED_LINE}");
+    }
+
+    #[test]
+    fn default_relay_url_is_fqdn_with_trailing_dot() {
+        assert!(
+            DEFAULT_RELAY_URL.ends_with("xyz."),
+            "iroh 1.3 encourages FQDN trailing-dot RelayUrls; got {DEFAULT_RELAY_URL}"
+        );
+        let url: RelayUrl = DEFAULT_RELAY_URL.parse().expect("default relay must parse");
+        assert!(url.to_string().contains("iroh.9643275.xyz"));
+    }
+
+    #[test]
+    fn parse_relay_urls_comma_separated() {
+        let urls =
+            parse_relay_urls("https://a.example./, https://b.example./").expect("valid list");
+        assert_eq!(urls.len(), 2);
+    }
+
+    #[test]
+    fn parse_relay_urls_rejects_empty_and_garbage() {
+        assert!(parse_relay_urls("").is_err());
+        assert!(parse_relay_urls("   ,  , ").is_err());
+        assert!(parse_relay_urls("not-a-url").is_err());
+    }
+
+    #[test]
+    fn endpoint_builder_uses_custom_relay() {
+        // Ensure builder construction succeeds with the baked-in Tokyo relay.
+        let _ = endpoint_builder().expect("endpoint builder with default relay");
     }
 
     #[test]

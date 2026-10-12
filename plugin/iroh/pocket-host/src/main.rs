@@ -119,7 +119,7 @@ async fn main() -> Result<()> {
 
 async fn host_main(data_dir: PathBuf) -> Result<()> {
     let secret = load_or_create_secret(&data_dir.join("identity.key"))?;
-    let ep = endpoint_builder()
+    let ep = endpoint_builder()?
         .secret_key(secret)
         .alpns(vec![ALPN.to_vec()])
         .bind()
@@ -256,7 +256,7 @@ async fn phone_sim_main(data_dir: PathBuf, peer: String, first: Option<String>) 
         .parse()
         .map_err(|e| anyhow::anyhow!("invalid --peer: {e}"))?;
     let secret = load_or_create_secret(&data_dir.join("identity.key"))?;
-    let ep = endpoint_builder().secret_key(secret).bind().await?;
+    let ep = endpoint_builder()?.secret_key(secret).bind().await?;
     eprintln!("[phone-sim] local id: {}", ep.id());
     let conn = ep
         .connect(peer, ALPN)
