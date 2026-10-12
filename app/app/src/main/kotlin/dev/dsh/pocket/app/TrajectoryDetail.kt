@@ -374,16 +374,18 @@ private fun TrajPreview(row: TrajRow) {
 
 @Composable
 private fun TrajCodeProgram(program: CodeProgram) {
-    Column(Modifier.padding(horizontal = 22.dp)) {
-        if (program.language != null) {
-            Text(program.language, fontSize = 12.sp, color = T.Text3, modifier = Modifier.padding(bottom = 6.dp))
+    SelectableOutput {
+        Column(Modifier.padding(horizontal = 22.dp)) {
+            if (program.language != null) {
+                Text(program.language, fontSize = 12.sp, color = T.Text3, modifier = Modifier.padding(bottom = 6.dp))
+            }
+            Text(
+                program.source,
+                style = T.Mono.copy(lineHeight = 20.sp),
+                modifier = Modifier.fillMaxWidth().clip(T.R12).background(T.Fill2)
+                    .horizontalScroll(rememberScrollState()).padding(14.dp),
+            )
         }
-        Text(
-            program.source,
-            style = T.Mono.copy(lineHeight = 20.sp),
-            modifier = Modifier.fillMaxWidth().clip(T.R12).background(T.Fill2)
-                .horizontalScroll(rememberScrollState()).padding(14.dp),
-        )
     }
 }
 
@@ -434,7 +436,9 @@ private fun PocketJsonish(s: String): JsonElement =
 @Composable
 private fun TrajToolsCatalog(toolsJson: String?) {
     if (toolsJson.isNullOrBlank()) {
-        Text(TrajL.recordToolsMissing, fontSize = 14.sp, color = T.Text3, modifier = Modifier.padding(horizontal = 22.dp, vertical = 8.dp))
+        SelectableOutput {
+            Text(TrajL.recordToolsMissing, fontSize = 14.sp, color = T.Text3, modifier = Modifier.padding(horizontal = 22.dp, vertical = 8.dp))
+        }
         return
     }
     TrajPayload(toolsJson, missing = TrajL.recordToolsMissing)
@@ -448,15 +452,17 @@ private fun OverviewKv(
     compact: Boolean = false,
     onClick: (() -> Unit)? = null,
 ) {
-    Row(
-        Modifier
-            .fillMaxWidth()
-            .padding(vertical = if (compact) 2.dp else 4.dp)
-            .then(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier),
-        horizontalArrangement = Arrangement.SpaceBetween,
-    ) {
-        Text(label, fontSize = 13.sp, color = T.Text3, modifier = Modifier.padding(end = 12.dp))
-        Text(value, fontSize = 13.sp, color = valueColor, modifier = Modifier.weight(1f, fill = false))
+    SelectableOutput {
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .padding(vertical = if (compact) 2.dp else 4.dp)
+                .then(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier),
+            horizontalArrangement = Arrangement.SpaceBetween,
+        ) {
+            Text(label, fontSize = 13.sp, color = T.Text3, modifier = Modifier.padding(end = 12.dp))
+            Text(value, fontSize = 13.sp, color = valueColor, modifier = Modifier.weight(1f, fill = false))
+        }
     }
 }
 
@@ -476,21 +482,25 @@ private fun OverviewSection(label: String, onOpen: () -> Unit, content: @Composa
 @Composable
 private fun TrajPayload(value: String?, missing: String, error: Boolean = false) {
     if (value.isNullOrBlank()) {
-        Text(missing, fontSize = 14.sp, color = T.Text3, modifier = Modifier.padding(horizontal = 22.dp, vertical = 8.dp))
+        SelectableOutput {
+            Text(missing, fontSize = 14.sp, color = T.Text3, modifier = Modifier.padding(horizontal = 22.dp, vertical = 8.dp))
+        }
         return
     }
     val shown = runCatching { prettyJson(value) }.getOrDefault(value)
-    Text(
-        shown,
-        style = T.Mono.copy(lineHeight = 20.sp, color = if (error) T.Err else T.Ink),
-        modifier = Modifier
-            .padding(horizontal = 22.dp)
-            .fillMaxWidth()
-            .clip(T.R12)
-            .background(if (error) T.Err.copy(alpha = 0.06f) else T.Fill2)
-            .horizontalScroll(rememberScrollState())
-            .padding(14.dp),
-    )
+    SelectableOutput {
+        Text(
+            shown,
+            style = T.Mono.copy(lineHeight = 20.sp, color = if (error) T.Err else T.Ink),
+            modifier = Modifier
+                .padding(horizontal = 22.dp)
+                .fillMaxWidth()
+                .clip(T.R12)
+                .background(if (error) T.Err.copy(alpha = 0.06f) else T.Fill2)
+                .horizontalScroll(rememberScrollState())
+                .padding(14.dp),
+        )
+    }
 }
 
 @Composable
@@ -504,16 +514,18 @@ private fun TrajSchema(schemaDetail: String?) {
         TrajPayload(schemaDetail, missing = TrajL.recordSchemaUnavailable)
         return
     }
-    Column(Modifier.padding(horizontal = 22.dp)) {
-        Text(parsed.name, fontSize = 16.sp, fontWeight = FontWeight.SemiBold, color = T.Ink)
-        Text(parsed.description, fontSize = 13.sp, color = T.Text2, lineHeight = 20.sp, modifier = Modifier.padding(top = 4.dp, bottom = 10.dp))
-        Text(TrajL.recordParameters, fontSize = 12.sp, color = T.Text3, modifier = Modifier.padding(bottom = 6.dp))
-        Text(
-            SchemaPrettyJson.encodeToString(JsonElement.serializer(), parsed.parameters),
-            style = T.Mono.copy(lineHeight = 20.sp),
-            modifier = Modifier.fillMaxWidth().clip(T.R12).background(T.Fill2)
-                .horizontalScroll(rememberScrollState()).padding(14.dp),
-        )
+    SelectableOutput {
+        Column(Modifier.padding(horizontal = 22.dp)) {
+            Text(parsed.name, fontSize = 16.sp, fontWeight = FontWeight.SemiBold, color = T.Ink)
+            Text(parsed.description, fontSize = 13.sp, color = T.Text2, lineHeight = 20.sp, modifier = Modifier.padding(top = 4.dp, bottom = 10.dp))
+            Text(TrajL.recordParameters, fontSize = 12.sp, color = T.Text3, modifier = Modifier.padding(bottom = 6.dp))
+            Text(
+                SchemaPrettyJson.encodeToString(JsonElement.serializer(), parsed.parameters),
+                style = T.Mono.copy(lineHeight = 20.sp),
+                modifier = Modifier.fillMaxWidth().clip(T.R12).background(T.Fill2)
+                    .horizontalScroll(rememberScrollState()).padding(14.dp),
+            )
+        }
     }
 }
 
@@ -544,11 +556,13 @@ private fun TrajTiming(row: TrajRow) {
 
 @Composable
 private fun TrajCodePreview(text: String) {
-    Text(
-        text,
-        style = T.Mono.copy(fontSize = 12.sp, lineHeight = 18.sp, color = T.Ink),
-        maxLines = 8,
-        overflow = TextOverflow.Ellipsis,
-        modifier = Modifier.fillMaxWidth(),
-    )
+    SelectableOutput {
+        Text(
+            text,
+            style = T.Mono.copy(fontSize = 12.sp, lineHeight = 18.sp, color = T.Ink),
+            maxLines = 8,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.fillMaxWidth(),
+        )
+    }
 }

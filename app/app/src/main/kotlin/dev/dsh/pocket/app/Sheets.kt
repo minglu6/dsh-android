@@ -98,8 +98,16 @@ fun ToolSheet(t: Item.Tool, onDismiss: () -> Unit) {
 
 @Composable
 private fun CodeBox(s: String, maxLines: Int = 20) {
-    Text(s, style = T.Mono.copy(lineHeight = 20.sp), maxLines = maxLines, overflow = TextOverflow.Ellipsis,
-        modifier = Modifier.padding(horizontal = 22.dp).fillMaxWidth().clip(T.R12).background(T.Fill2).horizontalScroll(rememberScrollState()).padding(14.dp))
+    SelectableOutput {
+        Text(
+            s,
+            style = T.Mono.copy(lineHeight = 20.sp),
+            maxLines = maxLines,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.padding(horizontal = 22.dp).fillMaxWidth().clip(T.R12).background(T.Fill2)
+                .horizontalScroll(rememberScrollState()).padding(14.dp),
+        )
+    }
 }
 
 @Composable
@@ -336,26 +344,28 @@ fun TodoSheet(todos: List<dev.dsh.pocket.protocol.TodoItem>, onDismiss: () -> Un
             if (active > 0) add("$active 进行中")
             if (pending > 0) add("$pending 待处理")
         }.joinToString(" · ")
-        Text(progress, fontSize = 13.sp, color = T.Text3, modifier = Modifier.padding(horizontal = 22.dp, vertical = 4.dp))
-        todos.forEach { item ->
-            Row(
-                Modifier.padding(horizontal = 22.dp, vertical = 10.dp).fillMaxWidth(),
-                verticalAlignment = Alignment.Top,
-            ) {
-                val mark = when (item.status) {
-                    "completed" -> "✓"
-                    "in_progress" -> "●"
-                    else -> "○"
-                }
-                val color = when (item.status) {
-                    "completed" -> T.Ok
-                    "in_progress" -> T.Accent
-                    else -> T.Caption
-                }
-                Text(mark, color = color, fontSize = 14.sp, modifier = Modifier.padding(top = 2.dp, end = 10.dp))
-                Column(Modifier.weight(1f)) {
-                    Text(item.content, fontSize = 15.sp, color = T.Ink, lineHeight = 22.sp)
-                    Text(todoStatusLabel(item.status), fontSize = 12.sp, color = T.Text3, modifier = Modifier.padding(top = 2.dp))
+        SelectableOutput {
+            Text(progress, fontSize = 13.sp, color = T.Text3, modifier = Modifier.padding(horizontal = 22.dp, vertical = 4.dp))
+            todos.forEach { item ->
+                Row(
+                    Modifier.padding(horizontal = 22.dp, vertical = 10.dp).fillMaxWidth(),
+                    verticalAlignment = Alignment.Top,
+                ) {
+                    val mark = when (item.status) {
+                        "completed" -> "✓"
+                        "in_progress" -> "●"
+                        else -> "○"
+                    }
+                    val color = when (item.status) {
+                        "completed" -> T.Ok
+                        "in_progress" -> T.Accent
+                        else -> T.Caption
+                    }
+                    Text(mark, color = color, fontSize = 14.sp, modifier = Modifier.padding(top = 2.dp, end = 10.dp))
+                    Column(Modifier.weight(1f)) {
+                        Text(item.content, fontSize = 15.sp, color = T.Ink, lineHeight = 22.sp)
+                        Text(todoStatusLabel(item.status), fontSize = 12.sp, color = T.Text3, modifier = Modifier.padding(top = 2.dp))
+                    }
                 }
             }
         }
@@ -424,8 +434,10 @@ fun FilesSheet(sessionId: String, onDismiss: () -> Unit) {
     LaunchedEffect(sessionId) { load(".") }
     PocketSheet(onDismiss) {
         SheetTitle("工作区文件")
-        Text(path, style = T.Mono.copy(color = T.Text3), modifier = Modifier.padding(horizontal = 22.dp, vertical = 4.dp))
-        err?.let { Text(it, color = T.Err, fontSize = 13.sp, modifier = Modifier.padding(22.dp)) }
+        SelectableOutput {
+            Text(path, style = T.Mono.copy(color = T.Text3), modifier = Modifier.padding(horizontal = 22.dp, vertical = 4.dp))
+        }
+        err?.let { SelectableOutput { Text(it, color = T.Err, fontSize = 13.sp, modifier = Modifier.padding(22.dp)) } }
         preview?.let {
             CodeBox(it, maxLines = 60)
             return@PocketSheet

@@ -353,3 +353,23 @@ Source: harness `d743267` / `0.2.1-alpha.2` `@deepseek-ai/dsh-client-ui-primitiv
 | Request chip / todo / trajectory detail tabs | Mostly text chrome or already icon+label | Aligned | OK |
 
 **Drawables added this pass:** `dsh_branch`, `dsh_like`, `dsh_like_fill`, `dsh_dislike`, `dsh_dislike_fill`, `dsh_wrap`, `dsh_nowrap`, `dsh_wrap_lines` (JsonTree/optional). Wired on `D` in `DshIcons.kt`.
+
+---
+
+## 13. Long-press text selection
+
+Every **output** text surface supports Compose `SelectionContainer` (helper `SelectableOutput` / `NonSelectable`) so users can long-press → select → copy:
+
+| Surface | Approach |
+|---|---|
+| Assistant Markdown (paragraphs / lists / tables / fences) | `MarkdownView` wraps once; code toolbar icons use `NonSelectable` |
+| User bubbles | `SelectableOutput` around bubble `Text` |
+| Thinking / reasoning body | Fold header stays clickable; body in `SelectableOutput` |
+| Notices / errors / approvals / questions / deliverables / changes | `SelectableOutput` on content |
+| Tool / file preview `CodeBox` | `SelectableOutput` |
+| Todo sheet items | `SelectableOutput` |
+| Trajectory ledger title / preview / metrics | `SelectableOutput` (tap still opens detail) |
+| Trajectory + Request detail tabs / payloads | `SelectableOutput` on payloads & KV values |
+| Terminal (Canvas grid) | Long-press → selectable plain-text overlay (`AnsiTerminal.plainText()`); tap exits |
+
+Composer input, buttons, and icon action chrome stay non-output (no forced selection).

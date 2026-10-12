@@ -432,12 +432,14 @@ private fun Transcript(
                             Text(L.image() + " ×${row.item.images}", fontSize = 13.sp, color = T.Text3, modifier = Modifier.padding(bottom = 4.dp))
                         }
                         if (row.item.text.isNotBlank()) {
-                            Text(
-                                row.item.text,
-                                style = MaterialTheme.typography.bodyLarge,
-                                color = T.Ink.copy(alpha = if (row.item.pending) 0.6f else 1f),
-                                modifier = Modifier.padding(start = 56.dp).clip(T.R20).background(T.Fill).padding(horizontal = 16.dp, vertical = 10.dp),
-                            )
+                            SelectableOutput {
+                                Text(
+                                    row.item.text,
+                                    style = MaterialTheme.typography.bodyLarge,
+                                    color = T.Ink.copy(alpha = if (row.item.pending) 0.6f else 1f),
+                                    modifier = Modifier.padding(start = 56.dp).clip(T.R20).background(T.Fill).padding(horizontal = 16.dp, vertical = 10.dp),
+                                )
+                            }
                         }
                         MessageActions(
                             text = row.item.text,
@@ -469,7 +471,9 @@ private fun Transcript(
                         )
                     }
                 }
-                is ChatRow.Notice -> Text(row.item.text, fontSize = 13.sp, color = T.Text3)
+                is ChatRow.Notice -> SelectableOutput {
+                    Text(row.item.text, fontSize = 13.sp, color = T.Text3)
+                }
                 is ChatRow.Tool -> ToolCard(row.item) { onTool(row.item) }
                 is ChatRow.Reasoning -> ReasoningRow(row.item)
                 is ChatRow.Process -> ProcessGroupRow(row, onTool)
@@ -665,14 +669,25 @@ private fun ReasoningRow(r: Item.Reasoning, forceOpen: Boolean = false) {
     var open by remember(r.key, verbose, forceOpen) { mutableStateOf(forceOpen || verbose) }
     Row(Modifier.height(IntrinsicSize.Min)) {
         Box(Modifier.width(2.dp).fillMaxHeight().background(T.Fill))
-        Column(Modifier.padding(start = 12.dp).clickable { open = !open }) {
-            // Desktop locale: message.turnProcess.thoughtForAWhile = "已思考" (not 已深度思考).
+        Column(Modifier.padding(start = 12.dp)) {
+            // Fold chrome stays clickable; body is independently selectable.
             Text(
                 if (r.live) "深度求索中…"
                 else "已思考${r.durationMs?.let { " ${seconds(it)} 秒" } ?: ""} ${if (open) "⌄" else "›"}",
                 fontSize = 14.sp, color = T.Text3,
+                modifier = Modifier.clickable { open = !open },
             )
-            if (open || r.live) Text(r.text, fontSize = Pocket.prefs.fontSize.sp, lineHeight = (Pocket.prefs.fontSize + 8).sp, color = T.Text3, modifier = Modifier.padding(top = 6.dp))
+            if (open || r.live) {
+                SelectableOutput {
+                    Text(
+                        r.text,
+                        fontSize = Pocket.prefs.fontSize.sp,
+                        lineHeight = (Pocket.prefs.fontSize + 8).sp,
+                        color = T.Text3,
+                        modifier = Modifier.padding(top = 6.dp),
+                    )
+                }
+            }
         }
     }
 }
@@ -714,8 +729,13 @@ private fun ApprovalCard(a: Approval) {
             Text("等待审批", fontSize = 14.sp, color = T.WarnText)
         }
         Column(Modifier.padding(18.dp)) {
-            Text("工具 ${a.toolName} 请求越权执行", fontSize = 16.sp, color = T.Ink)
-            (approvalCommand(a) ?: a.reason)?.let { Spacer(Modifier.height(8.dp)); Text(it, style = T.Mono.copy(color = T.Text3, fontSize = 14.sp, lineHeight = 21.sp), maxLines = 4, overflow = TextOverflow.Ellipsis) }
+            SelectableOutput {
+                Text("工具 ${a.toolName} 请求越权执行", fontSize = 16.sp, color = T.Ink)
+                (approvalCommand(a) ?: a.reason)?.let {
+                    Spacer(Modifier.height(8.dp))
+                    Text(it, style = T.Mono.copy(color = T.Text3, fontSize = 14.sp, lineHeight = 21.sp), maxLines = 4, overflow = TextOverflow.Ellipsis)
+                }
+            }
             Spacer(Modifier.height(16.dp))
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                 OutlinedButton({ Pocket.answer(a.approvalId, "rejected") }, Modifier.weight(1f).height(52.dp), shape = T.R12, border = BorderStroke(1.dp, T.Border),
@@ -760,17 +780,19 @@ private fun ImageBubble(sessionId: String, ref: ImageRef) {
 
 @Composable
 private fun DeliverableCard(item: Item.Deliverable) {
-    Column(Modifier.fillMaxWidth().clip(T.R12).border(1.dp, T.Border, T.R12).padding(14.dp)) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Text(L.deliverablesTitle(), fontSize = 14.sp, fontWeight = FontWeight.Medium, color = T.Ink)
-            Spacer(Modifier.weight(1f))
-            Text(L.delivered(), fontSize = 12.sp, color = T.Ok)
-        }
-        item.files.forEach { f ->
-            Spacer(Modifier.height(8.dp))
-            Text(f.path.substringAfterLast('/'), style = T.Mono.copy(fontSize = 13.sp, color = T.Ink), maxLines = 1, overflow = TextOverflow.Ellipsis)
-            f.description?.takeIf { it.isNotBlank() }?.let {
-                Text(it, fontSize = 12.sp, color = T.Text3, maxLines = 2, overflow = TextOverflow.Ellipsis)
+    SelectableOutput {
+        Column(Modifier.fillMaxWidth().clip(T.R12).border(1.dp, T.Border, T.R12).padding(14.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(L.deliverablesTitle(), fontSize = 14.sp, fontWeight = FontWeight.Medium, color = T.Ink)
+                Spacer(Modifier.weight(1f))
+                Text(L.delivered(), fontSize = 12.sp, color = T.Ok)
+            }
+            item.files.forEach { f ->
+                Spacer(Modifier.height(8.dp))
+                Text(f.path.substringAfterLast('/'), style = T.Mono.copy(fontSize = 13.sp, color = T.Ink), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                f.description?.takeIf { it.isNotBlank() }?.let {
+                    Text(it, fontSize = 12.sp, color = T.Text3, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                }
             }
         }
     }
@@ -794,12 +816,14 @@ private fun ChangesCard(item: Item.Changes) {
         name != null -> L.editedName(name!!)
         else -> L.editedCount(count.coerceAtLeast(0))
     }
-    Row(
-        Modifier.fillMaxWidth().clip(T.R12).border(1.dp, T.Border, T.R12).padding(horizontal = 14.dp, vertical = 12.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Text(title, fontSize = 14.sp, color = T.Ink, modifier = Modifier.weight(1f))
-        Text("T${item.turn}", fontSize = 12.sp, color = T.Caption, style = T.Mono)
+    SelectableOutput {
+        Row(
+            Modifier.fillMaxWidth().clip(T.R12).border(1.dp, T.Border, T.R12).padding(horizontal = 14.dp, vertical = 12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(title, fontSize = 14.sp, color = T.Ink, modifier = Modifier.weight(1f))
+            Text("T${item.turn}", fontSize = 12.sp, color = T.Caption, style = T.Mono)
+        }
     }
 }
 
@@ -834,10 +858,12 @@ private fun UserQuestionCard(q: UserQuestion) {
             Text(if (isPlan) L.planReview() else (item.header ?: "问题 ${index + 1}/${q.questions.size}"), fontSize = 14.sp, color = T.WarnText)
         }
         Column(Modifier.padding(18.dp)) {
-            Text(item.question, fontSize = 16.sp, color = T.Ink)
-            item.detail?.takeIf { it.isNotBlank() }?.let {
-                Spacer(Modifier.height(8.dp))
-                Text(it, fontSize = 13.sp, color = T.Text3)
+            SelectableOutput {
+                Text(item.question, fontSize = 16.sp, color = T.Ink)
+                item.detail?.takeIf { it.isNotBlank() }?.let {
+                    Spacer(Modifier.height(8.dp))
+                    Text(it, fontSize = 13.sp, color = T.Text3)
+                }
             }
             Spacer(Modifier.height(12.dp))
             item.options.forEach { opt ->
