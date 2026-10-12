@@ -49,6 +49,24 @@ class TranscriptReducerTest {
         assertEquals(listOf(false), r.items().map { (it as Item.Text).live })
     }
 
+    @Test fun abandonedStreamClearsRunning() {
+        val r = TranscriptReducer()
+        r.apply(j("""{"type":"snapshot","cursor":0,"records":[],"projections":{}}"""))
+        r.apply(j("""{"type":"assistant-stream","frame":{"type":"start","attemptId":"a","revision":1,"startedAfterSeq":0,"turn":1,"step":1}}"""))
+        assertTrue(r.running)
+        r.apply(j("""{"type":"assistant-stream","frame":{"type":"end","attemptId":"a","revision":1,"outcome":{"kind":"abandoned"}}}"""))
+        assertFalse(r.running)
+        assertTrue(r.items().none { it is Item.Text && it.live })
+    }
+
+    @Test fun markIdleClearsRunning() {
+        val r = TranscriptReducer()
+        r.apply(ev(1, "turn/start", "{}"))
+        assertTrue(r.running)
+        r.markIdle()
+        assertFalse(r.running)
+    }
+
     @Test fun resumeAppends() {
         val r = TranscriptReducer()
         r.apply(j("""{"type":"snapshot","cursor":1,"records":[{"type":"event","event":{"type":"user/message","seq":1,"time":1,"data":{"content":[{"type":"text","text":"a"}]}}}],"projections":{}}"""))

@@ -158,6 +158,12 @@ object Pocket {
                 "removed" -> sessions.value = sessions.value.filter { it.sessionId != m["sessionId"].str() }
                 "status" -> { val id = m["sessionId"].str(); val r = m["running"].bool() ?: false
                     sessions.value = sessions.value.map { if (it.sessionId == id) it.copy(running = r) else it }
+                    // Composer Stop uses chat.running (from the follow reducer). Cancel often clears
+                    // session status before / without a folded turn/end; mirror idle into the open chat.
+                    if (!r) chat.value?.takeIf { it.sessionId == id && it.running }?.let { st ->
+                        reducer.markIdle()
+                        chat.value = st.copy(running = false, runStartedAt = null, items = reducer.items())
+                    }
                     client?.let { c -> main.launch { refreshTitles(c); if (!r) { delay(4000); refreshTitles(c) } } } }
                 "activity" -> { val id = m["sessionId"].str(); val t = m["updatedAt"].long() ?: 0
                     sessions.value = sessions.value.map { if (it.sessionId == id) it.copy(updatedAt = t) else it }.sortedByDescending { it.updatedAt } }
@@ -251,7 +257,13 @@ object Pocket {
         chat.value?.let { st -> sessions.value.firstOrNull { it.sessionId == st.sessionId }?.title?.let { t -> chat.value = st.copy(title = t) } }
     }
 
-    fun cancel() = main.launch { val st = chat.value ?: return@launch; runCatching { client?.cancel(st.sessionId) } }
+    /** Same path as desktop InputBar Stop → `sessions.cancel` / plugin `cancel`. */
+    fun cancel() = main.launch {
+        val st = chat.value ?: return@launch
+        val c = client ?: return@launch errors.tryEmit("未连接").let { }
+        runCatching { c.cancel(st.sessionId) }
+            .onFailure { errors.tryEmit(it.message ?: "终止失败") }
+    }
 
     fun selectModel(sessionId: String?, m: ModelChoice) = main.launch {
         if (sessionId == null) return@launch
