@@ -152,22 +152,52 @@ pub fn load_or_create_secret(path: &Path) -> Result<SecretKey> {
     Ok(key)
 }
 
-pub async fn read_line_bounded(recv: &mut RecvStream, max: usize) -> Result<String> {
-    let mut buf = Vec::new();
-    let mut byte = [0u8; 1];
+/// Chunk size for [read_line_bounded] (16–64 KiB range; 32 KiB default).
+pub const LINE_READ_CHUNK: usize = 32 * 1024;
+
+/// Pull one completed line (without trailing `\n`) from `pending`, if present.
+/// Returns `Ok(None)` when more bytes are needed. Errors if a line exceeds `max`.
+pub fn take_completed_line(pending: &mut Vec<u8>, max: usize) -> Result<Option<String>> {
+    if let Some(pos) = pending.iter().position(|&b| b == b'\n') {
+        let mut line = pending.drain(..=pos).collect::<Vec<_>>();
+        line.pop(); // strip '\n'
+        if line.len() > max {
+            bail!("line over limit ({max} bytes)");
+        }
+        return Ok(Some(
+            String::from_utf8(line).context("control stream is not UTF-8")?,
+        ));
+    }
+    if pending.len() > max {
+        bail!("line over limit ({max} bytes)");
+    }
+    Ok(None)
+}
+
+/// Read one newline-delimited frame, using 32 KiB chunks and a leftover buffer
+/// so multi-frame TCP/QUIC coalescing does not drop bytes after `\n`.
+///
+/// `pending` must be reused across calls on the same stream (carries bytes after
+/// the previous newline).
+pub async fn read_line_bounded(
+    recv: &mut RecvStream,
+    pending: &mut Vec<u8>,
+    max: usize,
+) -> Result<String> {
+    if let Some(line) = take_completed_line(pending, max)? {
+        return Ok(line);
+    }
+    let mut chunk = [0u8; LINE_READ_CHUNK];
     loop {
-        let Some(n) = recv.read(&mut byte).await? else {
+        let Some(n) = recv.read(&mut chunk).await? else {
             bail!("peer closed mid-line");
         };
         if n == 0 {
             continue;
         }
-        if byte[0] == b'\n' {
-            return Ok(String::from_utf8(buf).context("control stream is not UTF-8")?);
-        }
-        buf.push(byte[0]);
-        if buf.len() > max {
-            bail!("line over limit ({max} bytes)");
+        pending.extend_from_slice(&chunk[..n]);
+        if let Some(line) = take_completed_line(pending, max)? {
+            return Ok(line);
         }
     }
 }
@@ -260,5 +290,60 @@ mod tests {
         let b = load_or_create_secret(&path).unwrap();
         assert_eq!(a.to_bytes(), b.to_bytes());
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn line_read_chunk_in_16_64kib() {
+        assert!(LINE_READ_CHUNK >= 16 * 1024, "chunk={LINE_READ_CHUNK}");
+        assert!(LINE_READ_CHUNK <= 64 * 1024, "chunk={LINE_READ_CHUNK}");
+    }
+
+    #[test]
+    fn take_completed_line_splits_on_newline_and_keeps_leftover() {
+        let mut pending = b"hello\nworld\npartial".to_vec();
+        assert_eq!(
+            take_completed_line(&mut pending, 1024).unwrap().as_deref(),
+            Some("hello")
+        );
+        assert_eq!(
+            take_completed_line(&mut pending, 1024).unwrap().as_deref(),
+            Some("world")
+        );
+        assert_eq!(take_completed_line(&mut pending, 1024).unwrap(), None);
+        assert_eq!(pending, b"partial");
+    }
+
+    #[test]
+    fn take_completed_line_rejects_oversize_without_newline() {
+        let mut pending = vec![b'x'; 16];
+        let err = take_completed_line(&mut pending, 8).unwrap_err();
+        assert!(err.to_string().contains("line over limit"), "{err}");
+    }
+
+    #[test]
+    fn take_completed_line_rejects_oversize_with_newline() {
+        let mut pending = Vec::new();
+        pending.extend(std::iter::repeat(b'y').take(12));
+        pending.push(b'\n');
+        pending.extend_from_slice(b"next");
+        let err = take_completed_line(&mut pending, 8).unwrap_err();
+        assert!(err.to_string().contains("line over limit"), "{err}");
+    }
+
+    #[test]
+    fn take_completed_line_handles_chunked_arrival() {
+        let mut pending = Vec::new();
+        pending.extend_from_slice(b"abc");
+        assert_eq!(take_completed_line(&mut pending, 64).unwrap(), None);
+        pending.extend_from_slice(b"def\n{\"ok\":true}\n");
+        assert_eq!(
+            take_completed_line(&mut pending, 64).unwrap().as_deref(),
+            Some("abcdef")
+        );
+        assert_eq!(
+            take_completed_line(&mut pending, 64).unwrap().as_deref(),
+            Some("{\"ok\":true}")
+        );
+        assert!(pending.is_empty());
     }
 }

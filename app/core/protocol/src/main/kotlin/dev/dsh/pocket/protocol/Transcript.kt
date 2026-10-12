@@ -1,7 +1,10 @@
 package dev.dsh.pocket.protocol
 
+import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.buildJsonObject
 
 /** One rendered row of a conversation. */
 sealed interface Item {
@@ -65,6 +68,10 @@ class TranscriptReducer {
     private val settledSteps = ArrayList<StepRecord>()
     private var live: LiveAttempt? = null
     var cursor: Long = -1; private set
+    /** Lowest event seq currently folded (for history.page beforeSeq). */
+    var firstSeq: Long = -1; private set
+    /** Whether older history remains above the current window (from snapshot/page). */
+    var hasMore: Boolean = false; private set
     var title: String? = null; private set
     var running = false; private set
     private var turns = 0
@@ -81,9 +88,23 @@ class TranscriptReducer {
     /** Apply one follow frame; returns true when visible state changed. */
     fun apply(frame: JsonElement?): Boolean {
         when (frame["type"].str()) {
-            "snapshot" -> { val keep = localEchoes.map { it.second }; reset(); records(frame["records"])
-                keep.filter { t -> committed.none { it is Item.User && it.text == t } }.forEach(::echo); readProjections(frame["projections"]); cursor = frame["cursor"].long() ?: cursor; baseline(frame["assistantStream"]) }
-            "resume" -> { records(frame["records"]); readProjections(frame["projections"]); cursor = maxOf(cursor, frame["cursor"].long() ?: cursor); baseline(frame["assistantStream"]) }
+            "snapshot" -> {
+                val keep = localEchoes.map { it.second }
+                reset()
+                records(frame["records"])
+                keep.filter { t -> committed.none { it is Item.User && it.text == t } }.forEach(::echo)
+                readProjections(frame["projections"])
+                cursor = frame["cursor"].long() ?: cursor
+                hasMore = frame["hasMore"].bool() ?: false
+                firstSeq = minSeq(frame["records"])
+                baseline(frame["assistantStream"])
+            }
+            "resume" -> {
+                records(frame["records"])
+                readProjections(frame["projections"])
+                cursor = maxOf(cursor, frame["cursor"].long() ?: cursor)
+                baseline(frame["assistantStream"])
+            }
             "event" -> event(frame["event"])
             "assistant-stream" -> stream(frame["frame"])
             else -> return false
@@ -91,9 +112,65 @@ class TranscriptReducer {
         return true
     }
 
+    /**
+     * Prepend older `history.page` records (seqs below [firstSeq]), same pattern as
+     * desktop dsh loading earlier turns. Updates [hasMore] from the page reply.
+     */
+    fun prepend(records: JsonElement?, pageHasMore: Boolean): Boolean {
+        val filtered = records.arr().orEmpty().filter { r ->
+            val seq = r["event"]["seq"].long() ?: return@filter false
+            firstSeq < 0 || seq < firstSeq
+        }
+        hasMore = pageHasMore
+        if (filtered.isEmpty()) return false
+
+        val prior = TranscriptReducer()
+        val max = filtered.mapNotNull { it["event"]["seq"].long() }.maxOrNull() ?: 0L
+        prior.apply(buildJsonObject {
+            put("type", JsonPrimitive("snapshot"))
+            put("cursor", JsonPrimitive(max))
+            put("hasMore", JsonPrimitive(false))
+            put("records", JsonArray(filtered))
+            put("projections", buildJsonObject {})
+        })
+        val older = prior.items()
+        val olderSteps = prior.stepRecords()
+        val shift = older.size
+        if (shift > 0) {
+            committed.addAll(0, older)
+            rebuildIndexes()
+            for (i in localEchoes.indices) {
+                localEchoes[i] = (localEchoes[i].first + shift) to localEchoes[i].second
+            }
+        }
+        if (olderSteps.isNotEmpty()) {
+            settledSteps.addAll(0, olderSteps)
+        }
+        val min = filtered.mapNotNull { it["event"]["seq"].long() }.minOrNull()
+        if (min != null) firstSeq = if (firstSeq < 0) min else minOf(firstSeq, min)
+        return shift > 0 || olderSteps.isNotEmpty()
+    }
+
+    private fun rebuildIndexes() {
+        toolIndex.clear()
+        userByRpc.clear()
+        committed.forEachIndexed { i, item ->
+            when (item) {
+                is Item.Tool -> if (item.callId.isNotEmpty()) toolIndex[item.callId] = i
+                else -> {}
+            }
+        }
+    }
+
+    private fun minSeq(arr: JsonElement?): Long {
+        val seqs = arr.arr()?.mapNotNull { it["event"]["seq"].long() }.orEmpty()
+        return seqs.minOrNull() ?: -1
+    }
+
     private fun reset() {
         committed.clear(); toolIndex.clear(); approvalCall.clear(); userByRpc.clear(); localEchoes.clear()
-        stepStartTimes.clear(); settledSteps.clear(); live = null; cursor = -1
+        stepStartTimes.clear(); settledSteps.clear(); live = null
+        cursor = -1; firstSeq = -1; hasMore = false
         turns = 0; steps = 0; inputTokens = 0; cacheRead = 0; outputTokens = 0; running = false
     }
 

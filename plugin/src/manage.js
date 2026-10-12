@@ -151,6 +151,9 @@ export function createManageApi({
         port: listenPort,
         nodeId: n,
         irohReady: Boolean(n),
+        /** `direct` | `relay` | null — from pocket-host PeerPath reports. */
+        connectionType: typeof server.connectionType === 'function' ? server.connectionType() : null,
+        irohConnections: typeof server.irohConnections === 'function' ? server.irohConnections() : [],
         listen: listening
           ? [{ host: listenHost, port: listenPort, address: typeof addr === 'string' ? addr : `${listenHost}:${listenPort}` }]
           : [],

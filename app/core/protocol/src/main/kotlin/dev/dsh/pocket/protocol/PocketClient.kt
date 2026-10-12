@@ -165,8 +165,23 @@ class PocketClient(
     suspend fun modelCatalog(): ModelCatalog = ModelCatalog.parse(call("models.catalog"))
     suspend fun selectModel(sessionId: String, provider: String, model: String, effort: String?) =
         call("models.select", jsonOf("sessionId" to sessionId, "provider" to provider, "model" to model, "reasoningEffort" to effort))
-    suspend fun follow(sessionId: String, afterSeq: Long? = null): String =
-        call("follow", jsonOf("sessionId" to sessionId, "afterSeq" to afterSeq))["subId"].str() ?: ""
+    suspend fun follow(sessionId: String, afterSeq: Long? = null, maxMessages: Int? = 50): String =
+        call("follow", jsonOf("sessionId" to sessionId, "afterSeq" to afterSeq, "maxMessages" to maxMessages))["subId"].str() ?: ""
+    /** Load older turns above the current snapshot window (desktop history.page). */
+    suspend fun historyPage(
+        sessionId: String,
+        throughSeq: Long,
+        beforeSeq: Long? = null,
+        maxMessages: Int = 100,
+    ): JsonElement = call(
+        "history.page",
+        jsonOf(
+            "sessionId" to sessionId,
+            "throughSeq" to throughSeq,
+            "beforeSeq" to beforeSeq,
+            "maxMessages" to maxMessages,
+        ),
+    )
     suspend fun unfollow(subId: String) = call("unfollow", jsonOf("subId" to subId))
     suspend fun answerApproval(approvalId: String, outcome: String) =
         call("approval.answer", jsonOf("approvalId" to approvalId, "outcome" to outcome))

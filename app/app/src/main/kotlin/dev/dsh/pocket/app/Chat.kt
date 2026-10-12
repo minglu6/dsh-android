@@ -257,7 +257,20 @@ private fun Transcript(st: ChatState, onTool: (Item.Tool) -> Unit) {
     val list = rememberLazyListState()
     val n = st.items.size
     val lastLen = (st.items.lastOrNull() as? Item.Text)?.text?.length ?: 0
-    LaunchedEffect(n, lastLen, st.running) { if (n > 0) list.animateScrollToItem(n) }
+    LaunchedEffect(n, lastLen, st.running) { if (n > 0 && !st.loadingOlder) list.animateScrollToItem(n) }
+    // Scroll-to-top loads older history (no extra chrome — same LazyColumn).
+    var historyArmed by remember(st.sessionId) { mutableStateOf(false) }
+    LaunchedEffect(list.firstVisibleItemIndex, list.firstVisibleItemScrollOffset) {
+        if (list.firstVisibleItemIndex > 0 || list.firstVisibleItemScrollOffset > 0) historyArmed = true
+    }
+    LaunchedEffect(list.firstVisibleItemIndex, st.hasMore, st.loadingOlder, st.loaded, n) {
+        if (historyArmed && st.loaded && st.hasMore && !st.loadingOlder && n > 0 &&
+            list.firstVisibleItemIndex == 0 && list.firstVisibleItemScrollOffset == 0
+        ) {
+            historyArmed = false
+            Pocket.loadOlderHistory()
+        }
+    }
     if (st.loaded && n == 0 && !st.running) { EmptyState(D.chat, "开始对话", "发送第一条消息"); return }
     if (!st.loaded) { Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator(color = T.Accent, strokeWidth = 2.dp, modifier = Modifier.size(24.dp)) }; return }
     LazyColumn(state = list, modifier = Modifier.fillMaxSize(), contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
