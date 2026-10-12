@@ -2,10 +2,13 @@ package dev.dsh.pocket.app
 
 import android.content.Context
 import android.os.Build
+import dev.dsh.pocket.app.iroh.IrohNative
+import dev.dsh.pocket.app.iroh.IrohTransport
 import dev.dsh.pocket.protocol.*
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
 import kotlinx.serialization.json.JsonObject
+import java.io.File
 import java.net.InetSocketAddress
 import java.net.Socket
 import java.util.UUID
@@ -33,6 +36,8 @@ object Pocket {
 
     val profiles = MutableStateFlow<List<Profile>>(emptyList())
     val status = MutableStateFlow<Map<String, Dot>>(emptyMap())
+    /** Active frame route per profile (WS / iroh direct / iroh relay). */
+    val routes = MutableStateFlow<Map<String, Route>>(emptyMap())
     val active = MutableStateFlow<String?>(null)
     val sessions = MutableStateFlow<List<SessionSummary>>(emptyList())
     val approvals = MutableStateFlow<List<Approval>>(emptyList())
@@ -53,10 +58,12 @@ object Pocket {
     private var subId: String? = null
     private var terminalSubId: String? = null
     private val stray = HashMap<String, MutableList<JsonObject>>()
+    private var irohDir: File? = null
 
     fun init(ctx: Context) {
         if (::prefs.isInitialized) return
         prefs = AppPrefs(ctx); tokens = SecureTokenStore(ctx)
+        irohDir = IrohNative.defaultDataDir(ctx.filesDir)
         profiles.value = prefs.profiles
         active.value = prefs.activeProfile?.takeIf { id -> profiles.value.any { it.id == id } }
         active.value?.let { connect(it) }
@@ -65,12 +72,21 @@ object Pocket {
     val activeProfile get() = profiles.value.firstOrNull { it.id == active.value }
 
     private fun setDot(id: String, d: Dot) { status.value = status.value + (id to d) }
+    private fun setRoute(id: String, r: Route?) {
+        routes.value = if (r == null) routes.value - id else routes.value + (id to r)
+    }
 
     fun connect(profileId: String) {
         connJob?.cancel(); client?.close(); client = null
         active.value = profileId; prefs.activeProfile = profileId
         sessions.value = emptyList(); chat.value = null; approvals.value = emptyList()
+        setRoute(profileId, null)
         connJob = main.launch { runConnection(profileId) }
+    }
+
+    private fun factoriesFor(p: Profile): List<TransportFactory> {
+        val iroh = p.nodeId?.let { n -> irohDir?.let { dir -> IrohTransport.factory(n, dir) } }
+        return transportPlan(p.host, p.port, p.nodeId, iroh)
     }
 
     private suspend fun runConnection(profileId: String) {
@@ -81,9 +97,18 @@ object Pocket {
             setDot(p.id, Dot.Connecting)
             val c = PocketClient()
             try {
-                val hello = c.connect(p.url, Auth.Token(token))
-                client = c; ops.value = hello.ops; setDot(p.id, Dot.Online); backoff = 1000L
+                // Order: Tailscale/LAN WS first, then iroh (direct→relay inside the transport).
+                val hello = c.connect(factoriesFor(p), Auth.Token(token))
+                client = c; ops.value = hello.ops
+                setRoute(p.id, c.route ?: hello.route)
+                setDot(p.id, Dot.Online); backoff = 1000L
                 coroutineScope {
+                    launch {
+                        while (isActive) {
+                            delay(1_000)
+                            c.route?.let { setRoute(p.id, it) }
+                        }
+                    }
                     launch { c.events.collect { onPush(it) } }
                     launch { refreshAll(c) }
                     c.state.first { it == PocketClient.State.Closed }
@@ -92,7 +117,7 @@ object Pocket {
             } catch (e: CancellationException) {
                 if (!currentCoroutineContext().isActive) { c.close(); throw e }
             } catch (e: Exception) { /* fall through to retry */ }
-            client = null; c.close()
+            client = null; c.close(); setRoute(profileId, null)
             val reason = c.closeReason.orEmpty() + ""
             if ("4401" in reason || "4403" in reason || "auth/" in reason) { setDot(p.id, Dot.Unauthorized); return }
             setDot(p.id, Dot.Offline)
@@ -310,12 +335,13 @@ object Pocket {
     }
 
     /** Pair with a desktop: exchanges the 6-digit code for a device token and saves a profile. */
-    suspend fun pair(name: String, host: String, port: Int, code: String): Result<Profile> = withContext(Dispatchers.IO) {
+    suspend fun pair(name: String, host: String, port: Int, code: String, nodeId: String? = null): Result<Profile> = withContext(Dispatchers.IO) {
         val c = PocketClient()
         try {
-            val hello = c.connect(Profile("", name, host, port).url, Auth.Pair(code, Build.MODEL ?: "Android"))
+            val draft = Profile("", name, host, port, nodeId = nodeId)
+            val hello = c.connect(factoriesFor(draft), Auth.Pair(code, Build.MODEL ?: "Android"))
             val token = hello.issuedToken ?: error("服务端未返回令牌")
-            val p = Profile(UUID.randomUUID().toString(), name.ifBlank { host }, host, port, hello.deviceId)
+            val p = Profile(UUID.randomUUID().toString(), name.ifBlank { host }, host, port, hello.deviceId, nodeId)
             tokens.put(p.id, token)
             withContext(main.coroutineContext) { profiles.value = profiles.value + p; prefs.profiles = profiles.value }
             Result.success(p)

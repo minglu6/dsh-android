@@ -106,7 +106,7 @@ export function createPocketServer(opts) {
     'devices.revoke': (a) => {
       need(str(a.deviceId), 'deviceId required')
       const removed = devices.revoke(a.deviceId)
-      for (const c of clients) if (c.device?.id === a.deviceId) c.ws.close(4403, 'revoked')
+      for (const c of clients) if (c.device?.id === a.deviceId) c.close(4403, 'revoked')
       return { removed }
     },
     'approval.answer': (a, _s, client) => {
@@ -122,44 +122,60 @@ export function createPocketServer(opts) {
   /** Ops contributed by optional in-process services (see index.js). */
   const extraOps = {}
   const allOps = () => [...Object.keys(ops), ...Object.keys(deviceOps), ...Object.keys(extraOps), 'follow', 'unfollow']
+  /** peer endpoint id → last reported iroh path (`direct`|`relay`) */
+  const irohPaths = new Map()
 
-  wss.on('connection', (ws) => {
-    const client = {
-      ws, device: undefined, subs: new Map(), lastSeen: Date.now(), nextSub: 1,
-      push: (m) => { if (ws.readyState === ws.OPEN) ws.send(JSON.stringify(m)) },
-    }
-    clients.add(client)
-    const helloTimer = setTimeout(() => { if (!client.device) ws.close(4401, 'hello timeout') }, HELLO_TIMEOUT_MS)
-    const beat = setInterval(() => {
-      if (!client.device) return
-      if (Date.now() - client.lastSeen > idleMs) { ws.terminate(); return }
-      client.push({ ev: 'ping', t: Date.now() })
-    }, heartbeatMs)
-    ws.on('close', () => {
+  /**
+   * Bind a transport-agnostic client (WebSocket or iroh pipe).
+   * @param {{ push(m: object): void, close(code?: number, reason?: string): void, terminate?(): void, meta?: object }} transport
+   */
+  function bindClient(transport) {
+    let disposed = false
+    /** @type {ReturnType<typeof setTimeout> | undefined} */
+    let helloTimer
+    /** @type {ReturnType<typeof setInterval> | undefined} */
+    let beat
+    const dispose = () => {
+      if (disposed) return
+      disposed = true
       clearTimeout(helloTimer); clearInterval(beat); clients.delete(client)
       for (const ac of client.subs.values()) ac.abort()
-    })
+    }
+    const client = {
+      device: undefined, subs: new Map(), lastSeen: Date.now(), nextSub: 1,
+      meta: transport.meta ?? { transport: 'ws' },
+      push: (m) => { if (!disposed) transport.push(m) },
+      close: (code, reason) => { transport.close(code, reason); dispose() },
+    }
+    clients.add(client)
+    helloTimer = setTimeout(() => { if (!client.device) client.close(4401, 'hello timeout') }, HELLO_TIMEOUT_MS)
+    beat = setInterval(() => {
+      if (!client.device) return
+      if (Date.now() - client.lastSeen > idleMs) {
+        if (typeof transport.terminate === 'function') transport.terminate()
+        else client.close(1001, 'idle')
+        return
+      }
+      client.push({ ev: 'ping', t: Date.now() })
+    }, heartbeatMs)
     let busy = false
-    ws.on('message', async (raw, isBinary) => {
+    const onMessage = async (msg, rawLen = 0) => {
       client.lastSeen = Date.now()
-      if (isBinary) { ws.close(1003, 'text only'); return }
-      if (!client.device && raw.length > PRE_AUTH_MAX) { ws.close(1009, 'too large'); return }
-      let msg
-      try { msg = JSON.parse(raw.toString('utf8')) } catch { ws.close(1007, 'bad json'); return }
-      if (msg === null || typeof msg !== 'object') { ws.close(1007, 'bad frame'); return }
+      if (!client.device && rawLen > PRE_AUTH_MAX) { client.close(1009, 'too large'); return }
+      if (msg === null || typeof msg !== 'object') { client.close(1007, 'bad frame'); return }
       if (msg.op === 'pong') return
       const reply = (body) => client.push({ id: msg.id, ...body })
       const fail = (code, message) => reply({ ok: false, error: { code, message } })
       if (!client.device) {
         if (busy) return
-        if (msg.op !== 'hello' && msg.op !== 'pair') { fail('auth/denied', 'hello with a valid token required'); ws.close(4401, 'unauthorized'); return }
-        if (msg.args?.proto !== PROTO) { fail('proto/unsupported', `proto ${PROTO} required`); ws.close(4400, 'proto'); return }
+        if (msg.op !== 'hello' && msg.op !== 'pair') { fail('auth/denied', 'hello with a valid token required'); client.close(4401, 'unauthorized'); return }
+        if (msg.args?.proto !== PROTO) { fail('proto/unsupported', `proto ${PROTO} required`); client.close(4400, 'proto'); return }
         if (msg.op === 'pair') {
           busy = true
           const reason = pairing.attempt(msg.args?.code)
           if (reason !== null) {
             await sleep(pairFailDelayMs)
-            fail(reason, 'pairing failed'); ws.close(4401, 'pair failed'); return
+            fail(reason, 'pairing failed'); client.close(4401, 'pair failed'); return
           }
           const issued = devices.add(msg.args?.name)
           client.device = devices.authenticate(issued.token)
@@ -169,13 +185,35 @@ export function createPocketServer(opts) {
           return
         }
         const device = msg.op === 'hello' ? devices.authenticate(msg.args?.token) : undefined
-        if (!device) { fail('auth/denied', 'hello with a valid token required'); ws.close(4401, 'unauthorized'); return }
+        if (!device) { fail('auth/denied', 'hello with a valid token required'); client.close(4401, 'unauthorized'); return }
         client.device = device; clearTimeout(helloTimer)
         reply({ ok: true, result: { proto: PROTO, device: { id: device.id, name: device.name }, ...(opts.info ?? {}), ops: allOps() } })
         sendPending(client)
         return
       }
       void handle(client, msg, reply, fail)
+    }
+    return {
+      client,
+      onMessage,
+      onRemoteClose: dispose,
+      close: (code, reason) => { client.close(code, reason) },
+    }
+  }
+
+  wss.on('connection', (ws) => {
+    const bound = bindClient({
+      push: (m) => { if (ws.readyState === ws.OPEN) ws.send(JSON.stringify(m)) },
+      close: (code, reason) => { try { ws.close(code ?? 1000, reason) } catch { /* ignore */ } },
+      terminate: () => ws.terminate(),
+      meta: { transport: 'ws' },
+    })
+    ws.on('close', () => bound.onRemoteClose())
+    ws.on('message', (raw, isBinary) => {
+      if (isBinary) { bound.client.close(1003, 'text only'); return }
+      let msg
+      try { msg = JSON.parse(raw.toString('utf8')) } catch { bound.client.close(1007, 'bad json'); return }
+      void bound.onMessage(msg, raw.length)
     })
   })
 
@@ -268,14 +306,37 @@ export function createPocketServer(opts) {
       return () => { for (const k of Object.keys(table)) if (extraOps[k] === table[k]) delete extraOps[k] }
     },
     hasDevices: () => authedClients().length > 0,
-    /** Device ids currently authenticated on a live WebSocket. */
+    /** Device ids currently authenticated on a live connection. */
     onlineDeviceIds: () => new Set(authedClients().filter((c) => !c.device.owner).map((c) => c.device.id)),
     /** Revoke a paired device and kick any live connection. */
     revokeDevice(id) {
       const removed = devices.revoke(id)
-      for (const c of clients) if (c.device?.id === id) c.ws.close(4403, 'revoked')
+      for (const c of clients) if (c.device?.id === id) c.close(4403, 'revoked')
       return removed
     },
+    /**
+     * Attach an iroh (or other) pipe that speaks the same JSON frames.
+     * @param {{ send(frame: object): void, close(): void, meta?: object }} pipe
+     */
+    attachPipe(pipe) {
+      let closed = false
+      const bound = bindClient({
+        push: (m) => { if (!closed) pipe.send(m) },
+        close: () => {
+          if (closed) return
+          closed = true
+          pipe.close()
+        },
+        meta: pipe.meta ?? { transport: 'iroh' },
+      })
+      return {
+        onMessage: (msg, rawLen) => bound.onMessage(msg, rawLen),
+        onRemoteClose: () => { closed = true; bound.onRemoteClose() },
+        close: (code, reason) => { bound.close(code, reason) },
+      }
+    },
+    noteIrohPath(peer, kind) { if (peer && kind) irohPaths.set(peer, kind) },
+    irohPath: (peer) => irohPaths.get(peer),
     /**
      * Offer one approval to connected devices.
      * @returns {{ answer: Promise<{outcome: string, by: string}>, close(outcome: string, by: string): void }}
@@ -308,8 +369,11 @@ export function createPocketServer(opts) {
     address: () => http.address(),
     close: () => new Promise((resolve) => {
       unsub?.()
+      for (const c of [...clients]) c.close(1001, 'shutdown')
       for (const ws of wss.clients) ws.terminate()
-      wss.close(); http.close(() => resolve())
+      wss.close(() => {
+        http.close(() => resolve())
+      })
     }),
   }
 }

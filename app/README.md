@@ -4,8 +4,8 @@ Gradle 工程根目录就是 `app/`。
 
 | 模块 | 内容 |
 |---|---|
-| `core/protocol` | 纯 Kotlin/JVM：`PocketClient`（OkHttp WebSocket，协议 v1）、`TranscriptReducer`（把 follow 帧折叠成消息、思考、工具卡片）、模型等数据结构 |
-| `app` | Compose 界面、连接管理、前台服务（审批通知）、Keystore 加密 token |
+| `core/protocol` | 纯 Kotlin/JVM：`PocketClient`（WS / iroh 共用协议 v1）、`Transport`（连接顺序 WS→iroh）、`TranscriptReducer`、模型等数据结构 |
+| `app` | Compose 界面、连接管理、iroh JNI（`IrohNative`）、前台服务（审批通知）、Keystore 加密 token |
 
 界面按 [docs/mockups](../docs/mockups/) 实现，配色和圆角沿用 dsh 网页端。
 
@@ -24,8 +24,9 @@ cd ../plugin && node test/integration/kotlin-live.mjs
 ## 使用
 
 1. 电脑端：`dsh web` 装好插件后，在 `plugin/` 下运行 `node bin/pocket.js pair` 显示 6 位配对码（10 分钟有效）。
-2. 手机端：连接 →「输入配对码」手动填写 `IP:端口` 与 6 位码；或点「扫码配对」用应用内相机扫描桌面端二维码（`dshpocket://pair?h=…&c=…`），解析后自动填入配对表单。
-3. token 用 Android Keystore 的 AES-GCM 密钥加密保存。
+2. 手机端：连接 →「输入配对码」手动填写 `IP:端口` 与 6 位码；或点「扫码配对」用应用内相机扫描桌面端二维码（`dshpocket://pair?h=…&c=…[&n=…]`，`n` 为 iroh node id，可缺省），解析后自动填入配对表单。
+3. 连接顺序：先 WS（Tailscale/LAN），失败再 iroh（打洞 direct，否则 relay）。连接列表上的小标签显示当前路由；relay 时状态点为琥珀色。
+4. token 用 Android Keystore 的 AES-GCM 密钥加密保存（各传输共用）。
 
 ## 功能对齐
 

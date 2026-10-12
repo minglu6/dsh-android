@@ -66,12 +66,12 @@ data class Approval(val approvalId: String, val sessionId: String?, val toolName
 /** One image part for `prompt` (base64 payload, no data: URL prefix). */
 data class PromptImage(val mediaType: String, val data: String, val name: String? = null)
 
-data class PairingLink(val host: String, val port: Int, val code: String) {
+data class PairingLink(val host: String, val port: Int, val code: String, val nodeId: String? = null) {
     companion object {
         /**
          * Plugin QR / deep-link payload from `pairingUri`:
-         * `dshpocket://pair?h=<url-encoded host:port>&c=<6-digit>`
-         * Extra query keys (e.g. future `n` / `fp`) are ignored.
+         * `dshpocket://pair?h=<url-encoded host:port>&c=<6-digit>[&n=<irohNodeId>]`
+         * `n` is optional (M2 URIs / older phones). Unknown extra keys (e.g. `fp`) are ignored.
          */
         fun parse(text: String): PairingLink? {
             val s = text.trim()
@@ -83,7 +83,8 @@ data class PairingLink(val host: String, val port: Int, val code: String) {
             val c = q["c"]?.takeIf { it.matches(Regex("\\d{6}")) } ?: return null
             val host = h.substringBeforeLast(':').removePrefix("[").removeSuffix("]").takeIf { it.isNotBlank() } ?: return null
             val port = h.substringAfterLast(':', "7690").toIntOrNull()?.takeIf { it in 1..65535 } ?: return null
-            return PairingLink(host, port, c)
+            val nodeId = q["n"]?.takeIf { it.isNotBlank() }
+            return PairingLink(host, port, c, nodeId)
         }
     }
 }

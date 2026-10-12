@@ -15,12 +15,15 @@
 需要 dsh 0.2.1-alpha.2、Node ≥ 22.19；`dsh plugin` 依赖 PATH 上的 pnpm。
 
 ```bash
-git clone https://github.com/minglu6/dsh-android && cd dsh-android/plugin && npm install
+git clone https://github.com/minglu6/dsh-android && cd dsh-android/plugin && npm install && npm run build:iroh
 dsh plugin --profile web add "$PWD"
 dsh web
 # 日志会显示：[pocket] listening on ws://127.0.0.1:7690
+# 有 sidecar 时还有：[pocket] iroh ready, node id: …
 # token 保存在 ~/.dsh/pocket/token
 ```
+
+`npm run build:iroh` 是桌面 iroh sidecar 的一行安装（需 [rustup](https://rustup.rs)）。不跑也可以：插件启动时会尝试下载 CI 预编译包或自动 `cargo build`；失败则保持 WebSocket-only。
 
 如果要通过 Tailscale 远程连接，把监听地址改成你的 tailnet IP。配置方法见 [plugin/README.md](plugin/README.md)。
 
@@ -32,5 +35,5 @@ dsh web
 - [x] M1：审批转发（手机和网页端谁先答算谁的）、设备配对（6 位码、按设备发 token、设备列表和撤销）、断点续订
 - [x] M1.5：dsh 内管理 UI（设置「手机连接」分区；状态 / 配对码+QR / 设备重命名与撤销）
 - [x] M2：Android App（WebSocket 连接）。最新调试包：[dsh-android-debug.apk](https://github.com/minglu6/dsh-android/releases/download/dsh-android-latest/dsh-android-debug.apk)
-- [ ] M3：iroh P2P 和中继
+- [x] M3：iroh P2P 和中继（WS 优先，失败后走 iroh；打洞失败自动 relay）。配对 URI 可带 `n=<nodeId>`，与旧版兼容
 - [ ] M4：手机本地模式

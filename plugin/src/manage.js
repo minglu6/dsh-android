@@ -4,23 +4,30 @@ import { fileURLToPath } from 'node:url'
 
 const PKG = JSON.parse(readFileSync(join(dirname(fileURLToPath(import.meta.url)), '..', 'package.json'), 'utf8'))
 
-/** Build a phone-side deep link for the active pairing window. */
-export function pairingUri({ host, port, code }) {
-  return `dshpocket://pair?h=${encodeURIComponent(`${host}:${port}`)}&c=${encodeURIComponent(code)}`
+/**
+ * Build a phone-side deep link for the active pairing window.
+ * `n` (iroh node id) is optional for backward compatibility with older phones.
+ */
+export function pairingUri({ host, port, code, nodeId }) {
+  let uri = `dshpocket://pair?h=${encodeURIComponent(`${host}:${port}`)}&c=${encodeURIComponent(code)}`
+  if (nodeId) uri += `&n=${encodeURIComponent(nodeId)}`
+  return uri
 }
 
 /**
  * Facade used by management HTTP routes and the client half.
- * @param {{ host: string, port: number, devices: any, pairing: any, server: any, openPairing: Function }} opts
+ * @param {{ host: string, port: number, devices: any, pairing: any, server: any, openPairing: Function, getNodeId?: () => string|null|undefined }} opts
  */
-export function createManageApi({ host, port, devices, pairing, server, openPairing }) {
+export function createManageApi({ host, port, devices, pairing, server, openPairing, getNodeId }) {
+  const nodeId = () => (typeof getNodeId === 'function' ? getNodeId() : null) || null
   const withOnline = () => {
     const online = server.onlineDeviceIds()
     return devices.list().map((d) => ({ ...d, online: online.has(d.id) }))
   }
   const enrichPairing = (status) => {
     if (!status.open || !status.code) return status
-    return { ...status, host, port, uri: pairingUri({ host, port, code: status.code }) }
+    const n = nodeId()
+    return { ...status, host, port, nodeId: n || undefined, uri: pairingUri({ host, port, code: status.code, nodeId: n }) }
   }
   return {
     openPairing,
@@ -40,6 +47,7 @@ export function createManageApi({ host, port, devices, pairing, server, openPair
         plugin: PKG.name,
         host: listenHost,
         port: listenPort,
+        nodeId: nodeId(),
         listen: listening
           ? [{ host: listenHost, port: listenPort, address: typeof addr === 'string' ? addr : `${listenHost}:${listenPort}` }]
           : [],

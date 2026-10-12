@@ -199,7 +199,7 @@ interface Transport { suspend fun connect(): Channel; val kind: Kind }   // Chan
 - **M0 (2–3 d) Plugin skeleton**: npm package plus patch. Loopback WS listener. hello with a static token from config. Ops: `sessions.list`, `sessions.create`, `prompt`, `cancel`, `follow`. Verify in the dsh 0.2.1-alpha.2 web profile with a node test client.
 - **M1 (3–4 d) Approvals plus models plus pairing**: approval broker, model ops, device store, pairing window (code plus QR), listen on Tailscale IP. Ships a usable desktop side.
 - **M2 (1 wk) Android MVP over WS**: design system, connections (Tailscale/LAN profiles plus pairing), drawer, chat with reducer, tool sheet, approval card plus notification, foreground service.
-- **M3 (1 wk) iroh**: fork tether-host into a pocket sidecar with a JSON pipe stream. Android iroh binding (spike first, 1–2 d). Pairing string/QR carries the NodeId. Relay fallback indicator.
+- **M3 (1 wk) iroh** ✅: `plugin/iroh` pocket-host sidecar (ALPN `dsh-pocket/1`, dumb JSON pipe). Android `IrohNative` JNI + dial order WS→iroh. Pairing URI carries optional `n=<NodeId>`. Relay shown as amber status + `iroh relay` chip. CI builds `libpocket_iroh.so` (arm64-v8a + x86_64) into the debug APK and publishes `pocket-host-{linux-x64,darwin-arm64}` prebuilts; plugin auto-downloads or `cargo build`s on first start, WS-only if missing.
 - **M4 (1 wk) Local mode**: port tether's runtime build script and local.rs. Bundle the plugin with `mode: local`. Lifecycle management.
 - **M5 Polish**: server-side transcript reducer, history paging, user-questions, image prompts, reconnect hardening, per-dsh-version CI matrix.
 

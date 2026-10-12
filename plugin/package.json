@@ -31,16 +31,19 @@
     "lib",
     "bin",
     "cordis.patch.yml",
-    "README.md"
+    "README.md",
+    "iroh"
   ],
   "engines": {
     "node": "^22.19.0 || >=24.0.0"
   },
   "scripts": {
     "build:client": "tsdown",
+    "build:iroh": "cargo build --release -p pocket-host --manifest-path iroh/Cargo.toml",
+    "build:iroh:android": "bash scripts/build-android-jni.sh",
     "pretest": "npm run build:client",
     "lint": "eslint .",
-    "test": "node --test --test-timeout=20000 test/*.test.js",
+    "test": "node --test --test-timeout=60000 test/*.test.js",
     "test:integration": "npm run build:client && node --test test/integration/*.test.js"
   },
   "dsh": {

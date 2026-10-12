@@ -11,6 +11,7 @@ import { zipSync, strToU8 } from 'fflate'
 import { permissionOps, presetOps, commandOps, filesOps, jobsOps, exportOps, terminalOps } from './src/extra-ops.js'
 import { registerPairRoute } from './src/web-route.js'
 import { createManageApi, pairingUri } from './src/manage.js'
+import { startIrohSidecar } from './src/iroh.js'
 
 export const name = 'dsh-plugin-pocket'
 // webServer is optional: Cordis `inject` entries are all required, so the
@@ -23,7 +24,7 @@ const PKG = JSON.parse(readFileSync(join(dirname(fileURLToPath(import.meta.url))
 
 /**
  * @param {import('@deepseek-ai/cordis').Context} ctx
- * @param {{host?: string, port?: number, token?: string, dataDir?: string, pair?: boolean}} [config]
+ * @param {{host?: string, port?: number, token?: string, dataDir?: string, pair?: boolean, iroh?: boolean, hostBinary?: string}} [config]
  */
 export function apply(ctx, config = {}) {
   const log = (...a) => console.log('[pocket]', ...a)
@@ -45,13 +46,21 @@ export function apply(ctx, config = {}) {
   // prepend: run outside the web UI forwarder so we can race it.
   ctx.on('approval/request', createApprovalHook(server, { log }), { prepend: true })
 
+  /** @type {{ endpointId: Promise<string>, close: () => Promise<void> } | null} */
+  let iroh = null
+  /** @type {string | null} */
+  let nodeId = null
+
   const openPairing = () => {
     const w = pairing.open()
-    const uri = pairingUri({ host, port, code: w.code })
+    const uri = pairingUri({ host, port, code: w.code, nodeId })
     log(`pairing code ${w.code} (valid ${Math.round(w.expiresInSec / 60)} min) — ${uri}`)
-    return { ...w, host, port, uri }
+    return { ...w, host, port, nodeId, uri }
   }
-  const manage = createManageApi({ host, port, devices, pairing, server, openPairing })
+  const manage = createManageApi({
+    host, port, devices, pairing, server, openPairing,
+    getNodeId: () => nodeId,
+  })
   ctx.inject(['permissionPresets', 'agents'], (c) => { c.effect(() => server.registerOps(permissionOps(c.permissionPresets, c.agents))) })
   ctx.inject(['agentPresets'], (c) => { c.effect(() => server.registerOps(presetOps(c.agentPresets))) })
   ctx.inject(['commands', 'agents'], (c) => { c.effect(() => server.registerOps(commandOps(c.commands, c.agents))) })
@@ -66,14 +75,41 @@ export function apply(ctx, config = {}) {
   ctx.inject(['webServer'], (webCtx) => registerPairRoute(webCtx, manage))
 
   ctx.effect(() => {
-    server.listen().then(
-      (addr) => {
-        log(`listening on ws://${addr}`)
-        log(created ? `new owner token written to ${path}: ${token}` : `owner token: ${path}`)
-        if (config.pair || devices.list().length === 0) openPairing()
-      },
-      (error) => console.error('[pocket] listen failed:', error),
-    )
-    return () => server.close()
+    const start = async () => {
+      // WS listen first so Tailscale/LAN pairing works even if iroh setup is slow/missing.
+      const addr = await server.listen()
+      log(`listening on ws://${addr}`)
+      log(created ? `new owner token written to ${path}: ${token}` : `owner token: ${path}`)
+
+      if (config.iroh !== false) {
+        iroh = await startIrohSidecar({
+          server,
+          dataDir: join(dataDir, 'iroh'),
+          hostBinary: config.hostBinary,
+          log,
+        })
+        if (iroh) {
+          try {
+            // First cargo build can exceed 15s; give discovery time too.
+            nodeId = await Promise.race([
+              iroh.endpointId,
+              new Promise((_, rej) => setTimeout(() => rej(new Error('iroh ready timeout')), 60_000)),
+            ])
+          } catch (e) {
+            console.error('[pocket] iroh sidecar did not become ready:', e.message ?? e)
+            await iroh.close()
+            iroh = null
+            nodeId = null
+          }
+        }
+      }
+
+      if (config.pair || devices.list().length === 0) openPairing()
+    }
+    start().catch((error) => console.error('[pocket] listen failed:', error))
+    return () => {
+      void iroh?.close()
+      void server.close()
+    }
   })
 }

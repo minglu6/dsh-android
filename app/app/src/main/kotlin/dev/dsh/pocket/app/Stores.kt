@@ -44,7 +44,15 @@ class SecureTokenStore(ctx: Context) {
 }
 
 @Serializable
-data class Profile(val id: String, val name: String, val host: String, val port: Int, val deviceId: String? = null) {
+data class Profile(
+    val id: String,
+    val name: String,
+    val host: String,
+    val port: Int,
+    val deviceId: String? = null,
+    /** Desktop iroh endpoint id from the pairing URI (`n=`). Optional for M2 profiles. */
+    val nodeId: String? = null,
+) {
     val url get() = "ws://${if (':' in host) "[$host]" else host}:$port"
     /** Tailscale CGNAT 100.64/10 or MagicDNS (*.ts.net); everything else is LAN. */
     val kind: String get() {
