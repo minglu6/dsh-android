@@ -67,6 +67,7 @@ fun SessionDrawer(onPick: (String) -> Unit, onNew: () -> Unit, onSettings: () ->
     val chat by Pocket.chat.collectAsState()
     val active by Pocket.active.collectAsState()
     val status by Pocket.status.collectAsState()
+    val routes by Pocket.routes.collectAsState()
     val profile = Pocket.profiles.collectAsState().value.firstOrNull { it.id == active }
     ModalDrawerSheet(drawerContainerColor = T.Drawer, drawerShape = RoundedCornerShapeEnd, modifier = Modifier.width(320.dp)) {
         Column(Modifier.fillMaxHeight().systemBarsPadding()) {
@@ -74,7 +75,7 @@ fun SessionDrawer(onPick: (String) -> Unit, onNew: () -> Unit, onSettings: () ->
                 androidx.compose.foundation.Image(D.wordmark, "deepseek HARNESS", modifier = Modifier.height(22.dp).width(167.dp))
                 Spacer(Modifier.weight(1f))
                 Row(Modifier.clip(T.R8).clickable(onClick = onConnections).padding(4.dp), verticalAlignment = Alignment.CenterVertically) {
-                    StatusDot(status[active]); Spacer(Modifier.width(6.dp)); Text(profile?.name ?: "未连接", fontSize = 13.sp, color = T.Text2)
+                    StatusDot(status[active], relay = routes[active]?.isRelay == true); Spacer(Modifier.width(6.dp)); Text(profile?.name ?: "未连接", fontSize = 13.sp, color = T.Text2)
                 }
             }
             Row(Modifier.padding(horizontal = 12.dp).fillMaxWidth().clip(T.R12).background(Color.White).border(1.dp, T.Border, T.R12).clickable(onClick = onNew).padding(12.dp),
@@ -128,6 +129,7 @@ fun ConnectionsScreen(pairLink: PairingLink?, onPairLinkConsumed: () -> Unit, ca
     var showPair by remember { mutableStateOf(false) }
     var showScan by remember { mutableStateOf(false) }
     var manage by remember { mutableStateOf<Profile?>(null) }
+    val routes by Pocket.routes.collectAsState()
     LaunchedEffect(Unit) { while (true) { Pocket.probe(); kotlinx.coroutines.delay(10_000) } }
     LaunchedEffect(pairLink) { if (pairLink != null) { pairing = pairLink; showPair = true; onPairLinkConsumed() } }
 
@@ -148,9 +150,10 @@ fun ConnectionsScreen(pairLink: PairingLink?, onPairLinkConsumed: () -> Unit, ca
             Card {
                 profiles.forEachIndexed { i, p ->
                     val d = status[p.id]
-                    Row(verticalAlignment = Alignment.CenterVertically) { Spacer(Modifier.width(16.dp)); StatusDot(d); Box(Modifier.weight(1f)) {
+                    val route = routes[p.id]
+                    Row(verticalAlignment = Alignment.CenterVertically) { Spacer(Modifier.width(16.dp)); StatusDot(d, relay = route?.isRelay == true); Box(Modifier.weight(1f)) {
                     Row2(p.name + if (p.id == active) "  · 当前" else "", "${p.host}:${p.port} · ${dotLabel(d)}", icon = null, divider = i < profiles.lastIndex, onClick = { manage = p }, trailing = {
-                        Text(p.kind, fontSize = 12.sp, color = T.Text2, modifier = Modifier.border(1.dp, T.Border, T.R8).padding(horizontal = 8.dp, vertical = 4.dp))
+                        Text(route?.label ?: p.kind, fontSize = 12.sp, color = T.Text2, modifier = Modifier.border(1.dp, T.Border, T.R8).padding(horizontal = 8.dp, vertical = 4.dp))
                         Icon(D.chevronRight, null, tint = T.Text3, modifier = Modifier.padding(start = 8.dp).size(20.dp))
                     }) } }
                 }
@@ -219,7 +222,7 @@ fun PairSheet(link: PairingLink?, onDismiss: () -> Unit, onPaired: (Profile) -> 
         Button({
             busy = true
             scope.launch {
-                Pocket.pair(name.trim(), hp!!.first, hp.second, code).onSuccess(onPaired).onFailure { err = it.message }
+                Pocket.pair(name.trim(), hp!!.first, hp.second, code, link?.nodeId).onSuccess(onPaired).onFailure { err = it.message }
                 busy = false
             }
         }, Modifier.padding(horizontal = 18.dp, vertical = 16.dp).fillMaxWidth().height(52.dp), enabled = ready, shape = T.R12,

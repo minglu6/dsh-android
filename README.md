@@ -32,5 +32,5 @@ dsh web
 - [x] M1：审批转发（手机和网页端谁先答算谁的）、设备配对（6 位码、按设备发 token、设备列表和撤销）、断点续订
 - [x] M1.5：dsh 内管理 UI（设置「手机连接」分区；状态 / 配对码+QR / 设备重命名与撤销）
 - [x] M2：Android App（WebSocket 连接）。最新调试包：[dsh-android-debug.apk](https://github.com/minglu6/dsh-android/releases/download/dsh-android-latest/dsh-android-debug.apk)
-- [ ] M3：iroh P2P 和中继
+- [x] M3：iroh P2P 和中继（WS 优先，失败后走 iroh；打洞失败自动 relay）。配对 URI 可带 `n=<nodeId>`，与旧版兼容
 - [ ] M4：手机本地模式

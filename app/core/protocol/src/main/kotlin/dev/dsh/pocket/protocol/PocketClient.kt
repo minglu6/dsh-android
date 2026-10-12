@@ -4,7 +4,7 @@ import kotlinx.coroutines.*
 import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.flow.*
 import kotlinx.serialization.json.*
-import okhttp3.*
+import okhttp3.OkHttpClient
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicLong
@@ -15,7 +15,7 @@ sealed interface Auth {
     data class Pair(val code: String, val deviceName: String) : Auth
 }
 
-data class HelloResult(val raw: JsonObject) {
+data class HelloResult(val raw: JsonObject, val route: Route? = null) {
     val ops: Set<String> get() = raw["ops"].arr().orEmpty().mapNotNull { it.str() }.toSet()
     val deviceId: String? get() = raw["deviceId"].str() ?: raw["device"]["id"].str()
     /** Present only after a successful pairing. */
@@ -23,50 +23,73 @@ data class HelloResult(val raw: JsonObject) {
 }
 
 /**
- * Client for the dsh-plugin-pocket protocol v1 over one WebSocket.
- * Requests are `{id, op, args}`; replies `{id, ok, result|error}`; pushes `{ev, ...}`.
+ * Client for the dsh-plugin-pocket protocol v1 over any [FrameTransport]
+ * (WebSocket text frames or iroh newline-JSON). Auth tokens are identical
+ * across transports.
  */
 class PocketClient(
-    private val http: OkHttpClient = defaultHttp(),
     private val scope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.IO),
 ) {
     enum class State { Idle, Connecting, Open, Closed }
 
     private val nextId = AtomicLong(1)
     private val pending = ConcurrentHashMap<Long, CompletableDeferred<JsonObject>>()
-    private var ws: WebSocket? = null
+    private var transport: FrameTransport? = null
+    private var pump: Job? = null
     private val _state = MutableStateFlow(State.Idle)
     val state: StateFlow<State> = _state
     private val _events = MutableSharedFlow<JsonObject>(extraBufferCapacity = 4096, onBufferOverflow = BufferOverflow.SUSPEND)
     /** Server pushes (`ev` frames). */
     val events: SharedFlow<JsonObject> = _events
     @Volatile var closeReason: String? = null; private set
+    /** Live route from the active transport (iroh may upgrade relay→direct). */
+    val route: Route? get() = transport?.route
 
-    suspend fun connect(url: String, auth: Auth, timeoutMs: Long = 10_000): HelloResult = withTimeout(timeoutMs) {
-        close()
-        _state.value = State.Connecting
-        closeReason = null
-        val opened = CompletableDeferred<Unit>()
-        ws = http.newWebSocket(Request.Builder().url(url).build(), object : WebSocketListener() {
-            override fun onOpen(webSocket: WebSocket, response: Response) { opened.complete(Unit) }
-            override fun onMessage(webSocket: WebSocket, text: String) { onFrame(text) }
-            override fun onClosing(webSocket: WebSocket, code: Int, reason: String) { webSocket.close(1000, null) }
-            override fun onClosed(webSocket: WebSocket, code: Int, reason: String) { fail("closed $code $reason", opened) }
-            override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) { fail(t.message ?: t.toString(), opened) }
-        })
-        opened.await()
-        val result = when (auth) {
-            is Auth.Token -> call("hello", jsonOf("proto" to 1, "token" to auth.token, "app" to "dsh-android"))
-            is Auth.Pair -> call("pair", jsonOf("proto" to 1, "code" to auth.code, "name" to auth.deviceName))
-        }
-        _state.value = State.Open
-        HelloResult(result.obj() ?: JsonObject(emptyMap()))
+    /** Connect over WebSocket (Tailscale / LAN). */
+    suspend fun connect(url: String, auth: Auth, timeoutMs: Long = 10_000): HelloResult {
+        val host = url.removePrefix("ws://").removePrefix("wss://").substringBefore('/').substringBeforeLast(':')
+            .removePrefix("[").removeSuffix("]")
+        return connect(WsTransport.factory(url, host), auth, timeoutMs)
     }
 
-    private fun fail(reason: String, opened: CompletableDeferred<Unit>) {
+    /** Connect using an ordered list of transports (WS then iroh). */
+    suspend fun connect(factories: List<TransportFactory>, auth: Auth, timeoutMs: Long = 10_000): HelloResult =
+        withTimeout(timeoutMs) {
+            close()
+            _state.value = State.Connecting
+            closeReason = null
+            val t = dialInOrder(factories)
+            attach(t)
+            val result = when (auth) {
+                is Auth.Token -> call("hello", jsonOf("proto" to 1, "token" to auth.token, "app" to "dsh-android"))
+                is Auth.Pair -> call("pair", jsonOf("proto" to 1, "code" to auth.code, "name" to auth.deviceName))
+            }
+            _state.value = State.Open
+            HelloResult(result.obj() ?: JsonObject(emptyMap()), t.route)
+        }
+
+    suspend fun connect(factory: TransportFactory, auth: Auth, timeoutMs: Long = 10_000): HelloResult =
+        connect(listOf(factory), auth, timeoutMs)
+
+    private fun attach(t: FrameTransport) {
+        transport = t
+        pump = scope.launch {
+            try {
+                t.incoming.collect { onFrame(it) }
+            } catch (_: CancellationException) {
+            } catch (e: Exception) {
+                fail(e.message ?: e.toString())
+            } finally {
+                if (_state.value == State.Open || _state.value == State.Connecting) {
+                    fail(t.closeReason ?: "closed")
+                }
+            }
+        }
+    }
+
+    private fun fail(reason: String) {
         closeReason = reason
         _state.value = State.Closed
-        opened.completeExceptionally(PocketError("transport", reason))
         val err = PocketError("transport", reason)
         pending.values.forEach { it.completeExceptionally(err) }
         pending.clear()
@@ -76,18 +99,26 @@ class PocketClient(
         val m = runCatching { PocketJson.parseToJsonElement(text).jsonObject }.getOrNull() ?: return
         val id = m["id"].long()
         if (id != null && pending.containsKey(id)) { pending.remove(id)?.complete(m); return }
-        if (m["ev"].str() == "ping") { ws?.send("""{"op":"pong"}"""); return }
+        if (m["ev"].str() == "ping") {
+            scope.launch { runCatching { transport?.send("""{"op":"pong"}""") } }
+            return
+        }
         if (m["ev"] != null) scope.launch { _events.emit(m) }
     }
 
     /** Send one op; returns `result` or throws [PocketError]. */
     suspend fun call(op: String, args: JsonObject = JsonObject(emptyMap()), timeoutMs: Long = 60_000): JsonElement {
-        val socket = ws ?: throw PocketError("transport", "not connected")
+        val t = transport ?: throw PocketError("transport", "not connected")
         val id = nextId.getAndIncrement()
         val d = CompletableDeferred<JsonObject>()
         pending[id] = d
         val frame = buildJsonObject { put("id", id); put("op", op); put("args", args) }
-        if (!socket.send(frame.toString())) { pending.remove(id); throw PocketError("transport", "send failed") }
+        try {
+            t.send(frame.toString())
+        } catch (e: Exception) {
+            pending.remove(id)
+            throw PocketError("transport", e.message ?: "send failed")
+        }
         val reply = try { withTimeout(timeoutMs) { d.await() } } finally { pending.remove(id) }
         if (reply["ok"].bool() == true) return reply["result"] ?: JsonNull
         throw PocketError(reply["error"]["code"].str() ?: "error", reply["error"]["message"].str() ?: "")
@@ -148,7 +179,8 @@ class PocketClient(
     suspend fun presets(): List<String> = call("presets.list")["presets"].arr().orEmpty().mapNotNull { it["id"].str() }
 
     fun close() {
-        ws?.close(1000, "bye"); ws = null
+        pump?.cancel(); pump = null
+        transport?.close(); transport = null
         if (_state.value != State.Idle) _state.value = State.Closed
     }
 

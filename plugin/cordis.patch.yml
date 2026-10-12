@@ -3,6 +3,8 @@
 #   port: 7690
 #   token: <string>    fixed token; otherwise one is generated into $DSH_HOME/pocket/token
 #   dataDir: <path>
+#   iroh: true         spawn pocket-host sidecar (default true when binary is found)
+#   hostBinary: <path> override path to pocket-host
 - insert:
     - id: dsh-pocket
       name: dsh-plugin-pocket

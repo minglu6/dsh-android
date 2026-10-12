@@ -94,12 +94,13 @@ fun ChatRoot(onMenu: () -> Unit) {
     val curModel = (if (sid != null) models[sid] else draftModel) ?: defaultModel
     val curPerm = if (sid != null) perms[sid] ?: "workspace-write" else draftPerm
     val summary = sessions.firstOrNull { it.sessionId == sid }
+    val routes by Pocket.routes.collectAsState()
     val dot = status[active]
     val workspaces = sessions.mapNotNull { it.cwd }.distinct()
     val showPanel = "files.list" in ops || "jobs.list" in ops || "terminal.create" in ops
 
     Column(Modifier.fillMaxSize().background(Color.White).systemBarsPadding().imePadding()) {
-        TopBar(summary?.title ?: chat?.title, sid != null, dot, chat?.running == true, onMenu, onMore = { sheet = Sheet.More },
+        TopBar(summary?.title ?: chat?.title, sid != null, dot, routes[active]?.isRelay == true, chat?.running == true, onMenu, onMore = { sheet = Sheet.More },
             onPanel = if (showPanel) ({ sheet = Sheet.Panel }) else null,
             onTeam = { sheet = Sheet.Team }, onPreset = { sheet = Sheet.Preset }, preset = "standard", onNew = { Pocket.closeChat() })
         if (chat == null) {
@@ -163,7 +164,7 @@ fun ChatRoot(onMenu: () -> Unit) {
 }
 
 @Composable
-private fun TopBar(title: String?, inChat: Boolean, dot: Dot?, running: Boolean, onMenu: () -> Unit, onMore: () -> Unit, onPanel: (() -> Unit)?, onTeam: () -> Unit, onPreset: () -> Unit, preset: String, onNew: () -> Unit = {}) {
+private fun TopBar(title: String?, inChat: Boolean, dot: Dot?, relay: Boolean, running: Boolean, onMenu: () -> Unit, onMore: () -> Unit, onPanel: (() -> Unit)?, onTeam: () -> Unit, onPreset: () -> Unit, preset: String, onNew: () -> Unit = {}) {
     Row(Modifier.fillMaxWidth().height(56.dp).padding(horizontal = 6.dp), verticalAlignment = Alignment.CenterVertically) {
         IconButton(onMenu) { Icon(Icons.Rounded.Menu, "菜单", tint = T.Ink) }
         // One weighted region: the title takes what the gray links leave (no competing spacer).
@@ -176,7 +177,7 @@ private fun TopBar(title: String?, inChat: Boolean, dot: Dot?, running: Boolean,
                 GrayLink(D.agentPreset, presetLabel(preset), onPreset)
             }
         }
-        StatusDot(dot, Modifier.padding(horizontal = 6.dp))
+        StatusDot(dot, Modifier.padding(horizontal = 6.dp), relay = relay)
         IconButton(onMore, Modifier.size(40.dp)) { Icon(D.ellipsis, "更多", tint = T.Ink) }
         if (!inChat) IconButton(onNew, Modifier.size(40.dp)) { Icon(D.newChat, "新会话", tint = T.Ink) }
         if (onPanel != null) IconButton(onPanel, Modifier.size(40.dp)) { Icon(D.panelRight, "右侧面板", tint = T.Ink, modifier = Modifier.size(20.dp)) }
@@ -192,8 +193,15 @@ private fun GrayLink(icon: androidx.compose.ui.graphics.vector.ImageVector, text
 }
 
 @Composable
-fun StatusDot(dot: Dot?, modifier: Modifier = Modifier) {
-    val c = when (dot) { Dot.Online -> T.Ok; Dot.Connecting -> T.WarnBorder; Dot.Unauthorized -> T.Err; else -> T.Caption }
+fun StatusDot(dot: Dot?, modifier: Modifier = Modifier, relay: Boolean = false) {
+    // Amber when reachable only via iroh relay (same convention as tether / design.md).
+    val c = when {
+        dot == Dot.Online && relay -> T.WarnBorder
+        dot == Dot.Online -> T.Ok
+        dot == Dot.Connecting -> T.WarnBorder
+        dot == Dot.Unauthorized -> T.Err
+        else -> T.Caption
+    }
     Box(modifier.size(8.dp).clip(CircleShape).background(c))
 }
 

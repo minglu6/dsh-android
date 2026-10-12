@@ -20,6 +20,22 @@ dsh web
     host: 100.106.128.87   # 监听地址，填 Tailscale IP 即可远程访问；默认 127.0.0.1
     port: 7690
     # token: 固定 token；不填则使用自动生成的那个
+    # iroh: true           # 默认在找到 pocket-host 时启用；false 可关掉
+    # hostBinary: /path/to/pocket-host
+```
+
+## iroh（M3）
+
+桌面侧额外跑一个 Rust sidecar（`plugin/iroh`，ALPN `dsh-pocket/1`），与现有 `ws://host:port` 并行。手机连接顺序：**Tailscale/LAN WebSocket → iroh（打洞 direct，失败则 relay）**。鉴权仍是同一套 `pair` / `hello` token。
+
+```bash
+cd plugin && npm run build:iroh   # 产出 iroh/target/release/pocket-host
+```
+
+配对 URI（管理面板 QR / 日志）在有 sidecar 时带上 node id，旧手机可忽略 `n`：
+
+```
+dshpocket://pair?h=<host:port>&c=<code>&n=<irohNodeId>
 ```
 
 ## 管理 UI（桌面 / `dsh web`）

@@ -32,9 +32,9 @@ class PairingLinkTest {
         )
     }
 
-    @Test fun ignoresExtraQueryParams() {
+    @Test fun capturesIrohNodeIdAndIgnoresUnknownParams() {
         assertEquals(
-            PairingLink("192.168.1.20", 7690, "123456"),
+            PairingLink("192.168.1.20", 7690, "123456", "irohNode"),
             PairingLink.parse("dshpocket://pair?h=192.168.1.20:7690&n=irohNode&c=123456&fp=abc"),
         )
     }

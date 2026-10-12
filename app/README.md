@@ -4,8 +4,8 @@ Gradle 工程根目录就是 `app/`。
 
 | 模块 | 内容 |
 |---|---|
-| `core/protocol` | 纯 Kotlin/JVM：`PocketClient`（OkHttp WebSocket，协议 v1）、`TranscriptReducer`（把 follow 帧折叠成消息、思考、工具卡片）、模型等数据结构 |
-| `app` | Compose 界面、连接管理、前台服务（审批通知）、Keystore 加密 token |
+| `core/protocol` | 纯 Kotlin/JVM：`PocketClient`（WS / iroh 共用协议 v1）、`Transport`（连接顺序 WS→iroh）、`TranscriptReducer`、模型等数据结构 |
+| `app` | Compose 界面、连接管理、iroh JNI（`IrohNative`）、前台服务（审批通知）、Keystore 加密 token |
 
 界面按 [docs/mockups](../docs/mockups/) 实现，配色和圆角沿用 dsh 网页端。
 

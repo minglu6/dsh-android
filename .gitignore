@@ -4,3 +4,6 @@ local.properties
 .gradle/
 build/
 .tools/
+plugin/iroh/target/
+app/app/src/main/jniLibs/
+local.properties
