@@ -5,7 +5,9 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onRoot
+import androidx.compose.ui.test.performClick
 import com.github.takahirom.roborazzi.ExperimentalRoborazziApi
 import com.github.takahirom.roborazzi.RoborazziOptions
 import com.github.takahirom.roborazzi.captureRoboImage
@@ -122,5 +124,20 @@ class ScreenshotTest {
         showWithDialogs("16-panel-terminal") {
             PanelSheet("/tmp/ws", {}, {}, {}, {})
         }
+    }
+    @Test fun s17_profileManageSheet() = showWithDialogs("17-profile-manage") {
+        ProfileManageSheet(Pocket.profiles.value.first(), Dot.Online, isActive = true, onDismiss = {}, onConnect = {})
+    }
+    @Test fun s18_profileRenamePanel() {
+        rule.setContent {
+            PocketTheme {
+                ProfileManageSheet(Pocket.profiles.value.first(), Dot.Online, isActive = true, onDismiss = {}, onConnect = {})
+            }
+        }
+        rule.mainClock.advanceTimeBy(1500)
+        rule.waitForIdle()
+        rule.onNodeWithText("重命名").performClick()
+        rule.waitForIdle()
+        captureScreenRoboImage(out("18-profile-rename"))
     }
 }

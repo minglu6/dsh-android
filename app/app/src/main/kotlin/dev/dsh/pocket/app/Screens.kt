@@ -22,6 +22,7 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
@@ -130,7 +131,8 @@ fun ConnectionsScreen(pairLink: PairingLink?, onPairLinkConsumed: () -> Unit, ca
     var pairing by remember { mutableStateOf<PairingLink?>(null) }
     var showPair by remember { mutableStateOf(false) }
     var showScan by remember { mutableStateOf(false) }
-    var manage by remember { mutableStateOf<Profile?>(null) }
+    var manageId by remember { mutableStateOf<String?>(null) }
+    val manage = manageId?.let { id -> profiles.firstOrNull { it.id == id } }
     val routes by Pocket.routes.collectAsState()
     LaunchedEffect(Unit) { while (true) { Pocket.probe(); kotlinx.coroutines.delay(10_000) } }
     LaunchedEffect(pairLink) { if (pairLink != null) { pairing = pairLink; showPair = true; onPairLinkConsumed() } }
@@ -154,7 +156,7 @@ fun ConnectionsScreen(pairLink: PairingLink?, onPairLinkConsumed: () -> Unit, ca
                     val d = status[p.id]
                     val route = routes[p.id]
                     Row(verticalAlignment = Alignment.CenterVertically) { Spacer(Modifier.width(16.dp)); StatusDot(d, relay = route?.isRelay == true); Box(Modifier.weight(1f)) {
-                    Row2(p.name + if (p.id == active) "  · 当前" else "", "${p.subtitle} · ${dotLabel(d)}", icon = null, divider = i < profiles.lastIndex, onClick = { manage = p }, trailing = {
+                    Row2(p.name + if (p.id == active) "  · 当前" else "", "${p.subtitle} · ${dotLabel(d)}", icon = null, divider = i < profiles.lastIndex, onClick = { manageId = p.id }, trailing = {
                         Text(route?.label ?: p.kind, fontSize = 12.sp, color = if (p.needsRepair) T.WarnBorder else T.Text2, modifier = Modifier.border(1.dp, T.Border, T.R8).padding(horizontal = 8.dp, vertical = 4.dp))
                         Icon(D.chevronRight, null, tint = T.Text3, modifier = Modifier.padding(start = 8.dp).size(20.dp))
                     }) } }
@@ -175,20 +177,73 @@ fun ConnectionsScreen(pairLink: PairingLink?, onPairLinkConsumed: () -> Unit, ca
         onDismiss = { showScan = false },
     )
     manage?.let { p ->
-        PocketSheet({ manage = null }) {
-            Row(Modifier.padding(horizontal = 22.dp), verticalAlignment = Alignment.CenterVertically) {
-                StatusDot(status[p.id]); Spacer(Modifier.width(10.dp)); SheetTitle(p.name)
-                if (p.id == active) Text("当前", fontSize = 12.sp, color = T.Accent, modifier = Modifier.background(T.Tint, T.R4).padding(horizontal = 6.dp, vertical = 2.dp))
+        ProfileManageSheet(
+            profile = p,
+            status = status[p.id],
+            isActive = p.id == active,
+            onDismiss = { manageId = null },
+            onConnect = { Pocket.connect(p.id); manageId = null; onConnected() },
+        )
+    }
+}
+
+/** Device manage sheet: 重命名 (inline 保存/取消) + 删除, matching desktop ManagePanel. */
+@Composable
+fun ProfileManageSheet(
+    profile: Profile,
+    status: Dot?,
+    isActive: Boolean,
+    onDismiss: () -> Unit,
+    onConnect: () -> Unit,
+) {
+    var renaming by remember(profile.id) { mutableStateOf(false) }
+    PocketSheet(onDismiss) {
+        if (renaming) {
+            var editName by remember(profile.id, profile.name) { mutableStateOf(profile.name) }
+            SheetTitle("重命名")
+            OutlinedTextField(
+                editName,
+                { editName = it.take(64) },
+                singleLine = true,
+                shape = T.R12,
+                textStyle = T.Mono.copy(fontSize = 15.sp),
+                modifier = Modifier.padding(horizontal = 22.dp).fillMaxWidth().testTag("profileRenameInput"),
+            )
+            Row(Modifier.padding(horizontal = 22.dp, vertical = 16.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                OutlinedButton(
+                    { renaming = false },
+                    Modifier.weight(1f).height(50.dp),
+                    shape = T.R12,
+                    border = BorderStroke(1.dp, T.Border),
+                    colors = ButtonDefaults.outlinedButtonColors(contentColor = T.Ink),
+                ) { Text("取消") }
+                Button(
+                    {
+                        val trimmed = editName.trim()
+                        if (trimmed.isNotEmpty() && trimmed != profile.name) Pocket.renameProfile(profile.id, trimmed)
+                        renaming = false
+                    },
+                    Modifier.weight(1f).height(50.dp),
+                    enabled = editName.trim().isNotEmpty(),
+                    shape = T.R12,
+                    colors = PrimaryColors(),
+                ) { Text("保存") }
             }
-            Text("${p.subtitle} · ${dotLabel(status[p.id])}", style = T.Mono.copy(color = T.Text3), modifier = Modifier.padding(horizontal = 22.dp, vertical = 4.dp))
-            Spacer(Modifier.height(8.dp))
-            if (p.needsRepair) {
-                Text("连接信息不完整，请删除后重新配对。", fontSize = 13.sp, color = T.Text3, modifier = Modifier.padding(start = 22.dp, end = 22.dp, bottom = 8.dp))
-            } else if (p.id != active || status[p.id] != Dot.Online) {
-                OptionRow("连接", icon = D.link) { Pocket.connect(p.id); manage = null; onConnected() }
-            }
-            OptionRow("删除", icon = D.trash) { Pocket.removeProfile(p.id); manage = null }
+            return@PocketSheet
         }
+        Row(Modifier.padding(horizontal = 22.dp), verticalAlignment = Alignment.CenterVertically) {
+            StatusDot(status); Spacer(Modifier.width(10.dp)); SheetTitle(profile.name)
+            if (isActive) Text("当前", fontSize = 12.sp, color = T.Accent, modifier = Modifier.background(T.Tint, T.R4).padding(horizontal = 6.dp, vertical = 2.dp))
+        }
+        Text("${profile.subtitle} · ${dotLabel(status)}", style = T.Mono.copy(color = T.Text3), modifier = Modifier.padding(horizontal = 22.dp, vertical = 4.dp))
+        Spacer(Modifier.height(8.dp))
+        if (profile.needsRepair) {
+            Text("连接信息不完整，请删除后重新配对。", fontSize = 13.sp, color = T.Text3, modifier = Modifier.padding(start = 22.dp, end = 22.dp, bottom = 8.dp))
+        } else if (!isActive || status != Dot.Online) {
+            OptionRow("连接", icon = D.link) { onConnect() }
+        }
+        OptionRow("重命名", icon = D.edit) { renaming = true }
+        OptionRow("删除", icon = D.trash) { Pocket.removeProfile(profile.id); onDismiss() }
     }
 }
 
