@@ -202,6 +202,29 @@ data class StepRecord(
     val toolCallIds: List<String>,
     /** Desktop interrupted assistant → cell `isError`. */
     val interrupted: Boolean = false,
+    /** Desktop `requestConfig` JSON from the latest `request/header` before this step. */
+    val requestConfigJson: String? = null,
+    /** Desktop `llm/retry` attempt counter for this step (1-based when present). */
+    val retry: Int? = null,
+    val maxRetries: Int? = null,
+    val retryDelayMs: Long? = null,
+    val lastAttemptError: String? = null,
+)
+
+/**
+ * Desktop `TrajectoryRequestHeaderState` snapshot from one `request/header` event.
+ * Used by the Request inspector 选项 tab and to attach config to later steps.
+ */
+data class RequestHeaderFact(
+    val seq: Long,
+    val time: Long?,
+    val turn: Int?,
+    val step: Int?,
+    val provider: String?,
+    val model: String?,
+    /** Pretty JSON of `header.config` (desktop AssistantRequestConfig). */
+    val configJson: String?,
+    val reason: String? = null,
 )
 
 /**
@@ -216,6 +239,7 @@ class TranscriptReducer {
     private val localEchoes = ArrayList<Pair<Int, String>>()
     private val stepStartTimes = HashMap<String, Long>()
     private val settledSteps = ArrayList<StepRecord>()
+    private val headerFacts = ArrayList<RequestHeaderFact>()
     /**
      * Latest tool catalog from `request/header` (`EpochHeader.tools`), keyed by tool name.
      * Desktop `captureSchemas` / `attachToolSchema` maps callId → schema at layout time;
@@ -231,6 +255,15 @@ class TranscriptReducer {
     private var systemPromptSeen = false
     /** Open compaction requests keyed by compactionId. */
     private val compactIndex = HashMap<String, Int>()
+    /** Pending `llm/retry` facts for the open step (desktop assistant retry state). */
+    private var openRetry: Int? = null
+    private var openMaxRetries: Int? = null
+    private var openRetryDelayMs: Long? = null
+    private var openLastAttemptError: String? = null
+    /** Latest request/header config to stamp onto the next assistant step. */
+    private var latestRequestConfigJson: String? = null
+    private var latestRequestProvider: String? = null
+    private var latestRequestModel: String? = null
     private var live: LiveAttempt? = null
     var cursor: Long = -1; private set
     /** Lowest event seq currently folded (for history.page beforeSeq). */
@@ -250,6 +283,7 @@ class TranscriptReducer {
 
     val usage get() = Usage(turns, steps, inputTokens, cacheRead, outputTokens)
     fun stepRecords(): List<StepRecord> = settledSteps.toList()
+    fun requestHeaders(): List<RequestHeaderFact> = headerFacts.toList()
 
     fun items(): List<Item> = committed + (live?.items() ?: emptyList())
 
@@ -314,9 +348,13 @@ class TranscriptReducer {
         if (olderSteps.isNotEmpty()) {
             settledSteps.addAll(0, olderSteps)
         }
+        val olderHeaders = prior.requestHeaders()
+        if (olderHeaders.isNotEmpty()) {
+            headerFacts.addAll(0, olderHeaders)
+        }
         val min = filtered.mapNotNull { it["event"]["seq"].long() }.minOrNull()
         if (min != null) firstSeq = if (firstSeq < 0) min else minOf(firstSeq, min)
-        return shift > 0 || olderSteps.isNotEmpty()
+        return shift > 0 || olderSteps.isNotEmpty() || olderHeaders.isNotEmpty()
     }
 
     private fun rebuildIndexes() {
@@ -339,9 +377,11 @@ class TranscriptReducer {
 
     private fun reset() {
         committed.clear(); toolIndex.clear(); compactIndex.clear(); approvalCall.clear(); userByRpc.clear(); localEchoes.clear()
-        stepStartTimes.clear(); settledSteps.clear(); toolsByName.clear()
+        stepStartTimes.clear(); settledSteps.clear(); headerFacts.clear(); toolsByName.clear()
         toolsCatalogJson = null; previousToolsCatalogJson = null; lastSystemPromptText = null
         systemPromptSeen = false; live = null
+        openRetry = null; openMaxRetries = null; openRetryDelayMs = null; openLastAttemptError = null
+        latestRequestConfigJson = null; latestRequestProvider = null; latestRequestModel = null
         cursor = -1; firstSeq = -1; hasMore = false
         turns = 0; steps = 0; openTurn = null; openStep = null
         inputTokens = 0; cacheRead = 0; outputTokens = 0; running = false
@@ -381,10 +421,20 @@ class TranscriptReducer {
                 val step = data["step"].long()?.toInt() ?: (steps + 1)
                 openTurn = turn
                 openStep = step
+                openRetry = null; openMaxRetries = null; openRetryDelayMs = null; openLastAttemptError = null
                 e["time"].long()?.let { stepStartTimes["$turn:$step"] = it }
             }
-            // Desktop ui-trajectory: index EpochHeader.tools for callSchemas / Schema tab.
-            "request/header" -> indexRequestHeaderTools(data)
+            // Desktop ui-trajectory: index EpochHeader.tools + config for Request inspector.
+            "request/header" -> indexRequestHeader(e, data, seq)
+            "llm/retry" -> {
+                openRetry = data["retry"].long()?.toInt() ?: ((openRetry ?: 0) + 1)
+                openMaxRetries = data["maxRetries"].long()?.toInt() ?: openMaxRetries
+                openRetryDelayMs = data["delayMs"].long() ?: data["retryDelayMs"].long() ?: openRetryDelayMs
+                openLastAttemptError = data["error"]["message"].str()
+                    ?: data["error"]["reason"].str()
+                    ?: data["error"].str()
+                    ?: openLastAttemptError
+            }
             "user/message" -> {
                 val msg = if (data["content"] != null) data else data["message"]
                 if (isTyped(msg)) upsertUser(msg, "u$seq", pending = false, at = e["time"].long())
@@ -459,11 +509,17 @@ class TranscriptReducer {
                     replyText = replyParts.joinToString("\n\n"),
                     reasoningText = reasoningParts.joinToString("\n\n"),
                     usage = stepUsage,
-                    provider = source["provider"].str(),
-                    model = source["model"].str(),
+                    provider = source["provider"].str() ?: latestRequestProvider,
+                    model = source["model"].str() ?: latestRequestModel,
                     toolCallIds = toolCallIds,
                     interrupted = interrupted,
+                    requestConfigJson = latestRequestConfigJson,
+                    retry = openRetry,
+                    maxRetries = openMaxRetries,
+                    retryDelayMs = openRetryDelayMs,
+                    lastAttemptError = openLastAttemptError,
                 )
+                openRetry = null; openMaxRetries = null; openRetryDelayMs = null; openLastAttemptError = null
                 // Desktop: interrupted assistant is `message` with isError — no invented 系统 Notice.
             }
             "tool/call" -> upsertTool(
@@ -590,25 +646,46 @@ class TranscriptReducer {
     }
 
     /**
-     * Index `request/header` → `header.tools[]` by name (desktop `indexTools` + `captureSchemas`).
-     * Each schema is stored as pretty JSON for the Schema tab (`attachToolSchema`).
-     * Also snapshots the full catalog for system 工具 / 差异 tabs.
+     * Index `request/header` → tools + config (desktop `indexTools` / `captureSchemas` /
+     * Request inspector `requestConfig`).
      */
-    private fun indexRequestHeaderTools(data: JsonElement?) {
-        val tools = data["header"]["tools"].arr() ?: return
-        val pretty = ArrayList<JsonElement>()
-        for (tool in tools) {
-            val name = tool["name"].str() ?: continue
-            val schema = prettyToolSchema(tool) ?: continue
-            toolsByName[name] = schema
-            pretty += PocketJson.parseToJsonElement(schema)
+    private fun indexRequestHeader(e: JsonElement?, data: JsonElement?, seq: Long) {
+        val header = data["header"] ?: data
+        val tools = header["tools"].arr()
+        if (tools != null) {
+            val pretty = ArrayList<JsonElement>()
+            for (tool in tools) {
+                val name = tool["name"].str() ?: continue
+                val schema = prettyToolSchema(tool) ?: continue
+                toolsByName[name] = schema
+                pretty += PocketJson.parseToJsonElement(schema)
+            }
+            if (pretty.isNotEmpty()) {
+                previousToolsCatalogJson = toolsCatalogJson
+                toolsCatalogJson = runCatching {
+                    PrettyToolJson.encodeToString(JsonElement.serializer(), JsonArray(pretty))
+                }.getOrNull()
+            }
         }
-        if (pretty.isNotEmpty()) {
-            previousToolsCatalogJson = toolsCatalogJson
-            toolsCatalogJson = runCatching {
-                PrettyToolJson.encodeToString(JsonElement.serializer(), JsonArray(pretty))
-            }.getOrNull()
+        val config = header["config"]
+        val configJson = config?.let {
+            runCatching { PrettyToolJson.encodeToString(JsonElement.serializer(), it) }.getOrNull()
         }
+        val provider = config["provider"].str()
+        val model = config["model"].str()
+        if (configJson != null) latestRequestConfigJson = configJson
+        if (provider != null) latestRequestProvider = provider
+        if (model != null) latestRequestModel = model
+        headerFacts += RequestHeaderFact(
+            seq = seq,
+            time = e["time"].long(),
+            turn = data["turn"].long()?.toInt() ?: openTurn,
+            step = data["step"].long()?.toInt() ?: openStep,
+            provider = provider,
+            model = model,
+            configJson = configJson,
+            reason = data["reason"].str(),
+        )
     }
 
     private fun upsertTool(

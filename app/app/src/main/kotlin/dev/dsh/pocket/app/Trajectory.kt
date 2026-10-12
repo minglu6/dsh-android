@@ -9,11 +9,13 @@ import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Search
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
@@ -41,6 +43,7 @@ import dev.dsh.pocket.protocol.TrajectoryTimelineCell
 import dev.dsh.pocket.protocol.TrajectoryTimelineMode
 import dev.dsh.pocket.protocol.TrajectoryTimelineModel
 import dev.dsh.pocket.protocol.deriveTrajectoryTimeline
+import kotlinx.coroutines.flow.distinctUntilChanged
 
 /** One row in the Trajectory tab (desktop ui-trajectory cell kinds). */
 data class TrajRow(
@@ -469,22 +472,30 @@ fun trajectorySearchMatches(turns: List<TrajTurn>, query: String): Set<String>? 
 @Composable
 fun TrajectoryView(st: ChatState) {
     val turns = remember(st.items, st.steps) { buildTrajectory(st.items, st.steps) }
+    val requests = remember(st.items, st.steps) { buildTrajectoryRequests(st.items, st.steps) }
+    val boundaryByRow = remember(requests, turns) {
+        requests.mapNotNull { req ->
+            requestBoundaryRowKey(req, turns)?.let { it to req }
+        }.toMap()
+    }
     if (!st.loaded) {
         Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-            androidx.compose.material3.CircularProgressIndicator(color = T.Accent, strokeWidth = 2.dp, modifier = Modifier.size(24.dp))
+            CircularProgressIndicator(color = T.Accent, strokeWidth = 2.dp, modifier = Modifier.size(24.dp))
         }
         return
     }
-    if (turns.isEmpty()) {
+    if (turns.isEmpty() && !st.hasMore) {
         EmptyState(D.inspect, TrajL.emptyTrajectory)
         return
     }
     var selected by remember { mutableStateOf<TrajRow?>(null) }
     var selectedTurn by remember { mutableIntStateOf(0) }
+    var selectedRequest by remember { mutableStateOf<TrajectoryRequest?>(null) }
     var actualDuration by remember { mutableStateOf(false) }
     var turnsCollapsed by remember { mutableStateOf(false) }
     var callsCollapsed by remember { mutableStateOf(false) }
     var searchQuery by remember { mutableStateOf("") }
+    val listState = rememberLazyListState()
     val mode = if (actualDuration) TrajectoryTimelineMode.Duration else TrajectoryTimelineMode.Sequence
     val cells = remember(turns) { trajectoryTimelineCells(turns) }
     val timeline = remember(cells, mode) { deriveTrajectoryTimeline(cells, mode) }
@@ -492,8 +503,34 @@ fun TrajectoryView(st: ChatState) {
     val rowByKey = remember(turns) { turns.flatMap { t -> t.rows.map { it.key to (it to t.index) } }.toMap() }
 
     fun selectRow(row: TrajRow, turn: Int) {
+        selectedRequest = null
         selected = row
         selectedTurn = turn
+    }
+
+    // Same arming as Chat: avoid auto-fetch on first composition when the list starts at top.
+    var historyArmed by remember(st.sessionId) { mutableStateOf(false) }
+    LaunchedEffect(listState) {
+        snapshotFlow {
+            listState.firstVisibleItemIndex to listState.firstVisibleItemScrollOffset
+        }
+            .distinctUntilChanged()
+            .collect { (index, offset) ->
+                if (index > 0 || offset > 0) historyArmed = true
+            }
+    }
+    // Desktop: near-top scroll loads one earlier page; phone reuses Pocket.loadOlderHistory (history.page).
+    LaunchedEffect(listState, st.hasMore, st.loadingOlder, st.loaded, historyArmed) {
+        snapshotFlow {
+            listState.firstVisibleItemIndex to listState.firstVisibleItemScrollOffset
+        }
+            .distinctUntilChanged()
+            .collect { (index, offset) ->
+                if (historyArmed && st.loaded && st.hasMore && !st.loadingOlder && index == 0 && offset < 48) {
+                    historyArmed = false
+                    Pocket.loadOlderHistory()
+                }
+            }
     }
 
     Column(Modifier.fillMaxSize()) {
@@ -519,7 +556,26 @@ fun TrajectoryView(st: ChatState) {
             Text(TrajL.columnTime, style = monoCap(), modifier = Modifier.width(40.dp))
         }
         HorizontalDivider(color = T.Fill)
-        LazyColumn(Modifier.weight(1f)) {
+        LazyColumn(Modifier.weight(1f), state = listState) {
+            if (st.hasMore || st.loadingOlder) {
+                item(key = "history-load-earlier") {
+                    HistoryLoadEarlierRow(
+                        loading = st.loadingOlder,
+                        enabled = st.hasMore && !st.loadingOlder,
+                        onClick = { Pocket.loadOlderHistory() },
+                    )
+                }
+            }
+            if (turns.isEmpty()) {
+                item(key = "empty-after-load") {
+                    Text(
+                        TrajL.emptyTrajectory,
+                        fontSize = 13.sp,
+                        color = T.Caption,
+                        modifier = Modifier.padding(24.dp),
+                    )
+                }
+            }
             turns.forEach { turn ->
                 val visibleRows = turn.rows.filter { row ->
                     (searchMatches == null || row.key in searchMatches) &&
@@ -537,17 +593,70 @@ fun TrajectoryView(st: ChatState) {
                 }
                 if (!turnsCollapsed) {
                     itemsIndexed(visibleRows, key = { _, r -> r.key }) { _, row ->
-                        TrajRowView(row, selected?.key == row.key) {
-                            selectRow(row, turn.index)
-                        }
+                        val boundary = boundaryByRow[row.key]
+                        TrajRowView(
+                            row = row,
+                            hl = selected?.key == row.key,
+                            requestBoundary = boundary,
+                            requestSelected = selectedRequest?.identity == boundary?.identity,
+                            onRequestClick = { req ->
+                                selected = null
+                                selectedRequest = req
+                            },
+                            onClick = { selectRow(row, turn.index) },
+                        )
                     }
                 }
             }
         }
     }
     selected?.let { row ->
-        TrajectoryDetailSheet(row, turnIndex = selectedTurn) { selected = null }
+        TrajectoryDetailSheet(
+            row = row,
+            turnIndex = selectedTurn,
+            parentRequest = requestForRow(row, requests),
+            onOpenRequest = { req ->
+                selected = null
+                selectedRequest = req
+            },
+            onDismiss = { selected = null },
+        )
     }
+    selectedRequest?.let { req ->
+        TrajectoryRequestSheet(
+            request = req,
+            onOpenResult = { key ->
+                rowByKey[key]?.let { (row, turn) -> selectRow(row, turn) }
+            },
+            onDismiss = { selectedRequest = null },
+        )
+    }
+}
+
+/** Desktop history load-earlier control at the top of the loaded ledger window. */
+@Composable
+private fun HistoryLoadEarlierRow(loading: Boolean, enabled: Boolean, onClick: () -> Unit) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .clickable(enabled = enabled, onClick = onClick)
+            .padding(horizontal = 12.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.Center,
+    ) {
+        if (loading) {
+            CircularProgressIndicator(
+                color = T.Accent,
+                strokeWidth = 2.dp,
+                modifier = Modifier.size(14.dp),
+            )
+            Spacer(Modifier.width(8.dp))
+            Text(TrajL.historyLoadingEarlier, fontSize = 12.sp, color = T.Text2)
+        } else {
+            Text(TrajL.historyLoadEarlier, fontSize = 12.sp, color = T.Accent)
+        }
+    }
+    HorizontalDivider(color = T.Fill.copy(alpha = 0.8f))
 }
 
 @Composable
@@ -730,7 +839,14 @@ private fun spanColor(kind: String, isError: Boolean): Color {
 }
 
 @Composable
-private fun TrajRowView(row: TrajRow, hl: Boolean, onClick: () -> Unit) {
+private fun TrajRowView(
+    row: TrajRow,
+    hl: Boolean,
+    requestBoundary: TrajectoryRequest? = null,
+    requestSelected: Boolean = false,
+    onRequestClick: (TrajectoryRequest) -> Unit = {},
+    onClick: () -> Unit,
+) {
     val statusGlyph = when {
         row.running -> "◌"
         row.isError -> "✗"
@@ -743,13 +859,28 @@ private fun TrajRowView(row: TrajRow, hl: Boolean, onClick: () -> Unit) {
     }
     Row(
         Modifier.fillMaxWidth()
-            .background(if (hl) T.Tint.copy(alpha = 0.45f) else Color.Transparent)
-            .then(if (hl) Modifier.drawSelectedBar() else Modifier)
+            .background(if (hl || requestSelected) T.Tint.copy(alpha = 0.45f) else Color.Transparent)
+            .then(if (hl || requestSelected) Modifier.drawSelectedBar() else Modifier)
             .clickable(onClick = onClick)
             .padding(start = (12 + row.depth * 14).dp, end = 12.dp, top = 7.dp, bottom = 7.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Text(statusGlyph, fontSize = 12.sp, color = statusColor, modifier = Modifier.width(14.dp))
+        if (requestBoundary != null) {
+            // Desktop request-boundary control → phone chip opening Request inspector.
+            Text(
+                TrajL.requestLabel(requestBoundary.number),
+                fontSize = 10.sp,
+                fontWeight = FontWeight.SemiBold,
+                color = if (requestSelected) T.Ink else T.Accent,
+                maxLines = 1,
+                modifier = Modifier
+                    .background(if (requestSelected) T.Fill else T.Tint, RoundedCornerShape(3.dp))
+                    .clickable { onRequestClick(requestBoundary) }
+                    .padding(horizontal = 5.dp, vertical = 2.dp),
+            )
+            Spacer(Modifier.width(4.dp))
+        }
         KindBadge(row.kind)
         Spacer(Modifier.width(6.dp))
         Row(Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically) {
