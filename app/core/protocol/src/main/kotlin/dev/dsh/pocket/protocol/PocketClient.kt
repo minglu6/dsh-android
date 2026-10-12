@@ -119,7 +119,12 @@ class PocketClient(
     }
 
     companion object {
+        /**
+         * Always direct: the desktop is reached over Tailscale/LAN, and a system HTTP proxy (e.g. a phone's
+         * Clash/VPN proxy) can't route 100.x/192.168.x and just drops the upgrade ("unexpected end of stream").
+         */
         fun defaultHttp(): OkHttpClient = OkHttpClient.Builder()
+            .proxy(java.net.Proxy.NO_PROXY)
             .connectTimeout(8, TimeUnit.SECONDS)
             .readTimeout(0, TimeUnit.MILLISECONDS)
             .build()

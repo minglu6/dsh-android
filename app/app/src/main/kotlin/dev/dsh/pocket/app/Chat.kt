@@ -285,7 +285,7 @@ private fun ApprovalCard(a: Approval) {
                 OutlinedButton({ Pocket.answer(a.approvalId, "rejected") }, Modifier.weight(1f).height(52.dp), shape = T.R12, border = BorderStroke(1.dp, T.Border),
                     colors = ButtonDefaults.outlinedButtonColors(contentColor = T.Ink)) { Text("拒绝", fontSize = 16.sp) }
                 Button({ Pocket.answer(a.approvalId, "allowed-once") }, Modifier.weight(1f).height(52.dp), shape = T.R12,
-                    colors = ButtonDefaults.buttonColors(containerColor = T.Ink, contentColor = Color.White)) { Text("允许一次", fontSize = 16.sp) }
+                    colors = PrimaryColors()) { Text("允许一次", fontSize = 16.sp) }
             }
         }
     }
