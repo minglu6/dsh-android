@@ -28,21 +28,31 @@ import dev.dsh.pocket.protocol.parseToolSchema
 import dev.dsh.pocket.protocol.trajectoryStatusLabel
 import dev.dsh.pocket.protocol.trajectoryToolState
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.contentOrNull
+import kotlin.math.round
 
 /**
  * Desktop TrajectoryTable inspector tab ids / labels (locales `tab.*`).
- * Tool rows: 概述 / 参数 / 结果 / Schema / 计时 — matching screenshot & TrajectoryTable.detailTabs.
  */
 enum class TrajDetailTab(val label: String) {
-    Overview("概述"),
-    Input("参数"),
-    Output("结果"),
-    Schema("Schema"),
-    Timing("计时"),
-    Preview("预览"),
-    Raw("原始内容"),
-    Thinking("思考"),
+    Overview(TrajL.tabSummary),
+    Input(TrajL.tabPayload),
+    Code(TrajL.codeSource),
+    Output(TrajL.tabResult),
+    RawOutput(TrajL.tabRawOutput),
+    Schema(TrajL.tabSchema),
+    Timing(TrajL.tabTiming),
+    Preview(TrajL.tabPreview),
+    Raw(TrajL.tabRaw),
+    Thinking(TrajL.recordThinking),
+    Source(TrajL.tabSource),
+    Diff(TrajL.tabDiff),
+    SystemPrompt(TrajL.tabSystemPrompt),
+    Tools(TrajL.tabTools),
 }
 
 /**
@@ -109,55 +119,98 @@ fun TrajectoryDetailSheet(row: TrajRow, turnIndex: Int, onDismiss: () -> Unit) {
         Spacer(Modifier.height(10.dp))
         when (tab) {
             TrajDetailTab.Overview -> TrajOverview(row, tabs) { tab = it }
-            TrajDetailTab.Input -> TrajPayload(row.inputDetail, missing = "未捕获参数")
-            TrajDetailTab.Output -> TrajPayload(row.outputDetail, missing = "未捕获结果", error = row.isError)
+            TrajDetailTab.Input, TrajDetailTab.Code -> {
+                val program = codeProgram(row.toolName, row.inputDetail, row.schemaDetail)
+                if (program != null && tab == TrajDetailTab.Code) {
+                    TrajCodeProgram(program)
+                } else {
+                    TrajPayload(row.inputDetail, missing = TrajL.recordNoPayload)
+                }
+            }
+            TrajDetailTab.Output -> {
+                val program = codeProgram(row.toolName, row.inputDetail, row.schemaDetail)
+                if (program != null && row.outputDetail == null && row.running) {
+                    Text(TrajL.codeRunning, fontSize = 14.sp, color = T.Text3, modifier = Modifier.padding(horizontal = 22.dp, vertical = 8.dp))
+                } else {
+                    TrajPayload(row.outputDetail, missing = TrajL.recordNoResult, error = row.isError)
+                }
+            }
+            TrajDetailTab.RawOutput -> TrajPayload(row.rawDetail ?: row.outputDetail, missing = TrajL.recordNoOutput)
             TrajDetailTab.Schema -> TrajSchema(row.schemaDetail)
             TrajDetailTab.Timing -> TrajTiming(row)
-            TrajDetailTab.Preview, TrajDetailTab.Raw -> TrajPayload(row.rawDetail, missing = "无内容")
-            TrajDetailTab.Thinking -> TrajPayload(row.thinkingDetail, missing = "无内容")
+            TrajDetailTab.Preview -> TrajPreview(row)
+            TrajDetailTab.Raw -> TrajPayload(row.rawDetail, missing = TrajL.recordNoContent)
+            TrajDetailTab.Thinking -> TrajPayload(row.thinkingDetail, missing = TrajL.recordNoContent)
+            TrajDetailTab.Source -> TrajPayload(row.messageSourceJson, missing = TrajL.sourceNotRecorded)
+            TrajDetailTab.Diff -> TrajSystemDiff(row)
+            TrajDetailTab.SystemPrompt -> TrajPayload(row.rawDetail, missing = TrajL.recordSystemPromptMissing)
+            TrajDetailTab.Tools -> TrajToolsCatalog(row.toolsJson)
         }
     }
 }
 
-/** Desktop detailTabs for tool vs markdown/system-ish rows. */
+/**
+ * Desktop `detailTabs` — system / compacted / markdown / tool branches.
+ */
 fun trajDetailTabs(row: TrajRow): List<TrajDetailTab> = when (row.kind) {
-    "工具", "子工具" -> buildList {
+    TrajL.kindSystem -> when {
+        row.previousText != null -> listOf(TrajDetailTab.Diff, TrajDetailTab.SystemPrompt, TrajDetailTab.Tools)
+        row.toolsJson != null -> listOf(TrajDetailTab.SystemPrompt, TrajDetailTab.Tools)
+        else -> listOf(TrajDetailTab.SystemPrompt)
+    }
+    TrajL.kindCompacted -> listOf(TrajDetailTab.Overview, TrajDetailTab.RawOutput)
+    TrajL.kindTool, TrajL.kindSubtool -> buildList {
         add(TrajDetailTab.Overview)
-        if (row.inputDetail != null) add(TrajDetailTab.Input)
-        if (row.outputDetail != null) add(TrajDetailTab.Output)
+        val program = codeProgram(row.toolName, row.inputDetail, row.schemaDetail)
+        if (row.inputDetail != null) {
+            add(if (program != null) TrajDetailTab.Code else TrajDetailTab.Input)
+        }
+        if (row.outputDetail != null || program != null) add(TrajDetailTab.Output)
         add(TrajDetailTab.Schema)
         add(TrajDetailTab.Timing)
     }
-    "助手" -> buildList {
+    TrajL.kindAssistant -> buildList {
         add(TrajDetailTab.Overview)
-        if (row.thinkingDetail != null) add(TrajDetailTab.Thinking)
-        if (row.rawDetail != null) add(TrajDetailTab.Raw)
+        add(TrajDetailTab.Preview)
+        add(TrajDetailTab.Raw)
+        if (row.messageSourceJson != null) add(TrajDetailTab.Source)
         add(TrajDetailTab.Timing)
     }
-    "系统" -> listOf(TrajDetailTab.Overview, TrajDetailTab.Raw)
-    else -> listOf(TrajDetailTab.Overview, TrajDetailTab.Preview, TrajDetailTab.Raw)
+    else -> buildList {
+        // user / context (markdown records)
+        add(TrajDetailTab.Overview)
+        add(TrajDetailTab.Preview)
+        add(TrajDetailTab.Raw)
+        if (row.messageSourceJson != null) add(TrajDetailTab.Source)
+    }
 }
 
 fun trajDetailKindLabel(kind: String): String = when (kind) {
-    "助手" -> "助手"
-    "工具" -> "工具"
-    "子工具" -> "子工具"
-    "用户" -> "用户"
-    "上下文" -> "上下文"
-    "系统" -> "系统"
+    TrajL.kindAssistant -> TrajL.kindAssistant
+    TrajL.kindTool -> TrajL.kindTool
+    TrajL.kindSubtool -> TrajL.kindSubtool
+    TrajL.kindUser -> TrajL.kindUser
+    TrajL.kindContext -> TrajL.kindContext
+    TrajL.kindSystem -> TrajL.kindSystem
+    TrajL.kindCompacted -> TrajL.kindCompacted
     else -> kind
 }
 
-/** Desktop header location: `第 {turn} 轮 · 第 {step} 步` (or turn-only / 消息). */
+/** Desktop header location: `第 {turn} 轮 · 第 {step} 步` (or turn-only / 轮次之间). */
 fun trajDetailLocation(row: TrajRow, turnIndex: Int): String {
     val turn = row.turn ?: turnIndex.takeIf { it > 0 }
-    val turnLabel = turn?.let { "第 $it 轮" } ?: "轮次之间"
+    val turnLabel = turn?.let { TrajL.turnLabel(it) } ?: TrajL.sectionBetweenTurns
     val step = row.step
-    return if (step != null) "$turnLabel · 第 $step 步" else turnLabel
+    return if (step != null) "$turnLabel · ${TrajL.groupStep(step)}" else turnLabel
 }
 
 fun trajRowState(row: TrajRow): TrajectoryRecordState = when (row.kind) {
-    "工具", "子工具" -> trajectoryToolState(row.isError, hasOutput = row.outputDetail != null)
+    TrajL.kindTool, TrajL.kindSubtool -> trajectoryToolState(row.isError, hasOutput = row.outputDetail != null)
+    TrajL.kindCompacted -> when {
+        row.isError -> TrajectoryRecordState.Error
+        row.running || row.timeSeconds == null -> TrajectoryRecordState.Running
+        else -> TrajectoryRecordState.Complete
+    }
     else -> when {
         row.isError -> TrajectoryRecordState.Error
         row.running -> TrajectoryRecordState.Running
@@ -169,57 +222,193 @@ fun trajRowState(row: TrajRow): TrajectoryRecordState = when (row.kind) {
 private fun TrajOverview(row: TrajRow, tabs: List<TrajDetailTab>, onOpen: (TrajDetailTab) -> Unit) {
     val state = trajRowState(row)
     Column(Modifier.padding(horizontal = 22.dp)) {
-        // Desktop overview: 层级 → 助手消息 for tool rows under an assistant message.
-        if (row.kind == "工具" || row.kind == "子工具") {
-            OverviewKv("层级", "助手消息")
+        if (row.kind == TrajL.kindTool || row.kind == TrajL.kindSubtool) {
+            OverviewKv(TrajL.detailsHierarchy, TrajL.detailsAssistantMessage)
         }
-        OverviewKv("状态", trajectoryStatusLabel(state), valueColor = if (state == TrajectoryRecordState.Error) T.Err else T.Ink)
-        if (row.kind == "助手") {
-            if (row.input.isNotEmpty()) OverviewKv("输入", row.input)
-            if (row.output.isNotEmpty()) OverviewKv("输出", row.output)
-            if (row.think.isNotEmpty()) OverviewKv("思考", row.think)
+        OverviewKv(
+            TrajL.detailsStatus,
+            trajectoryStatusLabel(state),
+            valueColor = if (state == TrajectoryRecordState.Error) T.Err else T.Ink,
+        )
+        if (row.kind == TrajL.kindAssistant) {
+            OverviewKv(TrajL.usageTokens, row.output.ifEmpty { "—" }.let { if (it == "—") it else TrajL.unitTokens(parseKfmtApprox(it)) })
+            if (row.think.isNotEmpty() && row.think != "—") {
+                OverviewKv(TrajL.usageReasoning, "${row.think} tok")
+            }
+            if (row.input.isNotEmpty()) OverviewKv(TrajL.usageInput, row.input)
+        }
+        val program = codeProgram(row.toolName, row.inputDetail, row.schemaDetail)
+        if (program != null) {
+            OverviewKv(TrajL.codeSource, program.description)
         }
         Spacer(Modifier.height(8.dp))
-        if (TrajDetailTab.Input in tabs) {
-            OverviewSection("参数", onOpen = { onOpen(TrajDetailTab.Input) }) {
-                TrajCodePreview(row.inputDetail?.let { prettyJson(it) } ?: "未捕获参数")
+        if (TrajDetailTab.Input in tabs || TrajDetailTab.Code in tabs) {
+            val inputTab = if (TrajDetailTab.Code in tabs) TrajDetailTab.Code else TrajDetailTab.Input
+            OverviewSection(inputTab.label, onOpen = { onOpen(inputTab) }) {
+                TrajCodePreview(row.inputDetail?.let { prettyJson(it) } ?: TrajL.recordNoPayload)
             }
         }
         if (TrajDetailTab.Output in tabs) {
-            OverviewSection("结果", onOpen = { onOpen(TrajDetailTab.Output) }) {
-                TrajCodePreview(row.outputDetail ?: "未捕获结果")
+            OverviewSection(TrajL.tabResult, onOpen = { onOpen(TrajDetailTab.Output) }) {
+                TrajCodePreview(row.outputDetail ?: TrajL.recordNoResult)
             }
         }
         if (TrajDetailTab.Schema in tabs) {
-            OverviewSection("Schema", onOpen = { onOpen(TrajDetailTab.Schema) }) {
+            OverviewSection(TrajL.tabSchema, onOpen = { onOpen(TrajDetailTab.Schema) }) {
                 val parsed = row.schemaDetail?.let { parseToolSchema(it) }
                 if (parsed != null) {
                     Text(parsed.name, style = T.Mono.copy(fontWeight = FontWeight.SemiBold, fontSize = 13.sp))
                     Text(parsed.description, style = T.Mono.copy(color = T.Text2, fontSize = 12.sp, lineHeight = 18.sp))
                 } else {
-                    Text(if (row.schemaDetail.isNullOrBlank()) "Schema 不可用" else row.schemaDetail!!, style = T.Mono.copy(color = T.Text3, fontSize = 12.sp))
+                    Text(
+                        if (row.schemaDetail.isNullOrBlank()) TrajL.recordSchemaUnavailable else row.schemaDetail!!,
+                        style = T.Mono.copy(color = T.Text3, fontSize = 12.sp),
+                    )
                 }
             }
         }
-        if (TrajDetailTab.Timing in tabs || row.kind == "助手") {
-            OverviewSection("计时", onOpen = { if (TrajDetailTab.Timing in tabs) onOpen(TrajDetailTab.Timing) }) {
-                OverviewKv("开始时间", formatStartedAt(row.startedAt), compact = true)
-                OverviewKv("时长", formatElapsedSeconds(row.timeSeconds), compact = true)
+        if (TrajDetailTab.Timing in tabs || row.kind == TrajL.kindAssistant) {
+            OverviewSection(TrajL.tabTiming, onOpen = { if (TrajDetailTab.Timing in tabs) onOpen(TrajDetailTab.Timing) }) {
+                OverviewKv(TrajL.timingStarted, formatStartedAt(row.startedAt), compact = true)
+                OverviewKv(TrajL.timingDuration, formatElapsedSeconds(row.timeSeconds), compact = true)
+                if (row.kind == TrajL.kindAssistant) {
+                    OverviewKv(TrajL.timingTtft, formatTtft(row), compact = true)
+                    OverviewKv(TrajL.timingGeneration, formatGeneration(row), compact = true)
+                    OverviewKv(TrajL.timingThroughput, formatThroughput(row), compact = true)
+                }
             }
         }
-        if (TrajDetailTab.Thinking in tabs && row.thinkingDetail != null) {
-            OverviewSection("思考", onOpen = { onOpen(TrajDetailTab.Thinking) }) {
-                TrajCodePreview(row.thinkingDetail!!)
-            }
-        }
-        if ((TrajDetailTab.Raw in tabs || TrajDetailTab.Preview in tabs) && row.rawDetail != null && row.kind != "工具") {
-            OverviewSection(if (TrajDetailTab.Preview in tabs) "预览" else "原始内容", onOpen = {
-                onOpen(if (TrajDetailTab.Preview in tabs) TrajDetailTab.Preview else TrajDetailTab.Raw)
-            }) {
+        if (TrajDetailTab.Preview in tabs && row.rawDetail != null) {
+            OverviewSection(TrajL.tabPreview, onOpen = { onOpen(TrajDetailTab.Preview) }) {
                 TrajCodePreview(row.rawDetail!!)
             }
         }
+        if (TrajDetailTab.Thinking in tabs && row.thinkingDetail != null) {
+            OverviewSection(TrajL.recordThinking, onOpen = { onOpen(TrajDetailTab.Thinking) }) {
+                TrajCodePreview(row.thinkingDetail!!)
+            }
+        }
+        if (TrajDetailTab.RawOutput in tabs) {
+            OverviewSection(TrajL.tabRawOutput, onOpen = { onOpen(TrajDetailTab.RawOutput) }) {
+                TrajCodePreview(row.rawDetail ?: row.outputDetail ?: TrajL.recordNoOutput)
+            }
+        }
     }
+}
+
+/** Best-effort reverse of [kfmt] for overview token unit labels. */
+private fun parseKfmtApprox(s: String): Long {
+    val t = s.trim().lowercase()
+    if (t.endsWith("k")) return round(t.dropLast(1).toDoubleOrNull()?.times(1000.0) ?: 0.0).toLong()
+    return t.toLongOrNull() ?: 0L
+}
+
+fun formatTtft(row: TrajRow): String {
+    val start = row.startedAt ?: return TrajL.timingFirstTokenUnavailable
+    val first = row.firstTokenTime ?: return TrajL.timingFirstTokenUnavailable
+    return formatElapsedSeconds((first - start).coerceAtLeast(0) / 1000.0)
+}
+
+fun formatGeneration(row: TrajRow): String {
+    val first = row.firstTokenTime ?: return TrajL.timingFirstTokenUnavailable
+    val end = row.startedAt?.let { start ->
+        row.timeSeconds?.let { (start + (it * 1000).toLong()) }
+    } ?: return if (row.running) TrajL.statusPending else TrajL.timingNotAvailable
+    return formatElapsedSeconds((end - first).coerceAtLeast(0) / 1000.0)
+}
+
+fun formatThroughput(row: TrajRow): String {
+    val first = row.firstTokenTime ?: return TrajL.timingFirstTokenUnavailable
+    if (row.running) return TrajL.statusPending
+    val end = row.startedAt?.let { start ->
+        row.timeSeconds?.let { (start + (it * 1000).toLong()) }
+    } ?: return TrajL.timingNotAvailable
+    val seconds = (end - first).coerceAtLeast(1) / 1000.0
+    val tokens = row.output.toLongOrNull()
+        ?: row.output.removeSuffix("k").toDoubleOrNull()?.times(1000)?.toLong()
+        ?: return TrajL.timingNotAvailable
+    val rate = tokens / seconds
+    return TrajL.unitTokensPerSecond("%.1f".format(rate))
+}
+
+@Composable
+private fun TrajPreview(row: TrajRow) {
+    Column(Modifier.padding(horizontal = 22.dp)) {
+        row.thinkingDetail?.takeIf { it.isNotBlank() }?.let { thinking ->
+            Text(TrajL.recordThinking, fontSize = 12.sp, color = T.Text3, modifier = Modifier.padding(bottom = 4.dp))
+            TrajPayload(thinking, missing = TrajL.recordNoContent)
+            Spacer(Modifier.height(10.dp))
+        }
+        TrajPayload(row.outputDetail ?: row.rawDetail, missing = TrajL.recordNoContent)
+    }
+}
+
+@Composable
+private fun TrajCodeProgram(program: CodeProgram) {
+    Column(Modifier.padding(horizontal = 22.dp)) {
+        if (program.language != null) {
+            Text(program.language, fontSize = 12.sp, color = T.Text3, modifier = Modifier.padding(bottom = 6.dp))
+        }
+        Text(
+            program.source,
+            style = T.Mono.copy(lineHeight = 20.sp),
+            modifier = Modifier.fillMaxWidth().clip(T.R12).background(T.Fill2)
+                .horizontalScroll(rememberScrollState()).padding(14.dp),
+        )
+    }
+}
+
+@Composable
+private fun TrajSystemDiff(row: TrajRow) {
+    Column(Modifier.padding(horizontal = 22.dp)) {
+        Text(TrajL.recordSystemPrompt, fontSize = 12.sp, color = T.Text3, modifier = Modifier.padding(bottom = 6.dp))
+        val prev = row.previousText.orEmpty()
+        val curr = row.rawDetail.orEmpty()
+        if (prev.isEmpty() && curr.isEmpty()) {
+            Text(TrajL.recordSystemPromptMissing, fontSize = 14.sp, color = T.Text3)
+        } else {
+            TrajPayload("— previous —\n$prev\n\n— current —\n$curr", missing = TrajL.recordNoContent)
+        }
+        val addedRemoved = toolCatalogDiff(row.previousToolsJson, row.toolsJson)
+        if (addedRemoved != null) {
+            Spacer(Modifier.height(12.dp))
+            Text(TrajL.recordTools, fontSize = 12.sp, color = T.Text3, modifier = Modifier.padding(bottom = 6.dp))
+            TrajPayload(addedRemoved, missing = TrajL.recordToolsMissing)
+        }
+    }
+}
+
+/** Simple name-set diff for system tools catalogs (desktop tools added/removed). */
+fun toolCatalogDiff(previousJson: String?, currentJson: String?): String? {
+    val prev = toolNames(previousJson)
+    val curr = toolNames(currentJson)
+    if (prev.isEmpty() && curr.isEmpty()) return null
+    val added = curr - prev
+    val removed = prev - curr
+    if (added.isEmpty() && removed.isEmpty()) return null
+    return buildString {
+        if (added.isNotEmpty()) appendLine("新增：${added.sorted().joinToString(", ")}")
+        if (removed.isNotEmpty()) append("移除：${removed.sorted().joinToString(", ")}")
+    }.trim()
+}
+
+private fun toolNames(json: String?): Set<String> {
+    if (json.isNullOrBlank()) return emptySet()
+    val el = runCatching { PocketJsonish(json) }.getOrNull() ?: return emptySet()
+    val arr = el as? JsonArray ?: return emptySet()
+    return arr.mapNotNull { (it as? JsonObject)?.get("name")?.let { n -> (n as? JsonPrimitive)?.contentOrNull } }.toSet()
+}
+
+private fun PocketJsonish(s: String): JsonElement =
+    Json.parseToJsonElement(s)
+
+@Composable
+private fun TrajToolsCatalog(toolsJson: String?) {
+    if (toolsJson.isNullOrBlank()) {
+        Text(TrajL.recordToolsMissing, fontSize = 14.sp, color = T.Text3, modifier = Modifier.padding(horizontal = 22.dp, vertical = 8.dp))
+        return
+    }
+    TrajPayload(toolsJson, missing = TrajL.recordToolsMissing)
 }
 
 @Composable
@@ -269,18 +458,18 @@ private fun TrajPayload(value: String?, missing: String, error: Boolean = false)
 @Composable
 private fun TrajSchema(schemaDetail: String?) {
     if (schemaDetail.isNullOrBlank()) {
-        Text("Schema 不可用", fontSize = 14.sp, color = T.Text3, modifier = Modifier.padding(horizontal = 22.dp, vertical = 8.dp))
+        Text(TrajL.recordSchemaUnavailable, fontSize = 14.sp, color = T.Text3, modifier = Modifier.padding(horizontal = 22.dp, vertical = 8.dp))
         return
     }
     val parsed = parseToolSchema(schemaDetail)
     if (parsed == null) {
-        TrajPayload(schemaDetail, missing = "Schema 不可用")
+        TrajPayload(schemaDetail, missing = TrajL.recordSchemaUnavailable)
         return
     }
     Column(Modifier.padding(horizontal = 22.dp)) {
         Text(parsed.name, fontSize = 16.sp, fontWeight = FontWeight.SemiBold, color = T.Ink)
         Text(parsed.description, fontSize = 13.sp, color = T.Text2, lineHeight = 20.sp, modifier = Modifier.padding(top = 4.dp, bottom = 10.dp))
-        Text("参数", fontSize = 12.sp, color = T.Text3, modifier = Modifier.padding(bottom = 6.dp))
+        Text(TrajL.recordParameters, fontSize = 12.sp, color = T.Text3, modifier = Modifier.padding(bottom = 6.dp))
         Text(
             SchemaPrettyJson.encodeToString(JsonElement.serializer(), parsed.parameters),
             style = T.Mono.copy(lineHeight = 20.sp),
@@ -295,14 +484,21 @@ private val SchemaPrettyJson = Json { prettyPrint = true; ignoreUnknownKeys = tr
 @Composable
 private fun TrajTiming(row: TrajRow) {
     Column(Modifier.padding(horizontal = 22.dp)) {
-        OverviewKv("开始时间", formatStartedAt(row.startedAt))
-        OverviewKv("时长", formatElapsedSeconds(row.timeSeconds))
+        OverviewKv(TrajL.timingStarted, formatStartedAt(row.startedAt))
+        if (row.kind == TrajL.kindAssistant) {
+            OverviewKv(TrajL.timingTotalDuration, formatElapsedSeconds(row.timeSeconds))
+            OverviewKv(TrajL.timingTtft, formatTtft(row))
+            OverviewKv(TrajL.timingGeneration, formatGeneration(row))
+            OverviewKv(TrajL.timingThroughput, formatThroughput(row))
+        } else {
+            OverviewKv(TrajL.timingDuration, formatElapsedSeconds(row.timeSeconds))
+        }
         OverviewKv(
-            "计时来源",
+            TrajL.timingSource,
             when {
-                row.timeSeconds == null -> "不可用"
-                row.running -> "会话时间戳（运行中）"
-                else -> "会话时间戳"
+                row.timeSeconds == null && !row.running -> TrajL.timingNotAvailable
+                row.running -> TrajL.timingSessionTimestampsRunning
+                else -> TrajL.timingSessionTimestamps
             },
         )
     }

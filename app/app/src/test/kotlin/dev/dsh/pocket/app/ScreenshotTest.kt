@@ -67,25 +67,33 @@ class ScreenshotTest {
         "s1", title = "问候", running = true, loaded = true, runStartedAt = System.currentTimeMillis() - 42_000,
         usage = Usage(3, 11, 10_000, 9_600, 800),
         items = listOf(
-            Item.System("sys1", "初始系统提示词", "You are a helpful coding agent.", at = 0),
-            Item.User("u", "给 pi-rpc-bridge 加上 token 轮换，旧 token 宽限 5 分钟", at = 100),
-            Item.Context("x1", "Current runtime context. This snapshot supersedes earlier…", "runtime-context", at = 110),
+            Item.System(
+                "sys1", TrajL.layoutInitialSystemPrompt, "You are a helpful coding agent.", at = 0,
+                toolsJson = """[{"name":"read","description":"Read a file","parameters":{"type":"object"}}]""",
+            ),
+            Item.Compacted("cmp1", "c1", CompactionStatus.Ok, summary = "Kept the auth goal.", startedAt = 50, endedAt = 90),
+            Item.User("u", "给 pi-rpc-bridge 加上 token 轮换，旧 token 宽限 5 分钟", at = 100, messageSourceJson = """{"kind":"user"}"""),
+            Item.Context("x1", "Current runtime context. This snapshot supersedes earlier…", "runtime-context", at = 110, messageSourceJson = """{"kind":"plugin"}"""),
             Item.Context("x2", "<system-reminder>\nA skill is a reusable set of task-specific instructions…", null, at = 120),
             Item.Reasoning("r10", "先看握手逻辑。", 8000, false),
             Item.Text("t10", "握手在 `handleAuth()` 里一次性比对。我会改成同时接受当前 token 和宽限期内的上一个：\n```js\nconst valid = [current, previous]\n  .filter(t => t && t.expiresAt > now)\n  .some(t => safeEqual(t.value, got))\n```", false),
+            Item.Tool("t0", "root", PTC_TOOL_NAME, """{"code":"await read({path:'bridge/pi-rpc-bridge.mjs'})","description":"inspect bridge"}""", ToolStatus.Ok, "done", startedAt = 180, endedAt = 199, turn = 1, step = 1),
+            Item.Tool("t0s", "root:ptc:1", "read", """{"path":"bridge/pi-rpc-bridge.mjs"}""", ToolStatus.Ok, "ok", startedAt = 185, endedAt = 195, turn = 1, step = 1, parentCallId = "root"),
             Item.Tool("t1", "c1", "read", """{"path":"bridge/pi-rpc-bridge.mjs"}""", ToolStatus.Ok, "ok", startedAt = 200, endedAt = 240),
             Item.Tool("t2", "c2", "grep", """{"pattern":"auth"}""", ToolStatus.Ok, "6 matches", startedAt = 250, endedAt = 370),
             Item.Tool("t3", "c3", "edit", """{"path":"bridge/pi-rpc-bridge.mjs"}""", ToolStatus.Running, startedAt = 400),
             Item.Tool("t4", "c4", "bash", """{"command":"npm install --save-dev vitest@latest && npx vitest run bridge/"}""", ToolStatus.AwaitingApproval, startedAt = 500),
+            Item.Tool("t5", "c5", "bash", """{"command":"false"}""", ToolStatus.Error, error = "exit 1", startedAt = 600, endedAt = 610),
         ),
         steps = listOf(
             StepRecord(
                 seq = 10, turn = 1, step = 1, stepStartTime = 150, messageTime = 8250,
+                firstTokenTime = 400,
                 replyText = "握手在 `handleAuth()` 里一次性比对。我会改成同时接受当前 token 和宽限期内的上一个：\n```js\nconst valid = [current, previous]\n  .filter(t => t && t.expiresAt > now)\n  .some(t => safeEqual(t.value, got))\n```",
                 reasoningText = "先看握手逻辑。",
                 usage = StepUsage(inputTokens = 18_200, outputTokens = 431, reasoningTokens = 120),
                 provider = "deepseek", model = "deepseek-v4.1-flash",
-                toolCallIds = listOf("c1", "c2", "c3", "c4"),
+                toolCallIds = listOf("root", "root:ptc:1", "c1", "c2", "c3", "c4", "c5"),
             ),
         ),
     )
@@ -130,11 +138,29 @@ class ScreenshotTest {
             schemaJson = """{"name":"read","description":"Read a UTF-8 text file and return line-numbered content.","parameters":{"type":"object","properties":{"file_path":{"type":"string"}}}}""",
             turn = 6, step = 1,
         )
-        val row = buildTrajectory(listOf(Item.User("u", "hi"), tool)).single().rows.single { it.kind == "工具" }
+        val row = buildTrajectory(listOf(Item.User("u", "hi"), tool)).single().rows.single { it.kind == TrajL.kindTool }
         showWithDialogs("14b-trajectory-detail") {
             TrajectoryDetailSheet(row, turnIndex = 6) {}
         }
     }
+
+    private fun trajKindRow(kind: String): TrajRow {
+        val state = chatState()
+        return buildTrajectory(state.items, state.steps).flatMap { it.rows }.first { it.kind == kind }
+    }
+
+    private fun shotKind(name: String, kind: String) {
+        val row = trajKindRow(kind)
+        showWithDialogs(name) { TrajectoryDetailSheet(row, turnIndex = row.turn ?: 1) {} }
+    }
+
+    @Test fun s14c_kindSystem() = shotKind("14c-kind-system", TrajL.kindSystem)
+    @Test fun s14c_kindCompacted() = shotKind("14c-kind-compacted", TrajL.kindCompacted)
+    @Test fun s14c_kindUser() = shotKind("14c-kind-user", TrajL.kindUser)
+    @Test fun s14c_kindContext() = shotKind("14c-kind-context", TrajL.kindContext)
+    @Test fun s14c_kindAssistant() = shotKind("14c-kind-assistant", TrajL.kindAssistant)
+    @Test fun s14c_kindTool() = shotKind("14c-kind-tool", TrajL.kindTool)
+    @Test fun s14c_kindSubtool() = shotKind("14c-kind-subtool", TrajL.kindSubtool)
     @Test fun s15_generalWired() = show("15-general-settings") { GeneralSettingsScreen {} }
     @Test fun s16_panelWithTerminal() {
         Pocket.ops.value = setOf("files.list", "terminal.create", "jobs.list")
