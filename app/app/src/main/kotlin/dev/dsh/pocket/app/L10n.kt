@@ -105,6 +105,17 @@ object L {
     fun light() = if (en) "Light" else "浅色"
     fun dark() = if (en) "Dark" else "深色"
     fun followSystem() = if (en) "System" else "跟随系统"
+
+    // Task notifications (desktop-aligned; adapted from saya-ch/dsh-mobile labels)
+    fun taskFinished() = if (en) "Task finished" else "任务已完成"
+    fun taskFinishedBody() = if (en) "Your DSH task finished" else "你的 DSH 任务已完成"
+    fun taskFinishedBodyNamed(title: String) =
+        if (en) "Your DSH task finished: $title" else "你的 DSH 任务已完成：$title"
+    fun inputNeeded() = if (en) "Input needed" else "需要你确认"
+    fun waitingForAnswer() = if (en) "Waiting for your answer" else "等待你的回答"
+    fun waitingForAnswerNamed(title: String) =
+        if (en) "$title — waiting for your answer" else "$title — 等待你的回答"
+    fun notificationChannelTasks() = if (en) "Tasks" else "任务"
 }
 
 /** Composer primary-action label from running state + [BusySend] pref. */

@@ -86,6 +86,8 @@ class WsTransport private constructor(
     private var ws: WebSocket? = null
     private val closed = AtomicBoolean(false)
     @Volatile override var closeReason: String? = null; private set
+    /** Negotiated Sec-WebSocket-Extensions from the upgrade response (e.g. permessage-deflate). */
+    @Volatile var negotiatedExtensions: String? = null; private set
 
     override suspend fun send(text: String) {
         val socket = ws ?: throw PocketError("transport", "not connected")
@@ -106,16 +108,22 @@ class WsTransport private constructor(
     }
 
     companion object {
+        /** OkHttp offers permessage-deflate by default; match pocket server threshold (~1 KiB). */
+        const val MIN_MESSAGE_TO_COMPRESS = 1024L
+
         suspend fun open(
             url: String,
             routeHint: Route = Route.WsLocal,
             http: OkHttpClient = PocketClient.defaultHttp(),
-            timeoutMs: Long = 8_000,
+            timeoutMs: Long = 120_000,
         ): WsTransport = withTimeout(timeoutMs) {
             val t = WsTransport(url, routeHint, http)
             val opened = CompletableDeferred<Unit>()
             t.ws = http.newWebSocket(Request.Builder().url(url).build(), object : WebSocketListener() {
-                override fun onOpen(webSocket: WebSocket, response: Response) { opened.complete(Unit) }
+                override fun onOpen(webSocket: WebSocket, response: Response) {
+                    t.negotiatedExtensions = response.header("Sec-WebSocket-Extensions")
+                    opened.complete(Unit)
+                }
                 override fun onMessage(webSocket: WebSocket, text: String) {
                     t.ch.trySend(text)
                 }

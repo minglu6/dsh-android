@@ -7,7 +7,22 @@ import { WebSocketServer } from 'ws'
 export const PROTO = 1
 const PRE_AUTH_MAX = 64 * 1024
 const MAX_PAYLOAD = 32 * 1024 * 1024
-const HELLO_TIMEOUT_MS = 10_000
+/** Hello / pair must complete within this window (slow links: ~120s). */
+export const HELLO_TIMEOUT_MS = 120_000
+/** Default application ping interval for slow links (ref dsh-mobile SLOW_CONNECTIONS). */
+export const DEFAULT_HEARTBEAT_MS = 30_000
+/** Drop idle authed clients after this silence (covers ~4 missed heartbeats). */
+export const DEFAULT_IDLE_MS = 120_000
+/**
+ * Adapted from saya-ch/dsh-mobile (Apache-2.0) websocket-compression defaults.
+ * Compress outbound frames ≥ 1 KiB at zlib level 3; no context takeover.
+ */
+export const WS_DEFLATE = Object.freeze({
+  clientNoContextTakeover: true,
+  serverNoContextTakeover: true,
+  threshold: 1024,
+  zlibDeflateOptions: { level: 3 },
+})
 /** Default follow snapshot window when the client omits maxMessages (phone path). */
 export const DEFAULT_FOLLOW_MAX_MESSAGES = 50
 /** Soft ceiling for one follow JSON frame (~900 KiB); leave headroom under iroh MAX_LINE. */
@@ -247,22 +262,50 @@ export function createPocketServer(opts) {
   const sc = opts.sessionController
   const devices = opts.devices ?? createDeviceStore({ ownerToken: opts.token, persist: false })
   const pairing = opts.pairing ?? createPairing()
-  const heartbeatMs = opts.heartbeatMs ?? 20_000
-  const idleMs = opts.idleMs ?? 60_000
+  const heartbeatMs = opts.heartbeatMs ?? DEFAULT_HEARTBEAT_MS
+  const idleMs = opts.idleMs ?? DEFAULT_IDLE_MS
   const pairFailDelayMs = opts.pairFailDelayMs ?? 200
   const ops = createOps(sc)
   const http = createServer((req, res) => {
     res.writeHead(426, { 'content-type': 'text/plain' }).end('websocket required')
   })
-  const wss = new WebSocketServer({ server: http, maxPayload: MAX_PAYLOAD })
+  // Adapted from saya-ch/dsh-mobile (Apache-2.0): negotiate permessage-deflate with phones.
+  // Frame-size caps (PRE_AUTH_MAX / MAX_PAYLOAD / FRAME_*_LIMIT) still apply to decoded JSON.
+  const wss = new WebSocketServer({
+    server: http,
+    maxPayload: MAX_PAYLOAD,
+    perMessageDeflate: opts.perMessageDeflate === false ? false : (opts.perMessageDeflate ?? WS_DEFLATE),
+  })
   const clients = new Set()
   /** approvalId -> { payload, settle(outcome) } */
   const approvals = new Map()
   /** callId (or synthetic id) -> { payload, settle(answer), close } */
   const userQuestions = new Map()
+  /** sessionId -> true when known to be a subagent (has parentSessionId). */
+  const childSessions = new Set()
   const authedClients = () => [...clients].filter((c) => c.device)
   const broadcast = (m) => { for (const c of authedClients()) c.push(m) }
-  const unsub = opts.onSessionEvent?.((kind, args) => broadcast({ ev: 'session', ...sessionEventPayload(kind, args) }))
+  const pushTaskEvent = (event) => {
+    need(str(event?.sessionId), 'sessionId required')
+    const kind = event.kind === 'question' ? 'question' : 'done'
+    const turn = typeof event.turn === 'number' && Number.isSafeInteger(event.turn) && event.turn >= 0
+      ? event.turn
+      : 0
+    const payload = { ev: 'task', kind, sessionId: event.sessionId, turn }
+    if (kind === 'question' && str(event.questionId)) payload.questionId = event.questionId
+    broadcast(payload)
+  }
+  const unsub = opts.onSessionEvent?.((kind, args) => {
+    if (kind === 'added') {
+      const summary = args[0]
+      if (summary?.parentSessionId) childSessions.add(summary.sessionId)
+      else if (summary?.sessionId) childSessions.delete(summary.sessionId)
+    } else if (kind === 'removed') {
+      childSessions.delete(args[0])
+    }
+    broadcast({ ev: 'session', ...sessionEventPayload(kind, args) })
+    opts.onSessionLifecycle?.(kind, args)
+  })
 
   const adminOps = {
     'pairing.open': () => pairing.open(),
@@ -573,7 +616,29 @@ export function createPocketServer(opts) {
         settle: (ans, deviceId) => { resolve({ answer: ans, by: `device:${deviceId}` }) },
       })
       broadcast({ ev: 'user-question', ...full })
+      // Minimal task event so phones can build a local "waiting for your answer" notification.
+      if (str(full.sessionId) && !childSessions.has(full.sessionId)) {
+        pushTaskEvent({ sessionId: full.sessionId, kind: 'question', questionId })
+      }
       return { questionId, answer, close }
+    },
+    /**
+     * Push a minimal task-completion / question event (sessionId + turn).
+     * Phones render notification text locally from session title + kind.
+     * @param {{ sessionId: string, turn?: number, kind?: 'done'|'question', questionId?: string }} event
+     */
+    broadcastTaskEvent(event) {
+      pushTaskEvent(event)
+    },
+    isRootSession(sessionId) {
+      return str(sessionId) && !childSessions.has(sessionId)
+    },
+    hasPendingUserQuestionForSession(sessionId) {
+      if (!str(sessionId)) return false
+      for (const p of userQuestions.values()) {
+        if (p.payload?.sessionId === sessionId) return true
+      }
+      return false
     },
     /** Settle a pending waterfall offer from `userQuestions.answer` (returns false if none). */
     settleUserQuestion(callId, answer, deviceId = 'phone') {

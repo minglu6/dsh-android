@@ -45,7 +45,12 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun onNewIntent(intent: Intent) { super.onNewIntent(intent); handle(intent) }
-    private fun handle(i: Intent?) { i?.dataString?.let(PairingLink::parse)?.let { deepLink.value = it } }
+    private fun handle(i: Intent?) {
+        i?.dataString?.let(PairingLink::parse)?.let { deepLink.value = it }
+        i?.getStringExtra(ConnectionService.EXTRA_SESSION_ID)?.let { sessionId ->
+            if (sessionId.isNotBlank()) Pocket.openSession(sessionId)
+        }
+    }
 
     /** Screenshots and screen recording must always work (pairing codes, terminal, tokens included). */
     private fun allowScreenshotsAndRecording() {
