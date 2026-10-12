@@ -116,7 +116,7 @@ fun ChatRoot(onMenu: () -> Unit) {
             var tab by remember(st.sessionId) { mutableIntStateOf(0) }
             Tabs(tab) { tab = it }
             Box(Modifier.weight(1f).fillMaxWidth()) {
-                if (tab == 0) Transcript(st, onTool = { tool = it }) else TrajectoryView(st, onTool = { tool = it })
+                if (tab == 0) Transcript(st, onTool = { tool = it }) else TrajectoryView(st)
             }
             approvals.firstOrNull { it.sessionId == null || it.sessionId == st.sessionId }?.let { ApprovalCard(it) }
             Composer("发消息或创建任务, / 调用指令, @ 文件或对话", st.running, curPerm, curModel, enabled = dot == Dot.Online,

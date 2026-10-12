@@ -4,12 +4,14 @@ import dev.dsh.pocket.protocol.Item
 import dev.dsh.pocket.protocol.PocketJson
 import dev.dsh.pocket.protocol.ToolStatus
 import dev.dsh.pocket.protocol.TranscriptReducer
+import dev.dsh.pocket.protocol.trajectoryStatusLabel
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 // Lane/segment projection covered by protocol TrajectoryTimelineTest (desktop timeline.ts port).
+// Schema / detail tabs: TrajectorySchemaTest + trajDetailTabs below (desktop TrajectoryTable).
 
 class TrajectoryTest {
     private fun j(s: String) = PocketJson.parseToJsonElement(s)
@@ -87,5 +89,38 @@ class TrajectoryTest {
         val hits = assertNotNull(trajectorySearchMatches(turns, "runtime cwd"))
         assertEquals(setOf("x1"), hits)
         assertTrue(trajectorySearchMatches(turns, "read")!!.contains("t1"))
+    }
+
+    @Test fun toolDetailTabsAndHeaderMatchDesktop() {
+        val tool = Item.Tool(
+            "t1", "c1", "read", """{"file_path":"/tmp/a.yml"}""",
+            ToolStatus.Ok, result = "<path>/tmp/a.yml</path>",
+            startedAt = 1_000, endedAt = 1_011,
+            schemaJson = """{"name":"read","description":"Read a UTF-8 text file and return line-numbered content.","parameters":{"type":"object"}}""",
+            turn = 6, step = 1,
+        )
+        val turns = buildTrajectory(listOf(Item.User("u1", "hi"), tool))
+        val row = turns[0].rows.single { it.kind == "工具" }
+        assertEquals(
+            listOf(TrajDetailTab.Overview, TrajDetailTab.Input, TrajDetailTab.Output, TrajDetailTab.Schema, TrajDetailTab.Timing),
+            trajDetailTabs(row),
+        )
+        assertEquals("工具", trajDetailKindLabel(row.kind))
+        assertEquals("第 6 轮 · 第 1 步", trajDetailLocation(row, turnIndex = 1))
+        assertEquals("已完成", trajectoryStatusLabel(trajRowState(row)))
+        assertNotNull(row.schemaDetail)
+        assertTrue(row.inputDetail!!.contains("file_path"))
+        assertTrue(row.outputDetail!!.contains("<path>"))
+    }
+
+    @Test fun pendingToolOmitsResultTabAndShowsWaiting() {
+        val tool = Item.Tool("t1", "c1", "bash", """{"command":"ls"}""", ToolStatus.Running, turn = 1, step = 2)
+        val row = buildTrajectory(listOf(Item.User("u1", "hi"), tool))[0].rows.single { it.kind == "工具" }
+        assertEquals(
+            listOf(TrajDetailTab.Overview, TrajDetailTab.Input, TrajDetailTab.Schema, TrajDetailTab.Timing),
+            trajDetailTabs(row),
+        )
+        assertEquals("等待中", trajectoryStatusLabel(trajRowState(row)))
+        assertEquals("第 1 轮 · 第 2 步", trajDetailLocation(row, turnIndex = 1))
     }
 }

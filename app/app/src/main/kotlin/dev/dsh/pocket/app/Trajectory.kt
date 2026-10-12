@@ -4,6 +4,7 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -19,14 +20,14 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.ui.text.TextStyle
-import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
@@ -54,6 +55,17 @@ data class TrajRow(
     val detail: Item? = null,
     /** Full reasoning text for the row detail (desktop `thinkingDetail`). */
     val thinkingDetail: String? = null,
+    /** Desktop `inputDetail` (tool args / user text). */
+    val inputDetail: String? = null,
+    /** Desktop `outputDetail` (tool result / assistant reply). */
+    val outputDetail: String? = null,
+    /** Desktop `schemaDetail` (pretty tool schema JSON). */
+    val schemaDetail: String? = null,
+    /** Markdown / system / context body for non-tool detail tabs. */
+    val rawDetail: String? = null,
+    /** Turn / step for the inspector header (`第 N 轮 · 第 M 步`). */
+    val turn: Int? = null,
+    val step: Int? = null,
     /** Session-event start time (ms) for swimlane projection. */
     val startedAt: Long? = null,
     /** Own duration in seconds for swimlane; null when unknown. */
@@ -94,6 +106,10 @@ private fun assistantRow(step: StepRecord): TrajRow {
         time = elapsed,
         detail = step.replyText.takeIf { it.isNotBlank() }?.let { Item.Text("a${step.seq}", it, live = false) },
         thinkingDetail = step.reasoningText.takeIf { it.isNotBlank() },
+        outputDetail = step.replyText.takeIf { it.isNotBlank() },
+        rawDetail = step.replyText.takeIf { it.isNotBlank() },
+        turn = step.turn,
+        step = step.step,
         startedAt = start,
         timeSeconds = elapsedMs?.let { it / 1000.0 },
         searchText = listOf(step.replyText, step.reasoningText, step.model, step.provider).joinToString("\n"),
@@ -111,6 +127,8 @@ private fun liveAssistantRow(key: String, reply: String, reasoning: String): Tra
         running = true,
         detail = reply.takeIf { it.isNotBlank() }?.let { Item.Text(key, it, live = true) },
         thinkingDetail = reasoning.takeIf { it.isNotBlank() },
+        outputDetail = reply.takeIf { it.isNotBlank() },
+        rawDetail = reply.takeIf { it.isNotBlank() },
         searchText = "$reply\n$reasoning",
     )
 
@@ -128,13 +146,23 @@ private fun toolRow(item: Item.Tool): TrajRow {
         else -> ""
     }
     val arg = primaryArg(item.name, item.arguments)?.take(48).orEmpty()
+    val outputDetail = when {
+        item.error != null -> listOfNotNull(item.error, item.result).joinToString("\n")
+        item.result != null -> item.result
+        else -> null
+    }
     return TrajRow(
         item.key, 1, "工具", "${item.name}${if (arg.isNotEmpty()) " $arg" else ""}",
         time = dur, running = running, detail = item,
+        inputDetail = item.arguments.takeIf { it.isNotBlank() },
+        outputDetail = outputDetail,
+        schemaDetail = item.schemaJson,
+        turn = item.turn,
+        step = item.step,
         startedAt = started,
         timeSeconds = durMs?.let { it / 1000.0 },
         isError = item.status == ToolStatus.Error,
-        searchText = listOf(item.name, item.arguments, item.result, item.error).joinToString("\n"),
+        searchText = listOf(item.name, item.arguments, item.result, item.error, item.schemaJson).joinToString("\n"),
     )
 }
 
@@ -192,14 +220,16 @@ fun buildTrajectory(items: List<Item>, steps: List<StepRecord> = emptyList()): L
             is Item.System -> addPrefixOrRow(
                 TrajRow(
                     item.key, 0, "系统", item.label,
-                    detail = item, startedAt = item.at, timeSeconds = 0.0,
+                    detail = item, rawDetail = item.text,
+                    startedAt = item.at, timeSeconds = 0.0,
                     searchText = "${item.label}\n${item.text}",
                 ),
             )
             is Item.Context -> addPrefixOrRow(
                 TrajRow(
                     item.key, 0, "上下文", oneLinePreview(item.text),
-                    detail = item, startedAt = item.at, timeSeconds = 0.0,
+                    detail = item, inputDetail = item.text, rawDetail = item.text,
+                    startedAt = item.at, timeSeconds = 0.0,
                     searchText = item.text,
                 ),
             )
@@ -214,6 +244,8 @@ fun buildTrajectory(items: List<Item>, steps: List<StepRecord> = emptyList()): L
                 rows += TrajRow(
                     item.key, 0, "用户", oneLinePreview(item.text, 80),
                     time = formatElapsed(0),
+                    inputDetail = item.text, rawDetail = item.text,
+                    turn = turnIdx,
                     startedAt = item.at,
                     timeSeconds = 0.0,
                     searchText = item.text,
@@ -246,7 +278,8 @@ fun buildTrajectory(items: List<Item>, steps: List<StepRecord> = emptyList()): L
                         stepIdx != null -> emitStep(stepIdx)
                         steps.isEmpty() -> rows += TrajRow(
                             item.key, 0, "助手", firstLine(item.text).ifEmpty { "仅工具调用" },
-                            think = "—", detail = item, searchText = item.text,
+                            think = "—", detail = item, rawDetail = item.text, outputDetail = item.text,
+                            searchText = item.text,
                         )
                     }
                 }
@@ -255,7 +288,10 @@ fun buildTrajectory(items: List<Item>, steps: List<StepRecord> = emptyList()): L
                 stepByTool[item.callId]?.let(::emitStep)
                 rows += toolRow(item)
             }
-            is Item.Notice -> rows += TrajRow(item.key, 0, "系统", item.text.take(80), detail = item, searchText = item.text)
+            is Item.Notice -> rows += TrajRow(
+                item.key, 0, "系统", item.text.take(80),
+                detail = item, rawDetail = item.text, searchText = item.text,
+            )
         }
     }
     if (pendingPrefix.isNotEmpty() && turnIdx == 0) {
@@ -304,7 +340,7 @@ fun trajectorySearchMatches(turns: List<TrajTurn>, query: String): Set<String>? 
 }
 
 @Composable
-fun TrajectoryView(st: ChatState, onTool: (Item.Tool) -> Unit) {
+fun TrajectoryView(st: ChatState) {
     val turns = remember(st.items, st.steps) { buildTrajectory(st.items, st.steps) }
     if (!st.loaded) {
         Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
@@ -317,6 +353,7 @@ fun TrajectoryView(st: ChatState, onTool: (Item.Tool) -> Unit) {
         return
     }
     var selected by remember { mutableStateOf<TrajRow?>(null) }
+    var selectedTurn by remember { mutableIntStateOf(0) }
     var actualDuration by remember { mutableStateOf(false) }
     var turnsCollapsed by remember { mutableStateOf(false) }
     var callsCollapsed by remember { mutableStateOf(false) }
@@ -325,6 +362,12 @@ fun TrajectoryView(st: ChatState, onTool: (Item.Tool) -> Unit) {
     val cells = remember(turns) { trajectoryTimelineCells(turns) }
     val timeline = remember(cells, mode) { deriveTrajectoryTimeline(cells, mode) }
     val searchMatches = remember(turns, searchQuery) { trajectorySearchMatches(turns, searchQuery) }
+    val rowByKey = remember(turns) { turns.flatMap { t -> t.rows.map { it.key to (it to t.index) } }.toMap() }
+
+    fun selectRow(row: TrajRow, turn: Int) {
+        selected = row
+        selectedTurn = turn
+    }
 
     Column(Modifier.fillMaxSize()) {
         TrajectoryToolbar(
@@ -337,7 +380,11 @@ fun TrajectoryView(st: ChatState, onTool: (Item.Tool) -> Unit) {
             searchQuery = searchQuery,
             onSearchQueryChange = { searchQuery = it },
         )
-        timeline?.let { SwimlaneChart(it, mode) }
+        timeline?.let { model ->
+            SwimlaneChart(model, mode, selectedKey = selected?.key) { key ->
+                rowByKey[key]?.let { (row, turn) -> selectRow(row, turn) }
+            }
+        }
         Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp), horizontalArrangement = Arrangement.End) {
             Text("输入", style = monoCap(), modifier = Modifier.width(44.dp))
             Text("输出", style = monoCap(), modifier = Modifier.width(40.dp))
@@ -365,13 +412,15 @@ fun TrajectoryView(st: ChatState, onTool: (Item.Tool) -> Unit) {
                 if (!turnsCollapsed) {
                     itemsIndexed(visibleRows, key = { _, r -> r.key }) { _, row ->
                         TrajRowView(row, selected?.key == row.key) {
-                            selected = row
-                            (row.detail as? Item.Tool)?.let(onTool)
+                            selectRow(row, turn.index)
                         }
                     }
                 }
             }
         }
+    }
+    selected?.let { row ->
+        TrajectoryDetailSheet(row, turnIndex = selectedTurn) { selected = null }
     }
 }
 
@@ -413,7 +462,7 @@ private fun TrajectoryToolbar(
                     value = searchQuery,
                     onValueChange = onSearchQueryChange,
                     singleLine = true,
-                    textStyle = TextStyle(fontSize = 12.sp, color = T.Ink, fontFamily = FontFamily.Monospace),
+                    textStyle = T.Mono.copy(fontSize = 12.sp),
                     cursorBrush = SolidColor(T.Accent),
                     modifier = Modifier.fillMaxWidth(),
                 )
@@ -436,9 +485,14 @@ private fun ToolbarChip(pressed: Boolean, label: String, onClick: () -> Unit) {
     )
 }
 
-/** Desktop three-lane overview: 输入 / 模型 / 工具. */
+/** Desktop three-lane overview: 输入 / 模型 / 工具. Tap a segment → select matching ledger row. */
 @Composable
-private fun SwimlaneChart(model: TrajectoryTimelineModel, mode: TrajectoryTimelineMode) {
+private fun SwimlaneChart(
+    model: TrajectoryTimelineModel,
+    mode: TrajectoryTimelineMode,
+    selectedKey: String? = null,
+    onSpanClick: (String) -> Unit = {},
+) {
     val domain = (model.end - model.start).takeIf { it > 0 } ?: 1.0
     val density = LocalDensity.current
     val minSpanPx = with(density) { 2.dp.toPx() }
@@ -469,8 +523,26 @@ private fun SwimlaneChart(model: TrajectoryTimelineModel, mode: TrajectoryTimeli
         }
         BoxWithConstraints(Modifier.weight(1f).fillMaxHeight()) {
             val plotWidth = maxOf(minContentWidth, maxWidth)
+            val widthPxTarget = with(density) { plotWidth.toPx() }
             Box(Modifier.fillMaxHeight().horizontalScroll(scroll)) {
-                Canvas(Modifier.width(plotWidth).fillMaxHeight()) {
+                Canvas(
+                    Modifier
+                        .width(plotWidth)
+                        .fillMaxHeight()
+                        .pointerInput(model, mode, widthPxTarget, selectedKey) {
+                            detectTapGestures { offset ->
+                                val widthPx = size.width.toFloat().coerceAtLeast(1f)
+                                val hit = model.spans.asReversed().firstOrNull { span ->
+                                    val left = ((span.start - model.start) / domain * widthPx).toFloat()
+                                    val rawW = ((span.end - span.start) / domain * widthPx).toFloat()
+                                    val point = span.end <= span.start || rawW < minSpanPx
+                                    val w = if (point) equalSpanPx else maxOf(rawW, minSpanPx)
+                                    offset.x in left..(left + w)
+                                }
+                                hit?.let { onSpanClick(it.key) }
+                            }
+                        },
+                ) {
                     val widthPx = size.width
                     // Turn boundaries
                     for (b in model.turnBoundaries) {
@@ -490,13 +562,27 @@ private fun SwimlaneChart(model: TrajectoryTimelineModel, mode: TrajectoryTimeli
                         }
                         val gap = minOf(w * 0.08f, 1.dp.toPx())
                         val top = topPad + span.lane * laneH
+                        val selected = selectedKey != null && span.key == selectedKey
                         drawRoundRect(
                             color = spanColor(span.kind, span.isError),
                             topLeft = Offset(left + gap, top),
                             size = Size(maxOf(w - gap * 2, minSpanPx), barH),
                             cornerRadius = CornerRadius(1.dp.toPx(), 1.dp.toPx()),
-                            alpha = if (span.isError) 1f else 0.9f,
+                            alpha = when {
+                                selected -> 1f
+                                span.isError -> 1f
+                                else -> 0.9f
+                            },
                         )
+                        if (selected) {
+                            drawRoundRect(
+                                color = T.Accent,
+                                topLeft = Offset(left + gap, top - 1.dp.toPx()),
+                                size = Size(maxOf(w - gap * 2, minSpanPx), barH + 2.dp.toPx()),
+                                cornerRadius = CornerRadius(1.dp.toPx(), 1.dp.toPx()),
+                                alpha = 0.25f,
+                            )
+                        }
                     }
                 }
             }
@@ -522,6 +608,7 @@ private fun TrajRowView(row: TrajRow, hl: Boolean, onClick: () -> Unit) {
     Row(
         Modifier.fillMaxWidth()
             .background(if (hl) T.Tint.copy(alpha = 0.45f) else Color.Transparent)
+            .then(if (hl) Modifier.drawSelectedBar() else Modifier)
             .clickable(onClick = onClick)
             .padding(start = (12 + row.depth * 14).dp, end = 12.dp, top = 7.dp, bottom = 7.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -531,20 +618,25 @@ private fun TrajRowView(row: TrajRow, hl: Boolean, onClick: () -> Unit) {
         Spacer(Modifier.width(6.dp))
         Text(
             row.title,
-            fontFamily = FontFamily.Monospace,
-            fontSize = 13.sp,
-            color = T.Ink,
+            style = T.Mono.copy(fontSize = 13.sp, color = T.Ink),
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
             modifier = Modifier.weight(1f),
         )
-        Text(row.input, style = monoCap(), modifier = Modifier.width(44.dp), maxLines = 1)
-        Text(row.output, style = monoCap(), modifier = Modifier.width(40.dp), maxLines = 1)
-        Text(row.think, style = monoCap(), modifier = Modifier.width(40.dp), maxLines = 1)
-        Text(row.time, style = monoCap(), modifier = Modifier.width(40.dp), maxLines = 1)
+        Text(row.input, style = monoCap(), modifier = Modifier.width(44.dp), maxLines = 1, overflow = TextOverflow.Ellipsis)
+        Text(row.output, style = monoCap(), modifier = Modifier.width(40.dp), maxLines = 1, overflow = TextOverflow.Ellipsis)
+        Text(row.think, style = monoCap(), modifier = Modifier.width(40.dp), maxLines = 1, overflow = TextOverflow.Ellipsis)
+        Text(row.time, style = monoCap(), modifier = Modifier.width(40.dp), maxLines = 1, overflow = TextOverflow.Ellipsis)
     }
     HorizontalDivider(color = T.Fill.copy(alpha = 0.8f))
 }
+
+/** Desktop selection: thick accent bar on the left edge of the highlighted ledger row. */
+private fun Modifier.drawSelectedBar(): Modifier = this.then(
+    Modifier.drawBehind {
+        drawRect(color = T.Accent, topLeft = Offset.Zero, size = Size(3.dp.toPx(), size.height))
+    },
+)
 
 @Composable
 private fun KindBadge(kind: String) {
@@ -584,6 +676,4 @@ private fun Seg(on: Boolean, label: String, onClick: () -> Unit) {
 }
 
 @Composable
-private fun monoCap() = TextStyle(
-    fontFamily = FontFamily.Monospace, fontSize = 11.sp, color = T.Caption,
-)
+private fun monoCap() = T.Mono.copy(fontSize = 11.sp, color = T.Caption)

@@ -1,5 +1,6 @@
 package dev.dsh.pocket.protocol
 
+import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
@@ -24,6 +25,11 @@ sealed interface Item {
         override val key: String, val callId: String, val name: String, val arguments: String,
         val status: ToolStatus, val result: String? = null, val error: String? = null,
         val startedAt: Long? = null, val endedAt: Long? = null,
+        /** Desktop `schemaDetail`: pretty JSON of `{name,description,parameters}` from `request/header`. */
+        val schemaJson: String? = null,
+        /** Turn/step from the owning step (desktop inspector header 「第 N 轮 · 第 M 步」). */
+        val turn: Int? = null,
+        val step: Int? = null,
     ) : Item
     data class Notice(override val key: String, val text: String) : Item
     /**
@@ -49,6 +55,86 @@ sealed interface Item {
 }
 
 enum class ToolStatus { Running, AwaitingApproval, Ok, Error }
+
+/** Parsed desktop ToolSchema (`name` + `description` + object `parameters`). */
+data class ParsedToolSchema(
+    val name: String,
+    val description: String,
+    val parameters: JsonObject,
+)
+
+/**
+ * Desktop `parseToolSchema`: require name/description strings and object parameters.
+ * @return null when the payload is missing or not a tool schema.
+ */
+fun parseToolSchema(value: String): ParsedToolSchema? {
+    val parsed = runCatching { PocketJson.parseToJsonElement(value) }.getOrNull()?.obj() ?: return null
+    val name = parsed["name"].str() ?: return null
+    val description = parsed["description"].str() ?: return null
+    val parameters = parsed["parameters"].obj() ?: return null
+    return ParsedToolSchema(name, description, parameters)
+}
+
+private val PrettyToolJson = Json { prettyPrint = true; ignoreUnknownKeys = true; explicitNulls = false }
+
+/** Pretty-print one EpochHeader tool entry for `Item.Tool.schemaJson` / Schema tab. */
+fun prettyToolSchema(tool: JsonElement?): String? {
+    val obj = tool.obj() ?: return null
+    if (obj["name"].str() == null) return null
+    return runCatching {
+        PrettyToolJson.encodeToString(JsonElement.serializer(), obj)
+    }.getOrNull()
+}
+
+/**
+ * Desktop `formatDurationMillis` / `unit.milliseconds`: integer ms with thousands separators.
+ * Returns `—` when absent or non-finite (desktop em dash).
+ */
+fun formatDurationMillis(milliseconds: Double?): String {
+    if (milliseconds == null || !milliseconds.isFinite()) return "—"
+    val integer = kotlin.math.round(milliseconds).toLong().toString()
+    val withCommas = integer.reversed().chunked(3).joinToString(",").reversed()
+    return "$withCommas 毫秒"
+}
+
+/** Desktop `formatElapsedSeconds`: cell seconds → millisecond label. */
+fun formatElapsedSeconds(seconds: Double?): String =
+    formatDurationMillis(if (seconds == null) null else seconds * 1000.0)
+
+/**
+ * Desktop TrajectoryTable `formatStartedAt`: local `YYYY-MM-DD HH:mm:ss.SSS`.
+ * Returns `不可用` when absent (timing.notAvailable).
+ */
+fun formatStartedAt(timestampMs: Long?): String {
+    if (timestampMs == null) return "不可用"
+    val cal = java.util.Calendar.getInstance().apply { timeInMillis = timestampMs }
+    fun two(n: Int) = n.toString().padStart(2, '0')
+    fun three(n: Int) = n.toString().padStart(3, '0')
+    val y = cal.get(java.util.Calendar.YEAR)
+    val mo = two(cal.get(java.util.Calendar.MONTH) + 1)
+    val d = two(cal.get(java.util.Calendar.DAY_OF_MONTH))
+    val h = two(cal.get(java.util.Calendar.HOUR_OF_DAY))
+    val mi = two(cal.get(java.util.Calendar.MINUTE))
+    val s = two(cal.get(java.util.Calendar.SECOND))
+    val ms = three(cal.get(java.util.Calendar.MILLISECOND))
+    return "$y-$mo-$d $h:$mi:$s.$ms"
+}
+
+/** Desktop `stateOf` for tool / subtool cells. */
+enum class TrajectoryRecordState { Complete, Running, Error }
+
+fun trajectoryToolState(isError: Boolean, hasOutput: Boolean): TrajectoryRecordState = when {
+    isError -> TrajectoryRecordState.Error
+    !hasOutput -> TrajectoryRecordState.Running
+    else -> TrajectoryRecordState.Complete
+}
+
+/** Desktop status.failed / status.pending / status.completed. */
+fun trajectoryStatusLabel(state: TrajectoryRecordState): String = when (state) {
+    TrajectoryRecordState.Error -> "失败"
+    TrajectoryRecordState.Running -> "等待中"
+    TrajectoryRecordState.Complete -> "已完成"
+}
 
 data class Usage(val turns: Int, val steps: Int, val inputTokens: Long, val cacheReadTokens: Long, val outputTokens: Long) {
     val cacheHitPercent: Int? get() = if (inputTokens > 0) ((cacheReadTokens * 100) / inputTokens).toInt() else null
@@ -93,6 +179,12 @@ class TranscriptReducer {
     private val localEchoes = ArrayList<Pair<Int, String>>()
     private val stepStartTimes = HashMap<String, Long>()
     private val settledSteps = ArrayList<StepRecord>()
+    /**
+     * Latest tool catalog from `request/header` (`EpochHeader.tools`), keyed by tool name.
+     * Desktop `captureSchemas` / `attachToolSchema` maps callId → schema at layout time;
+     * we attach the pretty JSON on each tool upsert (same lookup by name).
+     */
+    private val toolsByName = HashMap<String, String>()
     /** Whether a trajectory 系统 row has already been emitted (initial vs updated label). */
     private var systemPromptSeen = false
     private var live: LiveAttempt? = null
@@ -105,6 +197,9 @@ class TranscriptReducer {
     var running = false; private set
     private var turns = 0
     private var steps = 0
+    /** Most recent `step/start` coordinates (fallback when tool events omit turn/step). */
+    private var openTurn: Int? = null
+    private var openStep: Int? = null
     private var inputTokens = 0L
     private var cacheRead = 0L
     private var outputTokens = 0L
@@ -198,9 +293,10 @@ class TranscriptReducer {
 
     private fun reset() {
         committed.clear(); toolIndex.clear(); approvalCall.clear(); userByRpc.clear(); localEchoes.clear()
-        stepStartTimes.clear(); settledSteps.clear(); systemPromptSeen = false; live = null
+        stepStartTimes.clear(); settledSteps.clear(); toolsByName.clear(); systemPromptSeen = false; live = null
         cursor = -1; firstSeq = -1; hasMore = false
-        turns = 0; steps = 0; inputTokens = 0; cacheRead = 0; outputTokens = 0; running = false
+        turns = 0; steps = 0; openTurn = null; openStep = null
+        inputTokens = 0; cacheRead = 0; outputTokens = 0; running = false
     }
 
     private fun readProjections(p: JsonElement?) {
@@ -235,8 +331,12 @@ class TranscriptReducer {
             "step/start" -> {
                 val turn = data["turn"].long()?.toInt() ?: turns
                 val step = data["step"].long()?.toInt() ?: (steps + 1)
+                openTurn = turn
+                openStep = step
                 e["time"].long()?.let { stepStartTimes["$turn:$step"] = it }
             }
+            // Desktop ui-trajectory: index EpochHeader.tools for callSchemas / Schema tab.
+            "request/header" -> indexRequestHeaderTools(data)
             "user/message" -> {
                 val msg = if (data["content"] != null) data else data["message"]
                 if (isTyped(msg)) upsertUser(msg, "u$seq", pending = false, at = e["time"].long())
@@ -276,7 +376,10 @@ class TranscriptReducer {
                         "tool-call" -> {
                             val id = b["id"].str() ?: "c$seq.$i"
                             toolCallIds += id
-                            upsertTool(id, b["name"].str().orEmpty(), b["arguments"].str().orEmpty(), e["time"].long())
+                            upsertTool(
+                                id, b["name"].str().orEmpty(), b["arguments"].str().orEmpty(), e["time"].long(),
+                                turn = turn, step = step,
+                            )
                         }
                     }
                 }
@@ -309,7 +412,14 @@ class TranscriptReducer {
                 )
                 if (data["interrupted"].bool() == true) committed += Item.Notice("i$seq", "已中断")
             }
-            "tool/call" -> upsertTool(data["callId"].str() ?: "c$seq", data["name"].str().orEmpty(), data["arguments"].str().orEmpty(), e["time"].long())
+            "tool/call" -> upsertTool(
+                data["callId"].str() ?: "c$seq",
+                data["name"].str().orEmpty(),
+                data["arguments"].str().orEmpty(),
+                e["time"].long(),
+                turn = data["turn"].long()?.toInt() ?: openTurn,
+                step = data["step"].long()?.toInt() ?: openStep,
+            )
             "tool/result" -> {
                 val id = data["message"]["toolCallId"].str() ?: return
                 val text = data["message"]["content"].arr().orEmpty().filter { it["type"].str() == "text" }.joinToString("\n") { it["text"].str().orEmpty() }
@@ -396,10 +506,38 @@ class TranscriptReducer {
         committed += Item.User("local-${committed.size}-${text.hashCode()}", text, pending = true)
     }
 
-    private fun upsertTool(id: String, name: String, args: String, time: Long?) {
+    /**
+     * Index `request/header` → `header.tools[]` by name (desktop `indexTools` + `captureSchemas`).
+     * Each schema is stored as pretty JSON for the Schema tab (`attachToolSchema`).
+     */
+    private fun indexRequestHeaderTools(data: JsonElement?) {
+        val tools = data["header"]["tools"].arr() ?: return
+        for (tool in tools) {
+            val name = tool["name"].str() ?: continue
+            toolsByName[name] = prettyToolSchema(tool) ?: continue
+        }
+    }
+
+    private fun upsertTool(id: String, name: String, args: String, time: Long?, turn: Int? = null, step: Int? = null) {
+        val schema = name.takeIf { it.isNotEmpty() }?.let { toolsByName[it] }
         val i = toolIndex[id]
-        if (i != null) { val t = committed[i] as Item.Tool; committed[i] = t.copy(name = name.ifEmpty { t.name }, arguments = args.ifEmpty { t.arguments }) }
-        else { toolIndex[id] = committed.size; committed += Item.Tool("k$id", id, name, args, ToolStatus.Running, startedAt = time) }
+        if (i != null) {
+            val t = committed[i] as Item.Tool
+            val resolvedName = name.ifEmpty { t.name }
+            committed[i] = t.copy(
+                name = resolvedName,
+                arguments = args.ifEmpty { t.arguments },
+                schemaJson = schema ?: toolsByName[resolvedName] ?: t.schemaJson,
+                turn = turn ?: t.turn,
+                step = step ?: t.step,
+            )
+        } else {
+            toolIndex[id] = committed.size
+            committed += Item.Tool(
+                "k$id", id, name, args, ToolStatus.Running,
+                startedAt = time, schemaJson = schema, turn = turn, step = step,
+            )
+        }
     }
     private fun updateTool(id: String, f: (Item.Tool) -> Item.Tool) { toolIndex[id]?.let { committed[it] = f(committed[it] as Item.Tool) } }
 

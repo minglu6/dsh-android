@@ -10,7 +10,7 @@ Plugin surface: `dsh-plugin-pocket` WebSocket ops (+ optional Cordis injects).
 
 | Feature | Desktop behavior (0.2.1-alpha.2) | Decision | Status | Notes |
 |---|---|---|---|---|
-| 轨迹 tab | Session header Chat/Trajectory; turn/step tree with input/output/think/time; detail sheet | implement | done | Client fold of chat `Item`s (`buildTrajectory` / `TrajectoryView`). |
+| 轨迹 tab | Session header Chat/Trajectory; swimlane + ledger + tabbed inspector (概述/参数/结果/Schema/计时) | implement | done | Port of `@deepseek-ai/dsh-client-ui-trajectory` (toolbar/swimlane/ledger + phone bottom-sheet detail); `request/header` → tool schemas. |
 | Right-panel toggle | Opens right sidebar launcher | implement (partial) | done | Shown when `files.*` / `terminal.*` / `jobs.*` ops are present. |
 | → 工作区文件 | `workspaceFiles.list/read/stat/changes` | implement | done | Plugin `files.list` / `files.read`; `FilesSheet`. |
 | → 终端 | Host `terminalController` PTY create/follow/write/resize | implement | done | Plugin `terminal.*` + `TerminalSheet` (VT100 grid, Meslo Nerd Font, Tokyo Night; remote shell on the desktop). |

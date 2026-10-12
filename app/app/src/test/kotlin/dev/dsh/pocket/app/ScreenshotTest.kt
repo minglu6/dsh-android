@@ -118,7 +118,7 @@ class ScreenshotTest {
     @Test fun s14_trajectory() {
         Pocket.chat.value = chatState()
         show("14-trajectory") {
-            TrajectoryView(chatState()) {}
+            TrajectoryView(chatState())
         }
     }
     @Test fun s15_generalWired() = show("15-general-settings") { GeneralSettingsScreen {} }
