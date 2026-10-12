@@ -194,12 +194,12 @@ fun PlusSheet(
     val export = "session.export" in Pocket.ops.value
     val inChat = Pocket.chat.collectAsState().value != null
     PocketSheet(onDismiss) {
-        SectionLabel("添加")
-        OptionRow("文件", icon = D.paperclip, code = "file", enabled = inChat) { onFile(); onDismiss() }
+        SectionLabel(L.sectionAdd())
+        OptionRow(L.file(), icon = D.paperclip, code = "file", enabled = inChat) { onFile(); onDismiss() }
         OptionRow("目标", icon = D.goal, code = "goal", trailing = "设置或查看长期任务目标", enabled = cmds && inChat) { onGoal() }
         OptionRow("计划", icon = D.plan, code = "plan", trailing = "进入或退出计划模式", enabled = cmds && inChat) { onPlan(); onDismiss() }
         OptionRow("反馈", icon = D.send, code = "feedback", trailing = "发送关于当前会话的反馈", enabled = cmds && inChat) { onFeedback() }
-        SectionLabel("指令")
+        SectionLabel(L.sectionCommands())
         OptionRow("压缩", icon = D.compact, code = "compact", trailing = "压缩以上对话内容", enabled = cmds && inChat) { onCompact(); onDismiss() }
         OptionRow("权限", icon = D.shield, code = "permission", trailing = "切换权限预设") { onPerm() }
         OptionRow("模型", icon = D.database, code = "model", trailing = "选择本会话使用的模型") { onModel() }
@@ -492,6 +492,94 @@ fun TeamSheet(onDismiss: () -> Unit) {
         OptionRow(chat?.title ?: "主智能体", "主会话", D.user, selected = true)
         if (children.isEmpty()) Text("尚无子智能体", fontSize = 14.sp, color = T.Text3, modifier = Modifier.padding(horizontal = 22.dp, vertical = 12.dp))
         children.forEach { s -> OptionRow(s.title ?: "子智能体", if (s.running) "运行中" else "空闲", D.user) { Pocket.openSession(s.sessionId); onDismiss() } }
+    }
+}
+
+/** `/` command popup — built-in commands (desktop command sections). */
+@Composable
+fun CommandPopupSheet(onDismiss: () -> Unit) {
+    val cmds = "commands.execute" in Pocket.ops.value
+    val export = "session.export" in Pocket.ops.value
+    val inChat = Pocket.chat.collectAsState().value != null
+    PocketSheet(onDismiss) {
+        SheetTitle(L.sectionCommands())
+        SectionLabel(L.sectionAdd())
+        OptionRow("目标", icon = D.goal, enabled = cmds && inChat) { Pocket.executeCommand("/goal"); onDismiss() }
+        OptionRow("计划", icon = D.plan, enabled = cmds && inChat) { Pocket.executeCommand("/plan"); onDismiss() }
+        OptionRow("反馈", icon = D.send, enabled = cmds && inChat) { Pocket.executeCommand("/feedback"); onDismiss() }
+        SectionLabel(L.sectionCommands())
+        OptionRow("压缩", icon = D.compact, enabled = cmds && inChat) { Pocket.executeCommand("/compact"); onDismiss() }
+        OptionRow("权限", icon = D.shield, enabled = inChat) { onDismiss() }
+        OptionRow("下载日志", icon = D.download, enabled = export && inChat) { onDismiss() }
+        if (!cmds && !export) Text(L.noOptions(), fontSize = 14.sp, color = T.Text3, modifier = Modifier.padding(22.dp))
+    }
+}
+
+/** `@` mention popup — files + sessions from Host reference services. */
+@Composable
+fun MentionPopupSheet(onDismiss: () -> Unit) {
+    var query by remember { mutableStateOf("") }
+    var files by remember { mutableStateOf<List<dev.dsh.pocket.protocol.FileReference>>(emptyList()) }
+    var sessions by remember { mutableStateOf<List<dev.dsh.pocket.protocol.SessionReference>>(emptyList()) }
+    var loading by remember { mutableStateOf(false) }
+    LaunchedEffect(query) {
+        loading = true
+        Pocket.lookupFileRefs(query) { files = it }
+        Pocket.lookupSessionRefs(query) { sessions = it; loading = false }
+    }
+    PocketSheet(onDismiss) {
+        SheetTitle("@")
+        OutlinedTextField(
+            query, { query = it },
+            placeholder = { Text(L.searchEllipsis()) },
+            singleLine = true, shape = T.R12,
+            modifier = Modifier.padding(horizontal = 22.dp).fillMaxWidth(),
+        )
+        if (loading) {
+            Text(L.searchingSessions(), fontSize = 13.sp, color = T.Caption, modifier = Modifier.padding(22.dp))
+        }
+        SectionLabel(L.filesAndFolders())
+        if (files.isEmpty()) Text(L.noOptions(), fontSize = 13.sp, color = T.Caption, modifier = Modifier.padding(horizontal = 22.dp, vertical = 6.dp))
+        files.take(12).forEach { f ->
+            OptionRow(f.path.substringAfterLast('/'), f.path, D.folderOpen) { onDismiss() }
+        }
+        SectionLabel(L.conversations())
+        if (sessions.isEmpty()) Text(L.noOptions(), fontSize = 13.sp, color = T.Caption, modifier = Modifier.padding(horizontal = 22.dp, vertical = 6.dp))
+        sessions.take(12).forEach { s ->
+            OptionRow(s.title ?: s.mention, s.mention, D.chat) { onDismiss() }
+        }
+        SectionLabel(L.subagents())
+        val subs = sessions.filter { it.kind == "subagent" || it.mention.contains("sub", ignoreCase = true) }
+        if (subs.isEmpty()) Text(L.noOptions(), fontSize = 13.sp, color = T.Caption, modifier = Modifier.padding(horizontal = 22.dp, vertical = 6.dp))
+        else subs.forEach { s -> OptionRow(s.title ?: s.mention, s.mention, D.user) { onDismiss() } }
+    }
+}
+
+/** Dislike → feedback category + optional note (desktop feedback.dialog). */
+@Composable
+fun FeedbackCategorySheet(onDismiss: () -> Unit, onSubmit: (category: String?, note: String) -> Unit) {
+    var category by remember { mutableStateOf<String?>(null) }
+    var note by remember { mutableStateOf("") }
+    PocketSheet(onDismiss) {
+        SheetTitle(L.submitFeedback())
+        SectionLabel(L.feedbackCategory())
+        L.feedbackCategories().forEach { (id, label) ->
+            OptionRow(label, selected = category == id) { category = id }
+        }
+        SectionLabel(L.feedbackDetail())
+        OutlinedTextField(
+            note, { note = it },
+            placeholder = { Text(L.feedbackHint()) },
+            shape = T.R12,
+            modifier = Modifier.padding(horizontal = 22.dp).fillMaxWidth(),
+            minLines = 3,
+        )
+        Button(
+            { onSubmit(category, note.trim()) },
+            Modifier.padding(22.dp).fillMaxWidth().height(50.dp),
+            shape = T.R12,
+            colors = PrimaryColors(),
+        ) { Text(L.submitFeedback()) }
     }
 }
 

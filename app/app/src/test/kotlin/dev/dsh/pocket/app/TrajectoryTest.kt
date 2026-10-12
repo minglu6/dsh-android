@@ -67,7 +67,8 @@ class TrajectoryTest {
         r.apply(ev(3, "step/start", """{"turn":1,"step":1}""", 2_000))
         r.apply(ev(4, "assistant/message", """{"turn":1,"step":1,"interrupted":true,"stream":[],"usage":{},
             "message":{"content":[{"type":"text","text":"partial"}]}}""", 2_500))
-        assertTrue(r.items().none { it is Item.Notice })
+        // Chat shows message.stopped = 已停止; trajectory still marks the assistant cell as error.
+        assertEquals(listOf("已停止"), r.items().filterIsInstance<Item.Notice>().map { it.text })
         val assistant = buildTrajectory(r.items(), r.stepRecords())[0].rows.single { it.kind == TrajL.kindAssistant }
         assertTrue(assistant.isError)
         assertEquals("失败", trajectoryStatusLabel(trajRowState(assistant)))

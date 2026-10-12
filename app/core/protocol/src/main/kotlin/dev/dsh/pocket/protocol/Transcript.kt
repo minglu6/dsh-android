@@ -7,6 +7,12 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
 
+/** Session attachment reference from a user message image block. */
+data class ImageRef(val attachmentId: String, val mediaType: String?)
+
+/** One file declared by `deliverables/presented`. */
+data class DeliverableFile(val path: String, val description: String? = null)
+
 /** One rendered row of a conversation. */
 sealed interface Item {
     val key: String
@@ -22,6 +28,8 @@ sealed interface Item {
         val messageSourceJson: String? = null,
         /** Durable event seq (for `sessions.fork` atSeq). */
         val seq: Long? = null,
+        /** Image attachment refs from content blocks (`type=image`). */
+        val imageRefs: List<ImageRef> = emptyList(),
     ) : Item
     data class Reasoning(override val key: String, val text: String, val durationMs: Long?, val live: Boolean) : Item
     data class Text(
@@ -32,6 +40,8 @@ sealed interface Item {
         val at: Long? = null,
         /** Durable event seq (for `sessions.fork` atSeq). */
         val seq: Long? = null,
+        /** Assistant `message.id` for message-feedback (like/dislike). */
+        val messageId: String? = null,
     ) : Item
     data class Tool(
         override val key: String, val callId: String, val name: String, val arguments: String,
@@ -91,6 +101,22 @@ sealed interface Item {
         val startedAt: Long? = null,
         val endedAt: Long? = null,
         val turn: Int? = null,
+    ) : Item
+    /** Files presented via `deliverables/presented`. */
+    data class Deliverable(
+        override val key: String,
+        val files: List<DeliverableFile>,
+        val turn: Int? = null,
+    ) : Item
+    /**
+     * Turn file-change announcement from `workspace/changes`.
+     * [count]/[name] may stay sparse until Host summary is available ([count] 0 = unknown).
+     */
+    data class Changes(
+        override val key: String,
+        val turn: Int,
+        val count: Int = 0,
+        val name: String? = null,
     ) : Item
 }
 
@@ -532,6 +558,7 @@ class TranscriptReducer {
                 val replyParts = ArrayList<String>()
                 val reasoningParts = ArrayList<String>()
                 val toolCallIds = ArrayList<String>()
+                val messageId = data["message"]["id"].str()
                 data["message"]["content"].arr().orEmpty().forEachIndexed { i, b ->
                     when (b["type"].str()) {
                         "reasoning" -> {
@@ -541,7 +568,9 @@ class TranscriptReducer {
                         }
                         "text" -> b["text"].str()?.takeIf { it.isNotBlank() }?.let {
                             replyParts += it
-                            committed += Item.Text("t$seq.$i", it, live = false, at = messageTime, seq = seq)
+                            committed += Item.Text(
+                                "t$seq.$i", it, live = false, at = messageTime, seq = seq, messageId = messageId,
+                            )
                         }
                         "tool-call" -> {
                             val id = b["id"].str() ?: "c$seq.$i"
@@ -630,6 +659,31 @@ class TranscriptReducer {
                 }
             }
             "llm/retry-started" -> committed += Item.Notice("ns$seq", "正在重试模型请求")
+            "deliverables/presented" -> {
+                val files = data["files"].arr().orEmpty().mapNotNull { f ->
+                    val path = f["path"].str()?.takeIf { it.isNotBlank() } ?: return@mapNotNull null
+                    DeliverableFile(path, f["description"].str())
+                }
+                if (files.isNotEmpty()) {
+                    committed += Item.Deliverable(
+                        key = "dl$seq",
+                        files = files,
+                        turn = data["turn"].long()?.toInt(),
+                    )
+                }
+            }
+            "workspace/changes" -> {
+                val turn = data["turn"].long()?.toInt() ?: return
+                // Event carries only turn; Host summary may enrich count/name later.
+                val count = data["total"].long()?.toInt()
+                    ?: data["count"].long()?.toInt()
+                    ?: data["files"].arr()?.size
+                    ?: 0
+                val name = data["files"].arr()?.singleOrNull()?.let { f ->
+                    f["display"].str() ?: f["path"].str()?.substringAfterLast('/')
+                }
+                committed += Item.Changes(key = "ch$seq", turn = turn, count = count, name = name)
+            }
         }
     }
 
@@ -681,10 +735,18 @@ class TranscriptReducer {
         )
     }
 
+    private fun imageRefsOf(blocks: List<JsonElement>): List<ImageRef> = blocks.mapNotNull { b ->
+        if (b["type"].str() != "image") return@mapNotNull null
+        val att = b["attachment"]
+        val id = att["attachmentId"].str() ?: b["attachmentId"].str() ?: return@mapNotNull null
+        ImageRef(id, att["mediaType"].str() ?: b["mediaType"].str())
+    }
+
     private fun upsertUser(msg: JsonElement?, key: String, pending: Boolean, at: Long? = null, seq: Long? = null) {
         val blocks = msg["content"].arr().orEmpty()
         val text = blocks.filter { it["type"].str() == "text" }.joinToString("\n") { it["text"].str().orEmpty() }
-        val images = blocks.count { it["type"].str() == "image" }
+        val imageRefs = imageRefsOf(blocks)
+        val images = imageRefs.size.takeIf { it > 0 } ?: blocks.count { it["type"].str() == "image" }
         val sourceJson = prettySource(msg["source"])
         val rpc = msg["source"]["rpcId"].str()
         val idx = rpc?.let { userByRpc[it] }
@@ -696,11 +758,14 @@ class TranscriptReducer {
                 at = at ?: old.at,
                 messageSourceJson = sourceJson ?: old.messageSourceJson,
                 seq = seq ?: old.seq,
+                imageRefs = imageRefs.ifEmpty { old.imageRefs },
             )
             if (rpc != null) userByRpc[rpc] = idx
         } else {
             if (rpc != null) userByRpc[rpc] = committed.size
-            committed += Item.User(key, text, images, pending, at = at, messageSourceJson = sourceJson, seq = seq)
+            committed += Item.User(
+                key, text, images, pending, at = at, messageSourceJson = sourceJson, seq = seq, imageRefs = imageRefs,
+            )
         }
     }
 

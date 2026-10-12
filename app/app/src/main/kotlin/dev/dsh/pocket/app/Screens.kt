@@ -77,8 +77,24 @@ fun SessionDrawer(onPick: (String) -> Unit, onNew: () -> Unit, onSettings: () ->
     val chat by Pocket.chat.collectAsState()
     val active by Pocket.active.collectAsState()
     val status by Pocket.status.collectAsState()
+    val archived by Pocket.archivedIds.collectAsState()
+    val pinned by Pocket.pinnedIds.collectAsState()
+    val ops by Pocket.ops.collectAsState()
     val profile = Pocket.profiles.collectAsState().value.firstOrNull { it.id == active }
     val drawerWidth = drawerWidthFor(LocalConfiguration.current.screenWidthDp.dp)
+    var search by remember { mutableStateOf("") }
+    var searching by remember { mutableStateOf(false) }
+    var searchHits by remember { mutableStateOf<List<dev.dsh.pocket.protocol.SessionSummary>?>(null) }
+    var showArchived by remember { mutableStateOf(false) }
+    var menuSession by remember { mutableStateOf<dev.dsh.pocket.protocol.SessionSummary?>(null) }
+    LaunchedEffect(search) {
+        if (search.isBlank() || "sessions.search" !in ops) {
+            searchHits = null; searching = false; return@LaunchedEffect
+        }
+        searching = true
+        kotlinx.coroutines.delay(250)
+        Pocket.searchSessions(search) { searchHits = it; searching = false }
+    }
     ModalDrawerSheet(
         drawerContainerColor = T.Drawer,
         drawerShape = RoundedCornerShapeEnd,
@@ -101,23 +117,91 @@ fun SessionDrawer(onPick: (String) -> Unit, onNew: () -> Unit, onSettings: () ->
                 horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically) {
                 Icon(D.newChat, null, Modifier.size(16.dp), tint = T.Ink); Spacer(Modifier.width(6.dp)); Text("新会话", fontSize = 15.sp)
             }
-            Spacer(Modifier.height(6.dp))
-            Text("工作区", fontSize = 13.sp, color = T.Text3, modifier = Modifier.padding(start = 22.dp, top = 16.dp, bottom = 6.dp))
+            Spacer(Modifier.height(8.dp))
+            Row(
+                Modifier.padding(horizontal = 12.dp).fillMaxWidth().clip(T.R12).background(Color.White).border(1.dp, T.Border, T.R12)
+                    .padding(horizontal = 12.dp, vertical = 10.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Icon(D.search, L.searchSessions(), Modifier.size(16.dp), tint = T.Text3)
+                Spacer(Modifier.width(8.dp))
+                BasicTextField(
+                    search,
+                    { search = it },
+                    singleLine = true,
+                    textStyle = androidx.compose.ui.text.TextStyle(fontSize = 14.sp, color = T.Ink),
+                    cursorBrush = SolidColor(T.Accent),
+                    modifier = Modifier.weight(1f).testTag("sessionSearch"),
+                    decorationBox = { inner ->
+                        if (search.isEmpty()) Text(L.searchSessions(), fontSize = 14.sp, color = T.Caption)
+                        inner()
+                    },
+                )
+                if (search.isNotEmpty()) {
+                    Text(L.clearSearch(), fontSize = 12.sp, color = T.Text3, modifier = Modifier.clickable {
+                        search = ""; searchHits = null
+                    })
+                }
+            }
+            if ("workspace.state" in ops) {
+                Text(
+                    if (showArchived) "全部对话（显示已归档）" else "隐藏已归档",
+                    fontSize = 12.sp,
+                    color = T.Accent,
+                    modifier = Modifier.padding(horizontal = 22.dp, vertical = 6.dp).clickable { showArchived = !showArchived },
+                )
+            }
+            Spacer(Modifier.height(2.dp))
+            Text("工作区", fontSize = 13.sp, color = T.Text3, modifier = Modifier.padding(start = 22.dp, top = 8.dp, bottom = 6.dp))
             Column(Modifier.weight(1f).verticalScroll(rememberScrollState())) {
-                val top = sessions.filter { it.parentSessionId == null && !it.blank }
-                if (top.isEmpty()) Text(if (status[active] == Dot.Online) "暂无会话" else "连接后显示会话", fontSize = 14.sp, color = T.Caption, modifier = Modifier.padding(horizontal = 22.dp, vertical = 10.dp))
-                top.groupBy { it.cwd?.trimEnd('/')?.substringAfterLast('/') ?: "默认" }.forEach { (ws, list) ->
-                    Row(Modifier.fillMaxWidth().padding(horizontal = 22.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-                        Icon(D.folderOpen, null, Modifier.size(17.dp), tint = T.Accent); Spacer(Modifier.width(10.dp))
-                        Text(ws, fontSize = 15.sp, color = T.Ink, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+                when {
+                    searching -> Text(L.searchingSessions(), fontSize = 14.sp, color = T.Caption, modifier = Modifier.padding(horizontal = 22.dp, vertical = 10.dp))
+                    searchHits != null -> {
+                        val hits = searchHits!!
+                        if (hits.isEmpty()) Text(L.noMatchingSessions(), fontSize = 14.sp, color = T.Caption, modifier = Modifier.padding(horizontal = 22.dp, vertical = 10.dp))
+                        else hits.forEach { s ->
+                            SessionRow(
+                                s, selected = s.sessionId == chat?.sessionId,
+                                archived = s.sessionId in archived, pinned = s.sessionId in pinned,
+                                onPick = { onPick(s.sessionId) },
+                                onMenu = { menuSession = s },
+                            )
+                        }
                     }
-                    list.forEach { s ->
-                        val sel = s.sessionId == chat?.sessionId
-                        Row(Modifier.padding(horizontal = 10.dp).fillMaxWidth().clip(T.R8).background(if (sel) T.Fill else Color.Transparent).clickable { onPick(s.sessionId) }
-                            .padding(start = 38.dp, end = 14.dp, top = 11.dp, bottom = 11.dp), verticalAlignment = Alignment.CenterVertically) {
-                            Text(s.title ?: "新会话", fontSize = 15.sp, color = T.Ink, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
-                            val pending = Pocket.approvals.collectAsState().value.any { it.sessionId == s.sessionId }
-                            if (pending) Box(Modifier.size(7.dp).clip(CircleShape).background(T.WarnBorder)) else if (s.running) Box(Modifier.size(7.dp).clip(CircleShape).background(T.Accent))
+                    else -> {
+                        val pinnedList = sessions.filter { it.sessionId in pinned && it.parentSessionId == null && !it.blank }
+                        val top = sessions.filter {
+                            it.parentSessionId == null && !it.blank &&
+                                it.sessionId !in pinned &&
+                                (showArchived || it.sessionId !in archived)
+                        }
+                        if (pinnedList.isEmpty() && top.isEmpty()) {
+                            Text(if (status[active] == Dot.Online) "暂无会话" else "连接后显示会话", fontSize = 14.sp, color = T.Caption, modifier = Modifier.padding(horizontal = 22.dp, vertical = 10.dp))
+                        }
+                        if (pinnedList.isNotEmpty()) {
+                            Text(L.pinned(), fontSize = 12.sp, color = T.Text3, modifier = Modifier.padding(horizontal = 22.dp, vertical = 4.dp))
+                            pinnedList.forEach { s ->
+                                SessionRow(
+                                    s, selected = s.sessionId == chat?.sessionId,
+                                    archived = s.sessionId in archived, pinned = true,
+                                    onPick = { onPick(s.sessionId) },
+                                    onMenu = { menuSession = s },
+                                )
+                            }
+                        }
+                        top.groupBy { it.cwd?.trimEnd('/')?.substringAfterLast('/') ?: "默认" }.forEach { (ws, list) ->
+                            Row(Modifier.fillMaxWidth().padding(horizontal = 22.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                                Icon(D.folderOpen, null, Modifier.size(17.dp), tint = T.Accent); Spacer(Modifier.width(10.dp))
+                                Text(ws, fontSize = 15.sp, color = T.Ink, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+                            }
+                            list.forEach { s ->
+                                SessionRow(
+                                    s, selected = s.sessionId == chat?.sessionId,
+                                    archived = s.sessionId in archived, pinned = s.sessionId in pinned,
+                                    onPick = { onPick(s.sessionId) },
+                                    onMenu = { menuSession = s },
+                                )
+                            }
                         }
                     }
                 }
@@ -125,6 +209,65 @@ fun SessionDrawer(onPick: (String) -> Unit, onNew: () -> Unit, onSettings: () ->
             DrawerItem(D.settings, "设置", onClick = onSettings)
             Spacer(Modifier.height(8.dp))
         }
+    }
+    menuSession?.let { s ->
+        val isArchived = s.sessionId in archived
+        val isPinned = s.sessionId in pinned
+        PocketSheet({ menuSession = null }) {
+            SheetTitle(s.title ?: "新会话")
+            if ("workspace.pinSession" in ops) {
+                OptionRow(if (isPinned) L.unpinSession() else L.pinSession(), icon = D.check) {
+                    if (isPinned) Pocket.unpinSession(s.sessionId) else Pocket.pinSession(s.sessionId)
+                    menuSession = null
+                }
+            }
+            if ("workspace.archiveSession" in ops) {
+                OptionRow(if (isArchived) L.unarchiveSession() else L.archiveSession(), icon = D.folderOpen) {
+                    if (isArchived) Pocket.unarchiveSession(s.sessionId) else Pocket.archiveSession(s.sessionId)
+                    menuSession = null
+                }
+            }
+            if ("sessions.fork" in ops) {
+                OptionRow("在新对话中分支", icon = D.newChat) {
+                    Pocket.openSession(s.sessionId)
+                    Pocket.forkSession(null)
+                    menuSession = null
+                }
+            }
+        }
+    }
+}
+
+@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
+@Composable
+private fun SessionRow(
+    s: dev.dsh.pocket.protocol.SessionSummary,
+    selected: Boolean,
+    archived: Boolean,
+    pinned: Boolean,
+    onPick: () -> Unit,
+    onMenu: () -> Unit,
+) {
+    val pending = Pocket.approvals.collectAsState().value.any { it.sessionId == s.sessionId }
+    Row(
+        Modifier.padding(horizontal = 10.dp).fillMaxWidth().clip(T.R8).background(if (selected) T.Fill else Color.Transparent)
+            .combinedClickable(onClick = onPick, onLongClick = onMenu)
+            .padding(start = 38.dp, end = 8.dp, top = 11.dp, bottom = 11.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(Modifier.weight(1f)) {
+            Text(s.title ?: "新会话", fontSize = 15.sp, color = T.Ink, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            if (archived || pinned) {
+                Text(
+                    listOfNotNull(if (pinned) L.pinned() else null, if (archived) L.archived() else null).joinToString(" · "),
+                    fontSize = 11.sp, color = T.Caption,
+                )
+            }
+        }
+        Icon(D.ellipsis, "更多", Modifier.size(18.dp).clickable(onClick = onMenu), tint = T.Caption)
+        Spacer(Modifier.width(6.dp))
+        if (pending) Box(Modifier.size(7.dp).clip(CircleShape).background(T.WarnBorder))
+        else if (s.running) Box(Modifier.size(7.dp).clip(CircleShape).background(T.Accent))
     }
 }
 
@@ -383,8 +526,17 @@ fun GeneralSettingsScreen(onBack: () -> Unit) {
         Header("通用设置", onBack)
         Card {
             Row2("权限", "选择新会话的默认权限模式", value = permissionLabel(perm), onClick = { sheet = "perm" }, trailing = { DownArrow() })
-            Row2("语言", value = lang.label, onClick = { sheet = "lang" }, trailing = { DownArrow() })
-            Row2("外观", value = appearance.label, onClick = { sheet = "appearance" }, trailing = { DownArrow() })
+            Row2(L.language(), value = lang.label, onClick = { sheet = "lang" }, trailing = { DownArrow() })
+            Row2(
+                L.appearance(),
+                value = when (appearance) {
+                    Appearance.Light -> L.light()
+                    Appearance.Dark -> L.dark()
+                    Appearance.System -> L.followSystem()
+                },
+                onClick = { sheet = "appearance" },
+                trailing = { DownArrow() },
+            )
             Row2("字号大小", "仅影响会话内容的字号", value = "$fontSize px", onClick = { sheet = "font" }, divider = false, trailing = { DownArrow() })
         }
         Card {
@@ -403,12 +555,14 @@ fun GeneralSettingsScreen(onBack: () -> Unit) {
             PERMISSION_LABEL.forEach { (id, l) -> OptionRow(l.first, l.second, selected = perm == id) { perm = id; Pocket.prefs.defaultPermission = id; sheet = null } }
         }
         "lang" -> PocketSheet({ sheet = null }) {
-            SheetTitle("语言")
+            SheetTitle(L.language())
             AppLanguage.entries.forEach { o -> OptionRow(o.label, selected = lang == o) { lang = o; Pocket.prefs.language = o; sheet = null } }
         }
         "appearance" -> PocketSheet({ sheet = null }) {
-            SheetTitle("外观")
-            Appearance.entries.forEach { o -> OptionRow(o.label, selected = appearance == o) { appearance = o; Pocket.prefs.appearance = o; sheet = null } }
+            SheetTitle(L.appearance())
+            OptionRow(L.light(), selected = appearance == Appearance.Light) { appearance = Appearance.Light; Pocket.prefs.appearance = appearance; sheet = null }
+            OptionRow(L.dark(), selected = appearance == Appearance.Dark) { appearance = Appearance.Dark; Pocket.prefs.appearance = appearance; sheet = null }
+            OptionRow(L.followSystem(), selected = appearance == Appearance.System) { appearance = Appearance.System; Pocket.prefs.appearance = appearance; sheet = null }
         }
         "font" -> PocketSheet({ sheet = null }) {
             SheetTitle("字号大小")
@@ -426,8 +580,8 @@ fun GeneralSettingsScreen(onBack: () -> Unit) {
         }
         "busy" -> PocketSheet({ sheet = null }) {
             SheetTitle("繁忙时的发送行为")
-            OptionRow(BusySend.Queue.label, "本轮结束后再发送", selected = busy == BusySend.Queue) { busy = BusySend.Queue; Pocket.prefs.busySend = busy; sheet = null }
-            OptionRow(BusySend.Steer.label, "插入当前轮次，引导智能体", selected = busy == BusySend.Steer) { busy = BusySend.Steer; Pocket.prefs.busySend = busy; sheet = null }
+            OptionRow(L.queueSend(), "本轮结束后再发送", selected = busy == BusySend.Queue) { busy = BusySend.Queue; Pocket.prefs.busySend = busy; sheet = null }
+            OptionRow(L.steerSend(), "插入当前轮次，引导智能体", selected = busy == BusySend.Steer) { busy = BusySend.Steer; Pocket.prefs.busySend = busy; sheet = null }
         }
         "perf" -> PocketSheet({ sheet = null }) {
             SheetTitle("性能与用量")

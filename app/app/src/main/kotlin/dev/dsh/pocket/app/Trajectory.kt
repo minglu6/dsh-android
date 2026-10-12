@@ -336,6 +336,7 @@ fun buildTrajectory(items: List<Item>, steps: List<StepRecord> = emptyList()): L
     var liveAssistantKey: String? = null
     for (item in items) {
         when (item) {
+            is Item.Deliverable, is Item.Changes -> Unit // chat cards; trajectory uses tool/present rows
             is Item.System -> addPrefixOrRow(
                 TrajRow(
                     item.key, 0, TrajL.kindSystem, item.label,

@@ -3,12 +3,17 @@ import { dirname, join } from 'node:path'
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { createApprovalHook } from './src/approval-hook.js'
+import { createUserQuestionHook } from './src/user-question-hook.js'
 import { createDeviceStore } from './src/devices.js'
 import { createPairing } from './src/pairing.js'
 import { createPocketServer } from './src/server.js'
 import { loadOrCreateToken } from './src/token.js'
 import { zipSync, strToU8 } from 'fflate'
 import { permissionOps, presetOps, commandOps, filesOps, jobsOps, exportOps, terminalOps } from './src/extra-ops.js'
+import {
+  searchOps, workspaceOps, feedbackOps, fileReferenceOps, sessionReferenceOps,
+  attachmentOps, uploadOps, userQuestionOps,
+} from './src/parity-ops.js'
 import { registerPairRoute } from './src/web-route.js'
 import { createManageApi, pairingUri, pairingString } from './src/manage.js'
 import { startIrohSidecar } from './src/iroh.js'
@@ -53,6 +58,7 @@ export function apply(ctx, config = {}) {
   }
   // prepend: run outside the web UI forwarder so we can race it.
   ctx.on('approval/request', createApprovalHook(server, { log }), { prepend: true })
+  ctx.on('user-questions/request', createUserQuestionHook(server, { log }), { prepend: true })
 
   /** Optional legacy desktop iroh sidecar — off unless config.iroh === true. Not on the phone path. */
   let iroh = null
@@ -91,6 +97,32 @@ export function apply(ctx, config = {}) {
     c.effect(() => server.registerOps(terminalOps(c.terminalController, c.agents)))
   })
   server.registerOps(exportOps(ctx.sessionController, { zipSync, strToU8 }))
+  server.registerOps(searchOps(ctx.sessionController))
+  server.registerOps(attachmentOps(ctx.sessionController))
+  // Prefer Host workspaceController when present; registry alone is enough in-process.
+  ctx.inject(['workspaceRegistry'], (c) => {
+    c.effect(() => {
+      const controller = c.get?.('workspaceController') ?? null
+      server.registerOps(workspaceOps(controller, c.workspaceRegistry))
+    })
+  })
+  ctx.inject(['messageFeedback'], (c) => {
+    c.effect(() => server.registerOps(feedbackOps(c.messageFeedback)))
+  })
+  ctx.inject(['fileReferences', 'agents'], (c) => {
+    c.effect(() => server.registerOps(fileReferenceOps(c.fileReferences, c.agents)))
+  })
+  ctx.inject(['sessionReferenceResolver', 'agents'], (c) => {
+    c.effect(() => server.registerOps(sessionReferenceOps(c.sessionReferenceResolver, c.agents)))
+  })
+  ctx.inject(['fileUploads', 'agents'], (c) => {
+    c.effect(() => server.registerOps(uploadOps(c.fileUploads, c.agents)))
+  })
+  ctx.inject(['userQuestions', 'agents'], (c) => {
+    c.effect(() => server.registerOps(userQuestionOps(c.userQuestions, c.agents, {
+      settleOffer: (callId, answer) => server.settleUserQuestion(callId, answer),
+    })))
+  })
   ctx.inject(['webServer'], (webCtx) => registerPairRoute(webCtx, manage))
 
   ctx.effect(() => {
