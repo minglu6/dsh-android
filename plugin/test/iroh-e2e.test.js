@@ -33,7 +33,7 @@ test('iroh host↔phone-sim carries pocket hello over ALPN dsh-pocket/1', { skip
   })
   await server.listen()
 
-  const sidecar = startIrohSidecar({
+  const sidecar = await startIrohSidecar({
     server,
     dataDir: hostDir,
     hostBinary: bin,

@@ -46,16 +46,10 @@ export function apply(ctx, config = {}) {
   // prepend: run outside the web UI forwarder so we can race it.
   ctx.on('approval/request', createApprovalHook(server, { log }), { prepend: true })
 
-  /** @type {{ endpointId: Promise<string>, close: () => void } | null} */
+  /** @type {{ endpointId: Promise<string>, close: () => Promise<void> } | null} */
   let iroh = null
   /** @type {string | null} */
   let nodeId = null
-  if (config.iroh !== false) {
-    iroh = startIrohSidecar({ server, dataDir: join(dataDir, 'iroh'), hostBinary: config.hostBinary, log })
-    if (iroh) {
-      void iroh.endpointId.then((id) => { nodeId = id })
-    }
-  }
 
   const openPairing = () => {
     const w = pairing.open()
@@ -82,22 +76,34 @@ export function apply(ctx, config = {}) {
 
   ctx.effect(() => {
     const start = async () => {
+      // WS listen first so Tailscale/LAN pairing works even if iroh setup is slow/missing.
       const addr = await server.listen()
       log(`listening on ws://${addr}`)
       log(created ? `new owner token written to ${path}: ${token}` : `owner token: ${path}`)
-      if (iroh) {
-        try {
-          nodeId = await Promise.race([
-            iroh.endpointId,
-            new Promise((_, rej) => setTimeout(() => rej(new Error('iroh ready timeout')), 15_000)),
-          ])
-        } catch (e) {
-          console.error('[pocket] iroh sidecar did not become ready:', e.message ?? e)
-          iroh.close()
-          iroh = null
-          nodeId = null
+
+      if (config.iroh !== false) {
+        iroh = await startIrohSidecar({
+          server,
+          dataDir: join(dataDir, 'iroh'),
+          hostBinary: config.hostBinary,
+          log,
+        })
+        if (iroh) {
+          try {
+            // First cargo build can exceed 15s; give discovery time too.
+            nodeId = await Promise.race([
+              iroh.endpointId,
+              new Promise((_, rej) => setTimeout(() => rej(new Error('iroh ready timeout')), 60_000)),
+            ])
+          } catch (e) {
+            console.error('[pocket] iroh sidecar did not become ready:', e.message ?? e)
+            await iroh.close()
+            iroh = null
+            nodeId = null
+          }
         }
       }
+
       if (config.pair || devices.list().length === 0) openPairing()
     }
     start().catch((error) => console.error('[pocket] listen failed:', error))
