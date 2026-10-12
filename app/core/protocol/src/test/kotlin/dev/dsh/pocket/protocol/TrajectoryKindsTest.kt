@@ -54,12 +54,13 @@ class TrajectoryKindsTest {
         assertEquals("ok", sub.result)
     }
 
-    @Test fun interruptedAssistantHasNoNotice() {
+    @Test fun interruptedAssistantEmitsStoppedNotice() {
         val r = snap()
         r.apply(ev(1, "user/message", """{"content":[{"type":"text","text":"hi"}],"source":{"kind":"user"},"role":"user"}""", 1))
         r.apply(ev(2, "step/start", """{"turn":1,"step":1}""", 2))
         r.apply(ev(3, "assistant/message", """{"turn":1,"step":1,"interrupted":true,"stream":[],"usage":{},"message":{"content":[{"type":"text","text":"p"}]}}""", 3))
-        assertTrue(r.items().none { it is Item.Notice })
+        // Chat locale message.stopped = 已停止; trajectory still marks StepRecord.interrupted.
+        assertEquals(listOf("已停止"), r.items().filterIsInstance<Item.Notice>().map { it.text })
         assertTrue(r.stepRecords().single().interrupted)
     }
 
