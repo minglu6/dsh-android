@@ -141,7 +141,7 @@ fun ConnectionsScreen(pairLink: PairingLink?, onPairLinkConsumed: () -> Unit, ca
                     Box(Modifier.size(40.dp).clip(CircleShape).background(T.Fill2), contentAlignment = Alignment.Center) { Icon(Icons.Outlined.Devices, null, tint = T.Text3, modifier = Modifier.size(20.dp)) }
                     Spacer(Modifier.width(14.dp))
                     Column {
-                        Text("连接到桌面端 dsh", fontSize = 16.sp, color = T.Ink)
+                        Text("连接到桌面端 DeepSeek Harness", fontSize = 16.sp, color = T.Ink)
                         Text("在电脑上运行 dsh-pocket pair 获取配对码", fontSize = 13.sp, color = T.Text3, modifier = Modifier.padding(top = 2.dp))
                     }
                 }
@@ -167,10 +167,10 @@ fun ConnectionsScreen(pairLink: PairingLink?, onPairLinkConsumed: () -> Unit, ca
         Spacer(Modifier.weight(1f))
     }
     if (showPair) PairSheet(pairing, onDismiss = { showPair = false }) { p -> showPair = false; Pocket.connect(p.id); onConnected() }
-    if (showScan) PocketSheet({ showScan = false }) {
-        SheetTitle("扫码配对")
-        Text("用系统相机扫描内容为 dshpocket://pair?h=地址:端口&c=配对码 的二维码，将自动打开配对。", fontSize = 14.sp, color = T.Text2, lineHeight = 22.sp, modifier = Modifier.padding(horizontal = 22.dp, vertical = 8.dp))
-    }
+    if (showScan) ScanPairFlow(
+        onResult = { link -> pairing = link; showScan = false; showPair = true },
+        onDismiss = { showScan = false },
+    )
     manage?.let { p ->
         PocketSheet({ manage = null }) {
             Row(Modifier.padding(horizontal = 22.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -267,7 +267,7 @@ fun SettingsScreen(onBack: () -> Unit, onGeneral: () -> Unit, onConnections: () 
             Row2("Agent 预设", icon = D.agentPreset, value = "标准模式", divider = false, onClick = { sheet = true })
         }
         Card { Row2("打开配置文件", icon = D.plan, enabled = false, divider = false, onClick = {}) }
-        Text("dsh-android", fontSize = 13.sp, color = T.Text3, modifier = Modifier.padding(start = 22.dp, top = 12.dp, bottom = 2.dp))
+        Text("DeepSeek Harness", fontSize = 13.sp, color = T.Text3, modifier = Modifier.padding(start = 22.dp, top = 12.dp, bottom = 2.dp))
         Card {
             Row2("连接", icon = D.rightUp, value = profile?.name ?: "未连接", onClick = onConnections)
             Row2("审批通知", divider = false, trailing = {

@@ -65,15 +65,21 @@ data class Approval(val approvalId: String, val sessionId: String?, val toolName
 
 data class PairingLink(val host: String, val port: Int, val code: String) {
     companion object {
-        /** dshpocket://pair?h=host:port&c=123456 */
+        /**
+         * Plugin QR / deep-link payload from `pairingUri`:
+         * `dshpocket://pair?h=<url-encoded host:port>&c=<6-digit>`
+         * Extra query keys (e.g. future `n` / `fp`) are ignored.
+         */
         fun parse(text: String): PairingLink? {
             val s = text.trim()
             if (!s.startsWith("dshpocket://pair")) return null
-            val q = s.substringAfter('?', "").split('&').associate { it.substringBefore('=') to java.net.URLDecoder.decode(it.substringAfter('=', ""), "UTF-8") }
-            val h = q["h"] ?: return null
+            val q = s.substringAfter('?', "").split('&')
+                .filter { it.isNotEmpty() }
+                .associate { it.substringBefore('=') to java.net.URLDecoder.decode(it.substringAfter('=', ""), "UTF-8") }
+            val h = q["h"]?.takeIf { it.isNotBlank() } ?: return null
             val c = q["c"]?.takeIf { it.matches(Regex("\\d{6}")) } ?: return null
-            val host = h.substringBeforeLast(':').removePrefix("[").removeSuffix("]")
-            val port = h.substringAfterLast(':', "7690").toIntOrNull() ?: 7690
+            val host = h.substringBeforeLast(':').removePrefix("[").removeSuffix("]").takeIf { it.isNotBlank() } ?: return null
+            val port = h.substringAfterLast(':', "7690").toIntOrNull()?.takeIf { it in 1..65535 } ?: return null
             return PairingLink(host, port, c)
         }
     }

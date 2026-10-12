@@ -13,7 +13,7 @@ class SmokeTest {
     @get:Rule val rule = createAndroidComposeRule<MainActivity>()
 
     @Test fun launchesToConnectionsAndOpensPairSheet() {
-        rule.onNodeWithText("连接到桌面端 dsh").assertIsDisplayed()
+        rule.onNodeWithText("连接到桌面端 DeepSeek Harness").assertIsDisplayed()
         rule.onNodeWithText("输入配对码").performClick()
         rule.waitUntil(10_000) { rule.onAllNodesWithText("100.x.y.z:7690").fetchSemanticsNodes().isNotEmpty() }
         rule.onAllNodesWithText("配对").fetchSemanticsNodes().let { assert(it.isNotEmpty()) }
