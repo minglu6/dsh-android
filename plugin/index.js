@@ -12,6 +12,7 @@ import { permissionOps, presetOps, commandOps, filesOps, jobsOps, exportOps, ter
 import { registerPairRoute } from './src/web-route.js'
 import { createManageApi, pairingUri, pairingString } from './src/manage.js'
 import { startIrohSidecar } from './src/iroh.js'
+import { loadTransport, saveTransport, normalizeTransport } from './src/transport-pref.js'
 
 export const name = 'dsh-plugin-pocket'
 // webServer is optional: Cordis `inject` entries are all required, so the
@@ -24,7 +25,7 @@ const PKG = JSON.parse(readFileSync(join(dirname(fileURLToPath(import.meta.url))
 
 /**
  * @param {import('@deepseek-ai/cordis').Context} ctx
- * @param {{host?: string, port?: number, token?: string, dataDir?: string, pair?: boolean, iroh?: boolean, hostBinary?: string}} [config]
+ * @param {{host?: string, port?: number, token?: string, dataDir?: string, pair?: boolean, iroh?: boolean, hostBinary?: string, transport?: string}} [config]
  */
 export function apply(ctx, config = {}) {
   const log = (...a) => console.log('[pocket]', ...a)
@@ -33,7 +34,13 @@ export function apply(ctx, config = {}) {
   const devices = createDeviceStore({ dataDir, ownerToken: token })
   const pairing = createPairing()
   const listeners = new Set()
-  // Loopback WS is internal/dev only — never advertise a Tailscale/LAN bind by default.
+
+  // Config `transport` forces the mode; otherwise last UI choice in dataDir/transport.
+  let remoteTransport = loadTransport(dataDir, config.transport)
+  const configLocksTransport = Boolean(normalizeTransport(config.transport))
+
+  // Bind address from config. Tailscale mode: set host to your Tailscale IP / MagicDNS.
+  // iroh mode: leave at 127.0.0.1 (phones use iroh; WS is local/dev only).
   const host = config.host ?? '127.0.0.1'
   const port = config.port ?? 7690
   const server = createPocketServer({
@@ -52,17 +59,36 @@ export function apply(ctx, config = {}) {
   /** @type {string | null} */
   let nodeId = null
 
+  const getTransport = () => remoteTransport
+  const setTransportMode = (mode) => {
+    if (configLocksTransport) {
+      throw new Error(`transport is locked by cordis config (${config.transport})`)
+    }
+    remoteTransport = saveTransport(dataDir, mode)
+    log(`transport set to ${remoteTransport}`)
+    return remoteTransport
+  }
+
   const openPairing = () => {
-    if (!nodeId) throw new Error('iroh sidecar is not ready — cannot open remote pairing')
+    const mode = remoteTransport
+    if (mode === 'iroh' && !nodeId) {
+      throw new Error('iroh sidecar is not ready — cannot open remote pairing')
+    }
     const w = pairing.open()
-    const uri = pairingUri({ code: w.code, nodeId })
-    const line = pairingString({ code: w.code, nodeId })
-    log(`pairing string (${Math.round(w.expiresInSec / 60)} min): ${line}`)
-    return { ...w, nodeId, uri, pairingString: line }
+    const uri = mode === 'iroh'
+      ? pairingUri({ code: w.code, nodeId, transport: mode })
+      : pairingUri({ code: w.code, host, port, transport: mode })
+    const line = mode === 'iroh'
+      ? pairingString({ code: w.code, nodeId, transport: mode })
+      : pairingString({ code: w.code, host, port, transport: mode })
+    log(`pairing (${mode}, ${Math.round(w.expiresInSec / 60)} min): ${line}`)
+    return { ...w, transport: mode, nodeId, host, port, uri, pairingString: line }
   }
   const manage = createManageApi({
     host, port, devices, pairing, server, openPairing,
     getNodeId: () => nodeId,
+    getTransport,
+    setTransport: setTransportMode,
   })
   ctx.inject(['permissionPresets', 'agents'], (c) => { c.effect(() => server.registerOps(permissionOps(c.permissionPresets, c.agents))) })
   ctx.inject(['agentPresets'], (c) => { c.effect(() => server.registerOps(presetOps(c.agentPresets))) })
@@ -79,7 +105,9 @@ export function apply(ctx, config = {}) {
 
   ctx.effect(() => {
     const start = async () => {
-      // Start iroh first — remote phones connect only over P2P/relay.
+      log(`remote transport: ${remoteTransport}`)
+
+      // Sidecar unless disabled — needed for iroh mode; kept warm so UI can switch modes.
       if (config.iroh !== false) {
         iroh = await startIrohSidecar({
           server,
@@ -102,15 +130,19 @@ export function apply(ctx, config = {}) {
         }
       }
 
-      // Loopback WS for local tooling / tests (not user-facing remote path).
       const addr = await server.listen()
-      log(`local ws://${addr} (dev/loopback only)`)
+      if (remoteTransport === 'tailscale') {
+        log(`ws listening on ws://${addr} (Tailscale mode — set config.host to your Tailscale IP if needed)`)
+      } else {
+        log(`local ws://${addr} (dev/loopback; phones use iroh in iroh mode)`)
+      }
       log(created ? `new owner token written to ${path}: ${token}` : `owner token: ${path}`)
-      if (!nodeId) {
+      if (remoteTransport === 'iroh' && !nodeId) {
         log('iroh not ready — remote phone pairing unavailable until pocket-host starts')
       }
 
-      if (nodeId && (config.pair || devices.list().length === 0)) {
+      const canAutoPair = remoteTransport === 'iroh' ? Boolean(nodeId) : true
+      if (canAutoPair && (config.pair || devices.list().length === 0)) {
         try { openPairing() } catch (e) { console.error('[pocket]', e.message ?? e) }
       }
     }

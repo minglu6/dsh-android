@@ -53,6 +53,11 @@ function createPocketApi(base = "") {
 	const get = async (path, init) => parse(await fetch(url(path), init));
 	return {
 		status: () => get("/pocket/status"),
+		setTransport: (transport) => get("/pocket/status", {
+			method: "PATCH",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify({ transport })
+		}),
 		pairStatus: () => get("/pocket/pair"),
 		openPair: () => get("/pocket/pair", { method: "POST" }),
 		closePair: () => get("/pocket/pair", { method: "DELETE" }),
@@ -81,9 +86,15 @@ const zh = {
 	statusTitle: "连接器状态",
 	statusRunning: "运行中",
 	statusStopped: "未运行",
+	transport: "传输",
+	transportIroh: "iroh",
+	transportTailscale: "Tailscale",
+	listen: "监听",
 	nodeId: "节点",
 	irohReady: "iroh 已就绪",
-	irohMissing: "iroh 未就绪 — 远程配对不可用",
+	irohMissing: "iroh 未就绪 — 请改用 Tailscale，或等待 sidecar",
+	tailscaleReady: "Tailscale / WS 已监听",
+	tailscaleHint: "请将 config.host 设为 Tailscale IP，手机与电脑需在同一 tailnet",
 	version: "版本",
 	pair: "开始配对",
 	pairAgain: "重新配对",
@@ -121,9 +132,15 @@ const en = {
 	statusTitle: "Connector status",
 	statusRunning: "Running",
 	statusStopped: "Stopped",
+	transport: "Transport",
+	transportIroh: "iroh",
+	transportTailscale: "Tailscale",
+	listen: "Listen",
 	nodeId: "Node",
 	irohReady: "iroh ready",
-	irohMissing: "iroh not ready — remote pairing unavailable",
+	irohMissing: "iroh not ready — switch to Tailscale, or wait for sidecar",
+	tailscaleReady: "Tailscale / WS listening",
+	tailscaleHint: "Set config.host to your Tailscale IP; phone and desktop must share a tailnet",
 	version: "Version",
 	pair: "Start pairing",
 	pairAgain: "Pair again",
@@ -1619,6 +1636,20 @@ function ManagePanel({ t, api }) {
 		}, 1e3);
 		return () => clearInterval(id);
 	}, [status?.pairing.open, refresh]);
+	const setTransport = async (transport) => {
+		setLoading(true);
+		setError(null);
+		try {
+			const s = await api.setTransport(transport);
+			setStatus(s);
+			if (s.pairing?.open) await api.closePair();
+			await refresh();
+		} catch (e) {
+			setError(String(e?.message ?? e));
+		} finally {
+			setLoading(false);
+		}
+	};
 	const openPair = async () => {
 		setLoading(true);
 		try {
@@ -1649,8 +1680,10 @@ function ManagePanel({ t, api }) {
 	};
 	const pairing = status?.pairing;
 	const expires = pairing?.open ? Math.max(0, pairing.expiresInSec ?? 0) : 0;
+	const mode = status?.transport === "tailscale" ? "tailscale" : "iroh";
 	const irohOk = Boolean(status?.irohReady || status?.nodeId);
-	const connectorOk = irohOk && !error;
+	const pairReady = mode === "iroh" ? irohOk : Boolean(status?.listen?.length);
+	const connectorOk = pairReady && !error;
 	return /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
 		style: styles.settingsRoot,
 		children: [
@@ -1686,25 +1719,69 @@ function ManagePanel({ t, api }) {
 								...styles.valueLine,
 								marginTop: 6
 							},
-							children: [irohOk ? t("irohReady") : t("irohMissing"), /* @__PURE__ */ (0, react_jsx_runtime.jsx)(StatusDot, { state: connectorOk ? "done" : "error" })]
+							children: [mode === "iroh" ? irohOk ? t("irohReady") : t("irohMissing") : t("tailscaleReady"), /* @__PURE__ */ (0, react_jsx_runtime.jsx)(StatusDot, { state: connectorOk ? "done" : "error" })]
 						}),
 						/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
 							style: styles.metaStack,
-							children: [status.nodeId ? /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
-								style: styles.metaLine,
-								children: [
-									t("nodeId"),
-									": ",
-									String(status.nodeId).slice(0, 16),
-									"…"
-								]
-							}) : null, /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
-								style: styles.metaLine,
-								children: [
-									t("version"),
-									": ",
-									status.version
-								]
+							children: [
+								/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
+									style: styles.metaLine,
+									children: [
+										t("transport"),
+										": ",
+										mode === "iroh" ? t("transportIroh") : t("transportTailscale")
+									]
+								}),
+								/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
+									style: styles.metaLine,
+									children: [
+										t("listen"),
+										": ",
+										status.host,
+										":",
+										status.port
+									]
+								}),
+								status.nodeId ? /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
+									style: styles.metaLine,
+									children: [
+										t("nodeId"),
+										": ",
+										String(status.nodeId).slice(0, 16),
+										"…"
+									]
+								}) : null,
+								/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
+									style: styles.metaLine,
+									children: [
+										t("version"),
+										": ",
+										status.version
+									]
+								}),
+								mode === "tailscale" ? /* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
+									style: styles.metaLine,
+									children: t("tailscaleHint")
+								}) : null
+							]
+						}),
+						/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
+							style: {
+								...styles.actionRow,
+								marginTop: 10
+							},
+							children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
+								type: "button",
+								style: mode === "iroh" ? styles.primaryBtn : styles.outlineBtnSm,
+								disabled: loading || mode === "iroh",
+								onClick: () => void setTransport("iroh"),
+								children: t("transportIroh")
+							}), /* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
+								type: "button",
+								style: mode === "tailscale" ? styles.primaryBtn : styles.outlineBtnSm,
+								disabled: loading || mode === "tailscale",
+								onClick: () => void setTransport("tailscale"),
+								children: t("transportTailscale")
 							})]
 						})
 					]
@@ -1790,13 +1867,13 @@ function ManagePanel({ t, api }) {
 						...styles.rowDescription,
 						marginTop: 4
 					},
-					children: irohOk ? t("noCode") : t("irohMissing")
+					children: pairReady ? t("noCode") : mode === "iroh" ? t("irohMissing") : t("tailscaleHint")
 				}), /* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
 					style: styles.actionRow,
 					children: /* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
 						type: "button",
 						style: styles.primaryBtn,
-						disabled: !irohOk,
+						disabled: !pairReady,
 						onClick: () => void openPair(),
 						children: t("pair")
 					})

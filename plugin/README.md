@@ -10,41 +10,48 @@ dsh plugin --profile web add /path/to/dsh-android/plugin # 从源码安装
 dsh web
 ```
 
-启动后日志会出现 `[pocket] iroh ready, node id: …`。第一次运行时会生成 token，保存在 `$DSH_HOME/pocket/token`，文件权限 0600。本机 `ws://127.0.0.1:7690` 仅作开发/测试，**手机不走 WebSocket**。
+启动后日志会出现 `[pocket] remote transport: iroh|tailscale`。第一次运行时会生成 token，保存在 `$DSH_HOME/pocket/token`，文件权限 0600。
 
 ## 配置（`$DSH_HOME/profiles/web/cordis.patch.yml`）
 
 ```yaml
 - id: dsh-pocket
   config:
-    # host/port 仅 loopback 开发用；远程手机只走 iroh
-    # host: 127.0.0.1
+    # transport: iroh          # 或 tailscale；不写则默认 iroh，UI 选择会写入 $DSH_HOME/pocket/transport
+    # host: 127.0.0.1          # WS 监听；Tailscale 模式请改成 Tailscale IP / MagicDNS
     # port: 7690
     # token: 固定 token；不填则使用自动生成的那个
-    # iroh: true           # 默认启用；关掉则无法远程配对
+    # iroh: true               # 默认启用 sidecar（iroh 模式需要）
     # hostBinary: /path/to/pocket-host
 ```
 
-## iroh（唯一远程路径）
+## 传输选择（iroh **或** Tailscale，互不兜底）
 
-桌面侧跑 Rust sidecar（`plugin/iroh`，ALPN `dsh-pocket/1`）。手机经 **iroh 打洞（失败则走东京自建 relay `https://iroh.9643275.xyz.`）** 连上，再做同一套 `pair` / `hello` token 鉴权。不依赖 Tailscale / 共享 Wi‑Fi。桌面可用环境变量 `DSH_IROH_RELAY_URLS`（逗号分隔）覆盖中继；Android 与 sidecar 共用同一默认。
+用户在「手机连接」里显式选择一种远程路径。**不会**在 Tailscale 失败后自动改走 iroh，也不会在 iroh 失败后自动改走 Tailscale。
 
-**一行安装 sidecar（macOS arm64 / Linux）：**
+| 模式 | 桌面侧 | 手机配对 | 说明 |
+|---|---|---|---|
+| **iroh**（默认） | `pocket-host` sidecar；本机 `ws://127.0.0.1:7690` 仅开发/测试 | `<nodeId>#<code>` / `dshpocket://pair?n=&c=` | 打洞失败时走东京自建 relay `https://iroh.9643275.xyz.`（仍属 iroh 路径内） |
+| **Tailscale** | WS 监听 `config.host:port`（设为 Tailscale IP） | `dshpocket://pair?h=<host:port>&c=<code>` | 手机与电脑需在同一 tailnet；不要求 iroh |
+
+上次选择会持久化到 `$DSH_HOME/pocket/transport`。若 patch 里写了 `transport:`，则锁定该模式（UI 无法覆盖）。
+
+### iroh 模式
+
+桌面侧跑 Rust sidecar（`plugin/iroh`，ALPN `dsh-pocket/1`）。桌面可用环境变量 `DSH_IROH_RELAY_URLS`（逗号分隔）覆盖中继；Android 与 sidecar 共用同一默认。
 
 ```bash
 cd plugin && npm run build:iroh
 ```
 
-也可不预编译：启动时插件会尝试下载 CI 预编译包或自动 `cargo build`。失败则日志说明原因，远程配对不可用。
+也可不预编译：启动时插件会尝试下载 CI 预编译包或自动 `cargo build`。
 
-配对（对齐 dsh-tether）：
+### Tailscale 模式
 
-```
-配对串：  <irohNodeId>#<6位码>
-QR：      dshpocket://pair?n=<irohNodeId>&c=<6位码>
-```
+1. 电脑与手机都加入同一 Tailscale tailnet。
+2. 在 patch 里把 `host` 设为电脑的 Tailscale IP（或 MagicDNS），例如 `100.x.y.z`。
+3. 在「手机连接」选择 **Tailscale**，开始配对；手机扫码或粘贴 `h=` URI。
 
-短码 alone 不能发现主机（没有短码中继目录）；QR / 粘贴整行是主路径。
 ## 管理 UI（桌面 / `dsh web`）
 
 插件通过官方 **client half**（`dsh.client` + `exports["./client"]`）挂到 dsh 的 slot 体系，**不**使用 `tapIndex` HTML 注入（桌面端 Electron 读自己的 `file://` index，只认结构化 index injection / client modules）。
@@ -57,8 +64,9 @@ QR：      dshpocket://pair?n=<irohNodeId>&c=<6位码>
 该弹层由 `@deepseek-ai/dsh-client-ui-settings-account` 的 `AccountMenu` 占用 `settings.launcher`（`kind: 'single'`）。菜单项是写死的数组（`settings` → `contact` → `signout`），**没有**类似 `settings.launcher.item` 的 list slot。替换整个 `settings.launcher` 会盖掉官方 AccountMenu，不算合法扩展。要在「设置」与「意见反馈」之间加一行，需要上游 dsh 新增扩展点。本插件因此**不**往侧栏 footer / 账号菜单乱挂入口。
 
 面板功能：
-- 连接器状态（iroh 是否就绪、节点 id 前缀、插件版本）
-- 打开配对窗口：6 位码 + 倒计时 + QR + 可复制配对串
+- 传输选择：iroh / Tailscale（互斥，持久化）
+- 连接器状态（当前模式、监听地址、iroh 节点 id 前缀、插件版本）
+- 打开配对窗口：6 位码 + 倒计时 + QR + 可复制配对串（内容随模式变化）
 - 已配对设备：名称、最近活跃、是否在线；可重命名 / 撤销
 
 文案走 `ctx.locale.register('pocket', { zh, en })`，跟随 dsh 的语言设置。样式只用 `--dsw-alias-*` 主题 token。

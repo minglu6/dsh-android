@@ -160,6 +160,24 @@ export function ManagePanel({
     return () => clearInterval(id)
   }, [status?.pairing.open, refresh])
 
+  const setTransport = async (transport: 'iroh' | 'tailscale') => {
+    setLoading(true)
+    setError(null)
+    try {
+      const s = await api.setTransport(transport)
+      setStatus(s)
+      if (s.pairing?.open) {
+        // Re-open so QR / paste line match the new mode (no cross-mode leftover).
+        await api.closePair()
+      }
+      await refresh()
+    } catch (e) {
+      setError(String((e as Error)?.message ?? e))
+    } finally {
+      setLoading(false)
+    }
+  }
+
   const openPair = async () => {
     setLoading(true)
     try {
@@ -195,8 +213,10 @@ export function ManagePanel({
   const expires = pairing?.open ? Math.max(0, pairing.expiresInSec ?? 0) : 0
   void tick
 
+  const mode = status?.transport === 'tailscale' ? 'tailscale' : 'iroh'
   const irohOk = Boolean(status?.irohReady || status?.nodeId)
-  const connectorOk = irohOk && !error
+  const pairReady = mode === 'iroh' ? irohOk : Boolean(status?.listen?.length)
+  const connectorOk = pairReady && !error
 
   return (
     <div style={styles.settingsRoot}>
@@ -208,16 +228,45 @@ export function ManagePanel({
           <div style={{ flex: 1, minWidth: 0 }}>
             <div style={styles.rowTitle}>{t('statusTitle')}</div>
             <div style={{ ...styles.valueLine, marginTop: 6 }}>
-              {irohOk ? t('irohReady') : t('irohMissing')}
+              {mode === 'iroh'
+                ? (irohOk ? t('irohReady') : t('irohMissing'))
+                : t('tailscaleReady')}
               <StatusDot state={connectorOk ? 'done' : 'error'} />
             </div>
             <div style={styles.metaStack}>
+              <div style={styles.metaLine}>
+                {t('transport')}: {mode === 'iroh' ? t('transportIroh') : t('transportTailscale')}
+              </div>
+              <div style={styles.metaLine}>
+                {t('listen')}: {status.host}:{status.port}
+              </div>
               {status.nodeId ? (
                 <div style={styles.metaLine}>
                   {t('nodeId')}: {String(status.nodeId).slice(0, 16)}…
                 </div>
               ) : null}
               <div style={styles.metaLine}>{t('version')}: {status.version}</div>
+              {mode === 'tailscale' ? (
+                <div style={styles.metaLine}>{t('tailscaleHint')}</div>
+              ) : null}
+            </div>
+            <div style={{ ...styles.actionRow, marginTop: 10 }}>
+              <button
+                type="button"
+                style={mode === 'iroh' ? styles.primaryBtn : styles.outlineBtnSm}
+                disabled={loading || mode === 'iroh'}
+                onClick={() => void setTransport('iroh')}
+              >
+                {t('transportIroh')}
+              </button>
+              <button
+                type="button"
+                style={mode === 'tailscale' ? styles.primaryBtn : styles.outlineBtnSm}
+                disabled={loading || mode === 'tailscale'}
+                onClick={() => void setTransport('tailscale')}
+              >
+                {t('transportTailscale')}
+              </button>
             </div>
           </div>
           <button type="button" style={styles.outlineBtnSm} onClick={() => void refresh()}>{t('refresh')}</button>
@@ -257,10 +306,10 @@ export function ManagePanel({
         ) : (
           <>
             <div style={{ ...styles.rowDescription, marginTop: 4 }}>
-              {irohOk ? t('noCode') : t('irohMissing')}
+              {pairReady ? t('noCode') : (mode === 'iroh' ? t('irohMissing') : t('tailscaleHint'))}
             </div>
             <div style={styles.actionRow}>
-              <button type="button" style={styles.primaryBtn} disabled={!irohOk} onClick={() => void openPair()}>{t('pair')}</button>
+              <button type="button" style={styles.primaryBtn} disabled={!pairReady} onClick={() => void openPair()}>{t('pair')}</button>
             </div>
           </>
         )}

@@ -22,16 +22,36 @@ class TransportTest {
         assertEquals(false, isLoopbackHost("192.168.1.1"))
     }
 
-    @Test fun transportPlanIrohFirst() {
+    @Test fun classifyWsRouteTailscale() {
+        assertEquals(Route.WsTailscale, classifyWsRoute("100.106.128.87"))
+        assertEquals(Route.WsTailscale, classifyWsRoute("mac.tail1.ts.net"))
+        assertEquals(Route.WsLan, classifyWsRoute("192.168.1.10"))
+        assertEquals(Route.WsLocal, classifyWsRoute("127.0.0.1"))
+    }
+
+    @Test fun transportPlanIrohExclusive() {
         val iroh = TransportFactory { FakeTransport(Route.IrohDirect) }
-        val plan = transportPlan("nodeabc", iroh, null)
+        val plan = transportPlan(RemoteTransport.Iroh, nodeId = "nodeabc", irohFactory = iroh)
         assertEquals(1, plan.size)
-        val withLocal = transportPlan("nodeabc", iroh, "ws://127.0.0.1:7690")
+        val withLocal = transportPlan(
+            RemoteTransport.Iroh, nodeId = "nodeabc", irohFactory = iroh, loopbackWsUrl = "ws://127.0.0.1:7690",
+        )
         assertEquals(2, withLocal.size)
-        val noIroh = transportPlan(null, iroh, null)
-        assertTrue(noIroh.isEmpty())
-        val missingFactory = transportPlan("nodeabc", null, null)
-        assertTrue(missingFactory.isEmpty())
+        assertTrue(transportPlan(RemoteTransport.Iroh, nodeId = null, irohFactory = iroh).isEmpty())
+        assertTrue(transportPlan(RemoteTransport.Iroh, nodeId = "nodeabc", irohFactory = null).isEmpty())
+    }
+
+    @Test fun transportPlanTailscaleExclusive() {
+        val plan = transportPlan(RemoteTransport.Tailscale, host = "100.64.1.2", port = 7690)
+        assertEquals(1, plan.size)
+        // Missing host/port → empty; never silently adds iroh.
+        assertTrue(transportPlan(RemoteTransport.Tailscale, host = "", port = 7690).isEmpty())
+        assertTrue(transportPlan(RemoteTransport.Tailscale, host = "100.64.1.2", port = 0).isEmpty())
+        val iroh = TransportFactory { FakeTransport(Route.IrohDirect) }
+        val stillWsOnly = transportPlan(
+            RemoteTransport.Tailscale, host = "100.64.1.2", port = 7690, irohFactory = iroh, nodeId = "abc",
+        )
+        assertEquals(1, stillWsOnly.size)
     }
 
     @Test fun dialInOrderUsesFirstSuccess() = runBlocking {
@@ -55,21 +75,26 @@ class TransportTest {
 
     @Test fun routeLabels() {
         assertEquals("local", Route.WsLocal.label)
+        assertEquals("Tailscale", Route.WsTailscale.label)
+        assertEquals("LAN", Route.WsLan.label)
         assertEquals("iroh", Route.IrohDirect.label)
         assertEquals("iroh relay", Route.IrohRelay.label)
         assertTrue(Route.IrohRelay.isRelay)
         assertEquals(false, Route.IrohDirect.isRelay)
     }
 
-    @Test fun pairingLinkPureIroh() {
+    @Test fun pairingLinkModes() {
         assertEquals(
-            PairingLink("abcdefghijklmnopqrst", "123456"),
+            PairingLink.Iroh("abcdefghijklmnopqrst", "123456"),
             PairingLink.parse("dshpocket://pair?n=abcdefghijklmnopqrst&c=123456"),
         )
         assertEquals(
-            PairingLink("abcdefghijklmnopqrst", "123456"),
+            PairingLink.Iroh("abcdefghijklmnopqrst", "123456"),
             PairingLink.parse("abcdefghijklmnopqrst#123456"),
         )
-        assertEquals(null, PairingLink.parse("dshpocket://pair?h=100.1.2.3:7690&c=123456"))
+        assertEquals(
+            PairingLink.Tailscale("100.1.2.3", 7690, "123456"),
+            PairingLink.parse("dshpocket://pair?h=100.1.2.3:7690&c=123456"),
+        )
     }
 }

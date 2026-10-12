@@ -66,14 +66,27 @@ data class Approval(val approvalId: String, val sessionId: String?, val toolName
 /** One image part for `prompt` (base64 payload, no data: URL prefix). */
 data class PromptImage(val mediaType: String, val data: String, val name: String? = null)
 
+/** User-selected remote path. Never auto-switched against the other. */
+enum class RemoteTransport {
+    Iroh,
+    Tailscale,
+}
+
 /**
- * Pure-iroh pairing (tether-style). No shared network / Tailscale host required.
+ * Pairing payload for one transport only — never mixes Tailscale host with iroh dial.
  *
- * - QR / deep link: `dshpocket://pair?n=<irohNodeId>&c=<6-digit>`
- * - Paste line: `<irohNodeId>#<6-digit>` (same shape as dsh-tether)
- * - Legacy `h=<host:port>` URIs without `n` are rejected — re-pair on the desktop.
+ * - Iroh QR / deep link: `dshpocket://pair?n=<irohNodeId>&c=<6-digit>`
+ * - Iroh paste: `<irohNodeId>#<6-digit>`
+ * - Tailscale QR / deep link: `dshpocket://pair?h=<host:port>&c=<6-digit>`
+ *
+ * If both `n` and `h` appear, `n` wins (iroh advertisement). Modes are exclusive at dial time.
  */
-data class PairingLink(val nodeId: String, val code: String) {
+sealed class PairingLink {
+    abstract val code: String
+
+    data class Iroh(val nodeId: String, override val code: String) : PairingLink()
+    data class Tailscale(val host: String, val port: Int, override val code: String) : PairingLink()
+
     companion object {
         private val CODE = Regex("^\\d{6}$")
         private val TETHER_LINE = Regex("^([A-Za-z0-9_-]{16,})#(\\d{6})$")
@@ -81,15 +94,26 @@ data class PairingLink(val nodeId: String, val code: String) {
         fun parse(text: String): PairingLink? {
             val s = text.trim()
             TETHER_LINE.matchEntire(s)?.let { m ->
-                return PairingLink(m.groupValues[1], m.groupValues[2])
+                return Iroh(m.groupValues[1], m.groupValues[2])
             }
             if (!s.startsWith("dshpocket://pair")) return null
             val q = s.substringAfter('?', "").split('&')
                 .filter { it.isNotEmpty() }
                 .associate { it.substringBefore('=') to java.net.URLDecoder.decode(it.substringAfter('=', ""), "UTF-8") }
             val c = q["c"]?.takeIf { CODE.matches(it) } ?: return null
-            val n = q["n"]?.takeIf { it.isNotBlank() } ?: return null
-            return PairingLink(n, c)
+            q["n"]?.takeIf { it.isNotBlank() }?.let { return Iroh(it, c) }
+            val h = q["h"]?.takeIf { it.isNotBlank() } ?: return null
+            val hp = parseHostPort(h) ?: return null
+            return Tailscale(hp.first, hp.second, c)
         }
     }
+}
+
+/** Parse `host:port` or `[ipv6]:port` (optional `ws://` / `wss://` prefix). */
+fun parseHostPort(s: String): Pair<String, Int>? {
+    val t = s.trim().removePrefix("ws://").removePrefix("wss://")
+    val match = Regex("^\\[?([^\\[\\]]+?)]?:(\\d{1,5})$").find(t) ?: return null
+    val port = match.groupValues[2].toInt().takeIf { it in 1..65535 } ?: return null
+    val host = match.groupValues[1].takeIf { it.isNotBlank() } ?: return null
+    return host to port
 }

@@ -34,6 +34,7 @@ async function readJson(req, res, limit = 4096) {
  *   listDevices: () => object[],
  *   revokeDevice: (id: string) => boolean,
  *   renameDevice: (id: string, name: string) => boolean,
+ *   setTransport?: (mode: string) => object,
  * }} api
  */
 export function registerPairRoute(ctx, api) {
@@ -44,10 +45,22 @@ export function registerPairRoute(ctx, api) {
 
   ctx.effect(() => ctx.webServer.register({
     kind: 'exact', path: '/pocket/status',
-    handler: (req, res) => {
+    handler: async (req, res) => {
       if (!gate(req, res)) return
-      if (req.method !== 'GET') return json(res, 405, { error: 'method not allowed' })
-      return json(res, 200, api.getStatus())
+      if (req.method === 'GET') return json(res, 200, api.getStatus())
+      if (req.method === 'PATCH') {
+        const body = await readJson(req, res)
+        if (body === undefined) return
+        if (typeof body.transport !== 'string') return json(res, 400, { error: 'transport required' })
+        if (typeof api.setTransport !== 'function') return json(res, 405, { error: 'method not allowed' })
+        try {
+          api.setTransport(body.transport)
+          return json(res, 200, api.getStatus())
+        } catch (e) {
+          return json(res, 400, { error: String(e?.message ?? e) })
+        }
+      }
+      return json(res, 405, { error: 'method not allowed' })
     },
   }))
 
