@@ -185,7 +185,7 @@ page('03-approval',TOP+MSGS.replace('<p style="color:#81858C;font-size:13px">深
 def prof(dot,name,sub,kind,extra=''):
     return f'''<div class="srow"><span class="dot {dot}"></span><div style="flex:1;min-width:0"><div class="t">{name}{extra}</div><div class="mono d">{sub}</div></div><span style="font-size:12px;color:#61666B;border:1px solid rgba(0,0,0,.12);border-radius:8px;padding:0 8px">{kind}</span>{I('right')}</div>'''
 CONN=SBAR('连接')+f'''<div class="card">{prof('g','Mac mini','直连 · 18 ms','iroh',' <span style="font-size:11px;color:#3964FE;background:#E4EDFD;border-radius:6px;padding:0 6px;margin-left:4px">当前</span>')}
-{prof('y','MacBook Pro','中继 · 142 ms','iroh')}{prof('g','Studio','100.106.128.87:7681 · 31 ms','Tailscale')}{prof('r','书房 NAS','192.168.1.20:7681 · 无法连接','LAN')}{prof('gr','本机','dsh 0.2.1-alpha.2 · 未启动','本地')}</div>
+{prof('y','MacBook Pro','中继 · 142 ms','iroh')}{prof('g','Studio','iroh · 31 ms','iroh')}{prof('r','书房 NAS','192.168.1.20:7681 · 无法连接','LAN')}{prof('gr','本机','dsh 0.2.1-alpha.2 · 未启动','本地')}</div>
 <div style="margin:0 16px;display:flex;gap:8px"><div class="btn out" style="font-size:14px">输入配对码</div><div class="btn out" style="font-size:14px">扫码配对</div></div>
 <div class="sheet" style="box-shadow:0 -4px 24px rgba(0,0,0,.08)"><div class="grab"></div><div class="stitle">配对</div>
 <div style="display:flex;gap:8px;justify-content:center;margin:8px 0 16px">{''.join(f'<div class="mono" style="width:46px;height:56px;border:1px solid {"#0F1115" if i==4 else "rgba(0,0,0,.16)"};border-radius:12px;display:flex;align-items:center;justify-content:center;font-size:24px">{d}</div>' for i,d in enumerate("4829  "))}</div>

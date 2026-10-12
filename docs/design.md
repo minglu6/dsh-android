@@ -86,27 +86,20 @@ dsh process (profile web)
      ├─ core/        protocol router: JSON msg ⇄ sessionController calls, follow fan-out, approval broker
      ├─ auth/        device store (~/.dsh/pocket/devices.json, 0600), pairing window, token verify
      └─ transports/
-         ├─ ws-listen     own http+ws listener on configurable host:port (Tailscale IP / LAN), NOT dsh's webServer
-         ├─ webserver-ws  optional: ctx.webServer.registerUpgrade('/pocket/ws') reusing dsh's port
-         ├─ iroh          Rust sidecar (fork of tether-host) over stdio; ALPN 'dsh-pocket/1'; byte-pipes framed JSON to core
-         └─ local         loopback ws on 127.0.0.1:<port>, token from app-private file (phone local mode)
+         ├─ iroh          Rust sidecar (tether-host style) over stdio; ALPN 'dsh-pocket/1'; dumb JSON pipe + token pair/hello
+         ├─ ws-loopback   optional 127.0.0.1:7690 for local CLI/tests only (not user-facing remote)
+         └─ local         phone-local mode (M4): loopback ws + bundled dsh
 ```
 
-- **Why our own listener for Tailscale and LAN**: dsh's webServer applies the browser Host-header fence and cookie auth to `/api` only. Our routes are separate. A dedicated port, though, avoids coupling to dsh's bind address and its TLS setting. **[design]** Default `127.0.0.1:7690`; config `listen: ['100.x.y.z:7690', …]`.
-- **Sidecar reuse**: fork tether-host and keep:
-  - secret key and paired-store code
-  - pairing window (6 digits, 600 s, 3 tries)
-  - path reporting
-  - bounded line IO
-
-  Replace the `proxy` stream with a single `pocket` bi-stream that tunnels our JSON frames between phone and plugin, so the sidecar becomes a dumb pipe and stays protocol-agnostic. Authorization stays in the sidecar's allow-list: an iroh NodeId is the identity, so no token is needed on that path.
+- **Remote path is iroh only** (tether-style). Loopback WS is for `bin/pocket.js` / integration tests.
+- **Sidecar**: identity key, path reporting, bounded line IO; phone auth remains pocket tokens over the pipe (not NodeId-only).
 - **Config (patch row)**:
   ```yaml
   - id: dsh-pocket
     name: dsh-plugin-pocket
-    config: { listen: ['127.0.0.1:7690'], iroh: true, pair: false, mode: desktop|local }
+    config: { host: '127.0.0.1', port: 7690, iroh: true, pair: false }
   ```
-  `mode: local` disables iroh and binds loopback only.
+
 
 ## 4. Protocol spec v1 (JSON over WebSocket text frames, or newline-JSON in an iroh stream)
 
