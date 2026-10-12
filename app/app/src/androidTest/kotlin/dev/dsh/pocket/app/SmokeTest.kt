@@ -13,9 +13,9 @@ class SmokeTest {
 
     @Test fun launchesToConnectionsAndOpensPairSheet() {
         rule.onNodeWithText("连接到桌面端 dsh").assertIsDisplayed()
-        rule.onNodeWithText("粘贴配对串").performClick()
+        rule.onNodeWithText("手动配对").performClick()
         rule.waitUntil(10_000) {
-            rule.onAllNodesWithText("粘贴电脑上显示的整行").fetchSemanticsNodes().isNotEmpty()
+            rule.onAllNodesWithText("100.x.y.z:7690 或局域网 host:port").fetchSemanticsNodes().isNotEmpty()
         }
         rule.onNode(hasText("配对") and hasClickAction()).assertExists()
     }
