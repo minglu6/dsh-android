@@ -79,13 +79,13 @@ Data: Cordis waterfall `approval/request` → pocket push `{ev:"approval"}` / `a
 | | 工具 {name} 请求越权执行 | — |
 | | 拒绝 / 允许一次 | rejected / allowed-once |
 
-Ask-user tool (`ui-user-questions`): separate waterfall `user-questions/request` — **needs-plugin** on phone.
+Ask-user tool (`ui-user-questions`): waterfall `user-questions/request` — **done** (push `user-question` + `userQuestions.answer`).
 
 ### 1.6 Attachments
 
 Composer images/files: `conversation.attachment.*`, `conversation.image.*`, `conversation.file.*`.  
 Data: `prompt` content parts (`text` / `image`); desktop also stages files via Host attachment APIs.  
-Phone: image picker → `prompt` images (done). Folder attach = **hide** (desktop-only). Non-image file stage = **needs-plugin** (`session.attachment` / upload).
+Phone: image picker → `prompt` images (done). Non-image files via `attachments.upload` + `prompt` files (done). Folder attach = **hide** (desktop-only).
 
 ### 1.7 @-mentions & /commands
 
@@ -97,7 +97,7 @@ Phone: image picker → `prompt` images (done). Folder attach = **hide** (deskto
 | Mentions | `reference.*` | `@file` / `@session` via ui-reference |
 | Built-ins | goal/plan/feedback/compact/permission/export labels in `ui-commands` | `commands.execute` |
 
-Phone today: placeholders + Plus sheet for built-ins. Live `/` popup and `@` mention search = **feasible** (commands) / **needs-plugin** (file mention index).
+Phone: Plus sheet + live `/` CommandPopupSheet + `@` MentionPopupSheet (`references.files` / `references.sessions`, insert into composer) — **done**.
 
 ### 1.8 Message actions (copy / like / retry / fork)
 
