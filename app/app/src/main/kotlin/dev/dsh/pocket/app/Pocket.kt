@@ -16,6 +16,7 @@ enum class Dot { Online, Connecting, Offline, Unauthorized }
 data class ChatState(
     val sessionId: String,
     val items: List<Item> = emptyList(),
+    val steps: List<StepRecord> = emptyList(),
     val title: String? = null,
     val running: Boolean = false,
     val usage: Usage = Usage(0, 0, 0, 0, 0),
@@ -176,7 +177,7 @@ object Pocket {
                     // session status before / without a folded turn/end; mirror idle into the open chat.
                     if (!r) chat.value?.takeIf { it.sessionId == id && it.running }?.let { st ->
                         reducer.markIdle()
-                        chat.value = st.copy(running = false, runStartedAt = null, items = reducer.items())
+                        chat.value = st.copy(running = false, runStartedAt = null, items = reducer.items(), steps = reducer.stepRecords())
                     }
                     client?.let { c -> main.launch { refreshTitles(c); if (!r) { delay(4000); refreshTitles(c) } } } }
                 "activity" -> { val id = m["sessionId"].str(); val t = m["updatedAt"].long() ?: 0
@@ -218,8 +219,15 @@ object Pocket {
         val st = chat.value ?: return
         val wasRunning = reducer.running
         reducer.apply(f)
-        chat.value = st.copy(items = reducer.items(), title = reducer.title ?: st.title, running = reducer.running, usage = reducer.usage, loaded = true,
-            runStartedAt = if (reducer.running) (if (wasRunning) st.runStartedAt else System.currentTimeMillis()) else null)
+        chat.value = st.copy(
+            items = reducer.items(),
+            steps = reducer.stepRecords(),
+            title = reducer.title ?: st.title,
+            running = reducer.running,
+            usage = reducer.usage,
+            loaded = true,
+            runStartedAt = if (reducer.running) (if (wasRunning) st.runStartedAt else System.currentTimeMillis()) else null,
+        )
     }
 
     private suspend fun refollow(c: PocketClient, sessionId: String, afterSeq: Long?) {
@@ -262,7 +270,7 @@ object Pocket {
 
     private fun echo(text: String) {
         reducer.echo(text)
-        chat.value?.let { chat.value = it.copy(items = reducer.items()) }
+        chat.value?.let { chat.value = it.copy(items = reducer.items(), steps = reducer.stepRecords()) }
     }
 
     /** dsh titles a session asynchronously after the first turn; the list is the source of truth. */

@@ -24,6 +24,33 @@ data class Usage(val turns: Int, val steps: Int, val inputTokens: Long, val cach
     val cacheHitPercent: Int? get() = if (inputTokens > 0) ((cacheReadTokens * 100) / inputTokens).toInt() else null
 }
 
+/** Per-step token counts from `assistant/message` usage (desktop trajectory cell fields). */
+data class StepUsage(
+    val inputTokens: Long? = null,
+    val cacheReadTokens: Long? = null,
+    val cacheWriteTokens: Long? = null,
+    val outputTokens: Long? = null,
+    val reasoningTokens: Long? = null,
+)
+
+/**
+ * One settled assistant step for the Trajectory tab (desktop ui-trajectory message cell).
+ * Captured on `step/start` + `assistant/message`; chat [Item]s stay separate for the transcript.
+ */
+data class StepRecord(
+    val seq: Long,
+    val turn: Int,
+    val step: Int,
+    val stepStartTime: Long?,
+    val messageTime: Long?,
+    val replyText: String,
+    val reasoningText: String,
+    val usage: StepUsage,
+    val provider: String?,
+    val model: String?,
+    val toolCallIds: List<String>,
+)
+
 /**
  * Folds dsh SessionFollowFrames (snapshot/resume/event/assistant-stream, passed through by
  * dsh-plugin-pocket) into [Item]s. Pure and deterministic: no Android dependencies.
@@ -34,6 +61,8 @@ class TranscriptReducer {
     private val approvalCall = HashMap<String, String>()
     private val userByRpc = HashMap<String, Int>()
     private val localEchoes = ArrayList<Pair<Int, String>>()
+    private val stepStartTimes = HashMap<String, Long>()
+    private val settledSteps = ArrayList<StepRecord>()
     private var live: LiveAttempt? = null
     var cursor: Long = -1; private set
     var title: String? = null; private set
@@ -45,6 +74,7 @@ class TranscriptReducer {
     private var outputTokens = 0L
 
     val usage get() = Usage(turns, steps, inputTokens, cacheRead, outputTokens)
+    fun stepRecords(): List<StepRecord> = settledSteps.toList()
 
     fun items(): List<Item> = committed + (live?.items() ?: emptyList())
 
@@ -62,7 +92,8 @@ class TranscriptReducer {
     }
 
     private fun reset() {
-        committed.clear(); toolIndex.clear(); approvalCall.clear(); userByRpc.clear(); localEchoes.clear(); live = null; cursor = -1
+        committed.clear(); toolIndex.clear(); approvalCall.clear(); userByRpc.clear(); localEchoes.clear()
+        stepStartTimes.clear(); settledSteps.clear(); live = null; cursor = -1
         turns = 0; steps = 0; inputTokens = 0; cacheRead = 0; outputTokens = 0; running = false
     }
 
@@ -95,6 +126,11 @@ class TranscriptReducer {
         when (e["type"].str()) {
             "turn/start" -> { turns++; running = true }
             "turn/end" -> { running = false; live = null }
+            "step/start" -> {
+                val turn = data["turn"].long()?.toInt() ?: turns
+                val step = data["step"].long()?.toInt() ?: (steps + 1)
+                e["time"].long()?.let { stepStartTimes["$turn:$step"] = it }
+            }
             "user/message" -> {
                 val msg = if (data["content"] != null) data else data["message"]
                 if (!isTyped(msg)) return
@@ -105,19 +141,59 @@ class TranscriptReducer {
             "assistant/message" -> {
                 steps++
                 live = null
+                val turn = data["turn"].long()?.toInt() ?: turns
+                val step = data["step"].long()?.toInt() ?: steps
+                val messageTime = e["time"].long()
+                val stepStartTime = stepStartTimes.remove("$turn:$step")
                 val timing = reasoningTiming(data["stream"])
+                val replyParts = ArrayList<String>()
+                val reasoningParts = ArrayList<String>()
+                val toolCallIds = ArrayList<String>()
                 data["message"]["content"].arr().orEmpty().forEachIndexed { i, b ->
                     when (b["type"].str()) {
-                        "reasoning" -> committed += Item.Reasoning("r$seq.$i", b["text"].str().orEmpty(), timing, live = false)
-                        "text" -> b["text"].str()?.takeIf { it.isNotBlank() }?.let { committed += Item.Text("t$seq.$i", it, live = false) }
-                        "tool-call" -> upsertTool(b["id"].str() ?: "c$seq.$i", b["name"].str().orEmpty(), b["arguments"].str().orEmpty(), e["time"].long())
+                        "reasoning" -> {
+                            val text = b["text"].str().orEmpty()
+                            reasoningParts += text
+                            committed += Item.Reasoning("r$seq.$i", text, timing, live = false)
+                        }
+                        "text" -> b["text"].str()?.takeIf { it.isNotBlank() }?.let {
+                            replyParts += it
+                            committed += Item.Text("t$seq.$i", it, live = false)
+                        }
+                        "tool-call" -> {
+                            val id = b["id"].str() ?: "c$seq.$i"
+                            toolCallIds += id
+                            upsertTool(id, b["name"].str().orEmpty(), b["arguments"].str().orEmpty(), e["time"].long())
+                        }
                     }
                 }
-                data["usage"]?.let { u ->
-                    outputTokens += u["outputTokens"].long() ?: 0
-                    inputTokens += (u["inputTokens"].long() ?: 0) + (u["cacheReadTokens"].long() ?: 0)
-                    cacheRead += u["cacheReadTokens"].long() ?: 0
+                val u = data["usage"]
+                val stepUsage = StepUsage(
+                    inputTokens = u["inputTokens"].long(),
+                    cacheReadTokens = u["cacheReadTokens"].long(),
+                    cacheWriteTokens = u["cacheWriteTokens"].long(),
+                    outputTokens = u["outputTokens"].long(),
+                    reasoningTokens = u["reasoningTokens"].long(),
+                )
+                u?.let {
+                    outputTokens += it["outputTokens"].long() ?: 0
+                    inputTokens += (it["inputTokens"].long() ?: 0) + (it["cacheReadTokens"].long() ?: 0)
+                    cacheRead += it["cacheReadTokens"].long() ?: 0
                 }
+                val source = data["message"]["source"]
+                settledSteps += StepRecord(
+                    seq = seq,
+                    turn = turn,
+                    step = step,
+                    stepStartTime = stepStartTime,
+                    messageTime = messageTime,
+                    replyText = replyParts.joinToString("\n\n"),
+                    reasoningText = reasoningParts.joinToString("\n\n"),
+                    usage = stepUsage,
+                    provider = source["provider"].str(),
+                    model = source["model"].str(),
+                    toolCallIds = toolCallIds,
+                )
                 if (data["interrupted"].bool() == true) committed += Item.Notice("i$seq", "已中断")
             }
             "tool/call" -> upsertTool(data["callId"].str() ?: "c$seq", data["name"].str().orEmpty(), data["arguments"].str().orEmpty(), e["time"].long())
