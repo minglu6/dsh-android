@@ -91,7 +91,7 @@ class ScreenshotTest {
     @Test fun s04_drawer() = show("04-drawer") { SessionDrawer({}, {}, {}, {}) }
     @Test fun s05_connections() = show("05-connections") { ConnectionsScreen(null, {}, true, {}, {}) }
     @Test fun s06_connectionsEmpty() { Pocket.profiles.value = emptyList(); Pocket.active.value = null; show("06-connections-empty") { ConnectionsScreen(null, {}, false, {}, {}) } }
-    @Test fun s07_pairSheet() { Pocket.profiles.value = emptyList(); showWithDialogs("07-pair-sheet") { PairSheet(PairingLink("abcdefghijklmnopqrstuv", "752314"), {}, {}) } }
+    @Test fun s07_pairSheet() { Pocket.profiles.value = emptyList(); showWithDialogs("07-pair-sheet") { PairSheet(PairingLink.Iroh("abcdefghijklmnopqrstuv", "752314"), {}, {}) } }
     @Test fun s07b_cameraPermissionSheet() = showWithDialogs("07b-camera-permission") { CameraPermissionSheet({}, {}) }
     @Test fun s08_settings() = show("08-settings") { SettingsScreen({}, {}, {}) }
     @Test fun s09_general() = show("09-general-settings") { GeneralSettingsScreen {} }

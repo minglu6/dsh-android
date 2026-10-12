@@ -59,6 +59,7 @@ test('management routes: status, pair, rename, revoke, Origin fence', async (t) 
   const manage = createManageApi({
     host, port, devices, pairing, server, openPairing,
     getNodeId: () => NODE,
+    getTransport: () => 'iroh',
   })
 
   // Minimal fake webServer.register that mounts onto a real http server

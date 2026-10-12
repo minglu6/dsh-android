@@ -1,10 +1,11 @@
 # dsh-android bridge. Config fields (all optional):
-#   host: 127.0.0.1    loopback WS for local/dev only (phones use iroh)
+#   transport: iroh|tailscale   remote path (default iroh; UI persists last choice unless set here)
+#   host: 127.0.0.1             WS bind; Tailscale mode → set to Tailscale IP / MagicDNS
 #   port: 7690
-#   token: <string>    fixed token; otherwise one is generated into $DSH_HOME/pocket/token
+#   token: <string>             fixed token; otherwise one is generated into $DSH_HOME/pocket/token
 #   dataDir: <path>
-#   iroh: true         spawn pocket-host sidecar (default true; required for phone pairing)
-#   hostBinary: <path> override path to pocket-host
+#   iroh: true                  spawn pocket-host sidecar (default true)
+#   hostBinary: <path>          override path to pocket-host
 - insert:
     - id: dsh-pocket
       name: dsh-plugin-pocket

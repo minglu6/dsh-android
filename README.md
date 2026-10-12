@@ -1,12 +1,12 @@
 # dsh-android
 
-[DeepSeek Harness（dsh）](https://github.com/deepseek-ai/deepseek-harness) 的原生 Android 客户端，用 Kotlin 和 Jetpack Compose 开发。手机端界面按手机屏幕重新设计，视觉风格沿用 dsh 官方。连接走 **iroh P2P**（打洞失败自动中继），不依赖 Tailscale / 共享局域网。
+[DeepSeek Harness（dsh）](https://github.com/deepseek-ai/deepseek-harness) 的原生 Android 客户端，用 Kotlin 和 Jetpack Compose 开发。手机端界面按手机屏幕重新设计，视觉风格沿用 dsh 官方。远程连接可在 **iroh**（打洞失败走东京自建 relay）与 **Tailscale** 之间显式选择，互不兜底。
 
 ## 目录结构
 
 | 目录 | 内容 |
 |---|---|
-| `plugin/` | `dsh-plugin-pocket`：装在电脑端 dsh 里的桥接插件，给手机提供带鉴权的 JSON 协议（经 iroh） |
+| `plugin/` | `dsh-plugin-pocket`：装在电脑端 dsh 里的桥接插件，给手机提供带鉴权的 JSON 协议（iroh 或 Tailscale） |
 | `app/` | Android App：`core/protocol`（纯 JVM 协议客户端与会话折叠）+ `app`（Compose 界面），见 [app/README.md](app/README.md) |
 | `docs/` | 设计文档 [design.md](docs/design.md)、dsh 接口笔记 [api-notes.md](docs/api-notes.md)、[界面设计稿](docs/mockups/)（示意图） |
 
@@ -18,13 +18,13 @@
 git clone https://github.com/minglu6/dsh-android && cd dsh-android/plugin && npm install && npm run build:iroh
 dsh plugin --profile web add "$PWD"
 dsh web
-# 日志：[pocket] iroh ready, node id: …
-# 设置 →「手机连接」出示 QR / 配对串（nodeId#code）
+# 日志：[pocket] remote transport: iroh
+# 设置 →「手机连接」选择 iroh 或 Tailscale，出示对应 QR / 配对串
 ```
 
-`npm run build:iroh` 是桌面 sidecar 的一行安装（需 [rustup](https://rustup.rs)）。不跑也可以：插件启动时会尝试下载 CI 预编译包或自动 `cargo build`。没有 sidecar 时无法远程配对手机。
+`npm run build:iroh` 是桌面 sidecar 的一行安装（需 [rustup](https://rustup.rs)）。不跑也可以：插件启动时会尝试下载 CI 预编译包或自动 `cargo build`。iroh 模式没有 sidecar 时无法远程配对；Tailscale 模式只需 WS 监听 Tailscale IP。
 
-`dsh web`（以及桌面 App）在 **设置 →「手机连接」** 管理配对码 / QR / 设备。
+`dsh web`（以及桌面 App）在 **设置 →「手机连接」** 管理传输模式 / 配对码 / QR / 设备。配对格式见 [plugin/README.md](plugin/README.md)。
 
 ## 进度
 
@@ -32,5 +32,5 @@ dsh web
 - [x] M1：审批转发、设备配对、断点续订
 - [x] M1.5：dsh 内管理 UI（设置「手机连接」分区）
 - [x] M2：Android App。最新调试包：[dsh-android-debug.apk](https://github.com/minglu6/dsh-android/releases/download/dsh-android-latest/dsh-android-debug.apk)
-- [x] M3：iroh P2P 和中继（纯 iroh；打洞失败自动 relay）。配对串 `nodeId#code` / QR `dshpocket://pair?n=…&c=…`
+- [x] M3：iroh P2P + 东京 relay；用户可选 **iroh 或 Tailscale**（互不兜底）
 - [ ] M4：手机本地模式

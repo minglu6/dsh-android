@@ -10,6 +10,10 @@ import java.util.concurrent.atomic.AtomicBoolean
 enum class Route {
     /** Loopback / local-dev WebSocket only — not user-facing. */
     WsLocal,
+    /** Remote WebSocket over Tailscale (MagicDNS or CGNAT 100.x). */
+    WsTailscale,
+    /** Remote WebSocket that is not clearly Tailscale (LAN / other). */
+    WsLan,
     IrohDirect,
     IrohRelay,
     ;
@@ -17,6 +21,8 @@ enum class Route {
     /** Short label for the connections chip (no emoji). */
     val label: String get() = when (this) {
         WsLocal -> "local"
+        WsTailscale -> "Tailscale"
+        WsLan -> "LAN"
         IrohDirect -> "iroh"
         IrohRelay -> "iroh relay"
     }
@@ -44,7 +50,8 @@ fun interface TransportFactory {
 
 /**
  * Try factories in order; return the first that opens.
- * Primary path is iroh; WS is only used for loopback/dev.
+ * Callers must pass factories for **one** [RemoteTransport] only — never
+ * Tailscale WS and iroh together (no cross-mode fallback).
  */
 suspend fun dialInOrder(factories: List<TransportFactory>): FrameTransport {
     require(factories.isNotEmpty()) { "no transports" }
@@ -64,7 +71,14 @@ suspend fun dialInOrder(factories: List<TransportFactory>): FrameTransport {
 fun isLoopbackHost(host: String): Boolean =
     host == "127.0.0.1" || host == "localhost" || host == "::1" || host.equals("0:0:0:0:0:0:0:1", ignoreCase = true)
 
-/** OkHttp WebSocket frame transport (loopback/dev only). */
+fun classifyWsRoute(host: String): Route {
+    if (isLoopbackHost(host)) return Route.WsLocal
+    if (host.endsWith(".ts.net")) return Route.WsTailscale
+    val p = host.split('.').mapNotNull { it.toIntOrNull() }
+    return if (p.size == 4 && p[0] == 100 && p[1] in 64..127) Route.WsTailscale else Route.WsLan
+}
+
+/** OkHttp WebSocket frame transport. */
 class WsTransport private constructor(
     private val url: String,
     override val route: Route,
@@ -119,22 +133,43 @@ class WsTransport private constructor(
             t
         }
 
+        /** Loopback / local-dev factory. */
         fun factory(url: String): TransportFactory = TransportFactory {
             open(url, Route.WsLocal)
+        }
+
+        /** Remote WS factory (Tailscale / LAN); route label from [host]. */
+        fun factory(url: String, host: String): TransportFactory = TransportFactory {
+            open(url, classifyWsRoute(host))
         }
     }
 }
 
 /**
- * Ordered transports for a profile: **iroh first**, then loopback WS if configured for tests.
+ * Build factories for **exactly one** remote mode.
+ *
+ * - [RemoteTransport.Iroh]: iroh only (optional loopback WS for tests). Never remote Tailscale WS.
+ * - [RemoteTransport.Tailscale]: remote WS only. Never iroh.
  */
 fun transportPlan(
-    nodeId: String?,
-    irohFactory: TransportFactory?,
+    remote: RemoteTransport,
+    nodeId: String? = null,
+    host: String? = null,
+    port: Int = 0,
+    irohFactory: TransportFactory? = null,
     loopbackWsUrl: String? = null,
-): List<TransportFactory> {
-    val list = mutableListOf<TransportFactory>()
-    if (!nodeId.isNullOrBlank() && irohFactory != null) list += irohFactory
-    if (!loopbackWsUrl.isNullOrBlank()) list += WsTransport.factory(loopbackWsUrl)
-    return list
+): List<TransportFactory> = when (remote) {
+    RemoteTransport.Iroh -> {
+        val list = mutableListOf<TransportFactory>()
+        if (!nodeId.isNullOrBlank() && irohFactory != null) list += irohFactory
+        if (!loopbackWsUrl.isNullOrBlank()) list += WsTransport.factory(loopbackWsUrl)
+        list
+    }
+    RemoteTransport.Tailscale -> {
+        if (host.isNullOrBlank() || port !in 1..65535) emptyList()
+        else {
+            val url = "ws://${if (':' in host) "[$host]" else host}:$port"
+            listOf(WsTransport.factory(url, host))
+        }
+    }
 }

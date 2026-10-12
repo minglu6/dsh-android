@@ -4,6 +4,7 @@ import android.content.Context
 import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
 import android.util.Base64
+import dev.dsh.pocket.protocol.RemoteTransport
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.json.Json
@@ -43,22 +44,48 @@ class SecureTokenStore(ctx: Context) {
     fun remove(profileId: String) = prefs.edit().remove(profileId).apply()
 }
 
+/**
+ * Persisted remote path for a profile.
+ * `"iroh"` | `"tailscale"` | `""` (legacy: infer from nodeId / host+port).
+ */
 @Serializable
 data class Profile(
     val id: String,
     val name: String,
-    /** Desktop iroh endpoint id. Blank means a pre-iroh (Tailscale/LAN) profile that must re-pair. */
+    /** Explicit mode; blank = infer from fields (pre-dual-mode prefs). */
+    val transport: String = "",
+    /** Desktop iroh endpoint id (iroh mode). */
     val nodeId: String = "",
     val deviceId: String? = null,
-    /** Legacy fields retained for prefs deserialization; unused for dial. */
+    /** Tailscale / WS listen address (Tailscale mode). */
     val host: String = "",
     val port: Int = 0,
 ) {
-    val needsRepair: Boolean get() = nodeId.isBlank()
-    val kind: String get() = if (needsRepair) "需重新配对" else "iroh"
+    val remote: RemoteTransport get() = when (transport) {
+        "tailscale" -> RemoteTransport.Tailscale
+        "iroh" -> RemoteTransport.Iroh
+        else -> when {
+            nodeId.isNotBlank() -> RemoteTransport.Iroh
+            host.isNotBlank() && port in 1..65535 -> RemoteTransport.Tailscale
+            else -> RemoteTransport.Iroh
+        }
+    }
+
+    val needsRepair: Boolean get() = when (remote) {
+        RemoteTransport.Iroh -> nodeId.isBlank()
+        RemoteTransport.Tailscale -> host.isBlank() || port !in 1..65535
+    }
+
+    val kind: String get() = when {
+        needsRepair -> "需重新配对"
+        remote == RemoteTransport.Tailscale -> "Tailscale"
+        else -> "iroh"
+    }
+
     /** One-line subtitle on the connections list. */
     val subtitle: String get() = when {
-        needsRepair -> "旧连接已停用，请重新扫码配对"
+        needsRepair -> "连接信息不完整，请重新配对"
+        remote == RemoteTransport.Tailscale -> "$host:$port"
         nodeId.length > 16 -> nodeId.take(12) + "…"
         else -> nodeId
     }
@@ -120,4 +147,11 @@ class AppPrefs(ctx: Context) {
     var performanceUsage: PerformanceUsage
         get() = runCatching { PerformanceUsage.valueOf(p.getString("performanceUsage", null) ?: "Detailed") }.getOrDefault(PerformanceUsage.Detailed)
         set(v) = p.edit().putString("performanceUsage", v.name).apply()
+    /** Default mode when opening a blank pair sheet (persisted last choice). */
+    var preferredTransport: RemoteTransport
+        get() = when (p.getString("preferredTransport", null)) {
+            "Tailscale" -> RemoteTransport.Tailscale
+            else -> RemoteTransport.Iroh
+        }
+        set(v) = p.edit().putString("preferredTransport", v.name).apply()
 }

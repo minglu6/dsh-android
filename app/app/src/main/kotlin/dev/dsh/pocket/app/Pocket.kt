@@ -84,12 +84,21 @@ object Pocket {
 
     private fun factoriesFor(p: Profile): List<TransportFactory> {
         if (p.needsRepair) return emptyList()
-        val iroh = irohDir?.let { dir -> IrohTransport.factory(p.nodeId, dir) }
-        // Loopback WS only when a legacy/test profile still points at localhost.
-        val loopback = p.host.takeIf { isLoopbackHost(it) && p.port in 1..65535 }?.let {
-            "ws://${if (':' in it) "[$it]" else it}:${p.port}"
+        return when (p.remote) {
+            RemoteTransport.Iroh -> {
+                val iroh = irohDir?.let { dir -> IrohTransport.factory(p.nodeId, dir) }
+                // Loopback WS only for local/dev iroh profiles — never remote Tailscale WS.
+                val loopback = p.host.takeIf { isLoopbackHost(it) && p.port in 1..65535 }?.let {
+                    "ws://${if (':' in it) "[$it]" else it}:${p.port}"
+                }
+                transportPlan(RemoteTransport.Iroh, nodeId = p.nodeId, irohFactory = iroh, loopbackWsUrl = loopback)
+            }
+            RemoteTransport.Tailscale -> transportPlan(
+                RemoteTransport.Tailscale,
+                host = p.host,
+                port = p.port,
+            )
         }
-        return transportPlan(p.nodeId, iroh, loopback)
     }
 
     private suspend fun runConnection(profileId: String) {
@@ -107,10 +116,15 @@ object Pocket {
                 val factories = factoriesFor(p)
                 if (factories.isEmpty()) {
                     setDot(p.id, Dot.Offline)
-                    errors.tryEmit("iroh 不可用：请确认 APK 含原生库，或重新配对")
+                    errors.tryEmit(
+                        when (p.remote) {
+                            RemoteTransport.Iroh -> "iroh 不可用：请确认 APK 含原生库，或重新配对"
+                            RemoteTransport.Tailscale -> "Tailscale 地址无效，请重新配对"
+                        },
+                    )
                     return
                 }
-                // Pure iroh (direct→relay); WS only if loopback for local/dev.
+                // One mode only — never dial Tailscale then iroh (or the reverse).
                 val hello = c.connect(factories, Auth.Token(token))
                 client = c; ops.value = hello.ops
                 setRoute(p.id, c.route ?: hello.route)
@@ -347,13 +361,19 @@ object Pocket {
         terminalSubId = null
     }
 
-    /** Pair over iroh: exchanges the 6-digit code for a device token and saves a profile. */
-    suspend fun pair(name: String, nodeId: String, code: String): Result<Profile> = withContext(Dispatchers.IO) {
+    /** Pair using an already-parsed [PairingLink] (mode implied by the link). */
+    suspend fun pair(name: String, link: PairingLink): Result<Profile> = when (link) {
+        is PairingLink.Iroh -> pairIroh(name, link.nodeId, link.code)
+        is PairingLink.Tailscale -> pairTailscale(name, link.host, link.port, link.code)
+    }
+
+    /** Pair over iroh only (Tokyo relay may be used inside iroh pathing). */
+    suspend fun pairIroh(name: String, nodeId: String, code: String): Result<Profile> = withContext(Dispatchers.IO) {
         if (nodeId.isBlank()) return@withContext Result.failure(Exception("配对串不完整：需要桌面端显示的整行或扫码"))
         if (!IrohNative.available) return@withContext Result.failure(Exception("本机缺少 iroh 原生库，无法配对"))
         val c = PocketClient()
         try {
-            val draft = Profile("", name.ifBlank { "电脑" }, nodeId = nodeId)
+            val draft = Profile("", name.ifBlank { "电脑" }, transport = "iroh", nodeId = nodeId)
             val factories = factoriesFor(draft)
             if (factories.isEmpty()) return@withContext Result.failure(Exception("无法建立 iroh 连接"))
             val hello = c.connect(factories, Auth.Pair(code, Build.MODEL ?: "Android"))
@@ -361,11 +381,16 @@ object Pocket {
             val p = Profile(
                 id = UUID.randomUUID().toString(),
                 name = name.ifBlank { "电脑" },
+                transport = "iroh",
                 nodeId = nodeId,
                 deviceId = hello.deviceId,
             )
             tokens.put(p.id, token)
-            withContext(main.coroutineContext) { profiles.value = profiles.value + p; prefs.profiles = profiles.value }
+            withContext(main.coroutineContext) {
+                prefs.preferredTransport = RemoteTransport.Iroh
+                profiles.value = profiles.value + p
+                prefs.profiles = profiles.value
+            }
             Result.success(p)
         } catch (e: PocketError) {
             Result.failure(Exception(when {
@@ -379,16 +404,68 @@ object Pocket {
         } finally { c.close() }
     }
 
+    /** Pair over Tailscale / remote WS only — never falls back to iroh. */
+    suspend fun pairTailscale(name: String, host: String, port: Int, code: String): Result<Profile> = withContext(Dispatchers.IO) {
+        if (host.isBlank() || port !in 1..65535) {
+            return@withContext Result.failure(Exception("地址无效：需要 host:port（如 Tailscale IP）"))
+        }
+        val c = PocketClient()
+        try {
+            val draft = Profile("", name.ifBlank { "电脑" }, transport = "tailscale", host = host, port = port)
+            val factories = factoriesFor(draft)
+            if (factories.isEmpty()) return@withContext Result.failure(Exception("无法建立 WebSocket 连接"))
+            val hello = c.connect(factories, Auth.Pair(code, Build.MODEL ?: "Android"))
+            val token = hello.issuedToken ?: error("服务端未返回令牌")
+            val p = Profile(
+                id = UUID.randomUUID().toString(),
+                name = name.ifBlank { host },
+                transport = "tailscale",
+                host = host,
+                port = port,
+                deviceId = hello.deviceId,
+            )
+            tokens.put(p.id, token)
+            withContext(main.coroutineContext) {
+                prefs.preferredTransport = RemoteTransport.Tailscale
+                profiles.value = profiles.value + p
+                prefs.profiles = profiles.value
+            }
+            Result.success(p)
+        } catch (e: PocketError) {
+            Result.failure(Exception(when {
+                e.code.contains("expired") -> "配对码已过期"
+                e.code.startsWith("pair/") -> "配对码错误或未开启配对"
+                e.code == "transport" -> "无法经 Tailscale/WS 连上桌面端，请确认电脑已打开配对且手机在同一 tailnet"
+                else -> e.message
+            }))
+        } catch (e: Exception) {
+            Result.failure(Exception(e.message ?: "配对失败"))
+        } finally { c.close() }
+    }
+
     fun removeProfile(id: String) = main.launch {
         if (active.value == id) { connJob?.cancel(); client?.close(); client = null; active.value = null; prefs.activeProfile = null; sessions.value = emptyList(); chat.value = null }
         tokens.remove(id); profiles.value = profiles.value.filter { it.id != id }; prefs.profiles = profiles.value
     }
 
-    /** Soft probe for inactive profiles (iroh profiles stay Offline until selected). */
+    /** Soft probe: Tailscale profiles get a TCP check; iroh stays offline until selected. */
     fun probe() = main.launch {
         profiles.value.filter { it.id != active.value }.forEach { p ->
-            if (p.needsRepair || tokens.get(p.id) == null) setDot(p.id, Dot.Unauthorized)
-            else if (status.value[p.id] == null) setDot(p.id, Dot.Offline)
+            if (p.needsRepair || tokens.get(p.id) == null) {
+                setDot(p.id, Dot.Unauthorized)
+                return@forEach
+            }
+            when (p.remote) {
+                RemoteTransport.Iroh -> if (status.value[p.id] == null) setDot(p.id, Dot.Offline)
+                RemoteTransport.Tailscale -> launch(Dispatchers.IO) {
+                    val ok = runCatching {
+                        java.net.Socket().use { it.connect(java.net.InetSocketAddress(p.host, p.port), 2500) }
+                    }.isSuccess
+                    if (p.id != active.value) {
+                        setDot(p.id, if (ok) Dot.Online else Dot.Offline)
+                    }
+                }
+            }
         }
     }
 }
