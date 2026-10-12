@@ -1,0 +1,26 @@
+name: ci
+on:
+  push: { branches: [main] }
+  pull_request:
+jobs:
+  plugin:
+    runs-on: ubuntu-latest
+    defaults: { run: { working-directory: plugin } }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22 }
+      - run: npm install
+      - run: npm run lint
+      - run: npm test
+  integration:
+    runs-on: ubuntu-latest
+    defaults: { run: { working-directory: plugin } }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22 }
+      - run: npm install
+      - run: npm install -g @deepseek-ai/dsh@0.2.1-alpha.2
+      - run: dsh --version
+      - run: npm run test:integration
