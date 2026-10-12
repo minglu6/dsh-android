@@ -43,6 +43,13 @@ export function createDeviceStore({ dataDir, ownerToken, persist = true, now = D
       return { deviceId: d.id, token }
     },
     list: () => devices.map(({ id, name, createdAt, lastSeenAt }) => ({ id, name, createdAt, lastSeenAt })),
+    rename(id, name) {
+      const d = devices.find((x) => x.id === id)
+      if (!d) return false
+      d.name = String(name || 'device').slice(0, 64)
+      save()
+      return true
+    },
     revoke(id) {
       const before = devices.length
       devices = devices.filter((d) => d.id !== id)

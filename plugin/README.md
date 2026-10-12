@@ -22,11 +22,36 @@ dsh web
     # token: 固定 token；不填则使用自动生成的那个
 ```
 
+## 管理 UI（桌面 / `dsh web`）
+
+插件通过官方 **client half**（`dsh.client` + `exports["./client"]`）挂到 dsh 的 slot 体系，**不**使用 `tapIndex` HTML 注入（桌面端 Electron 读自己的 `file://` index，只认结构化 index injection / client modules）：
+
+| 入口 | Slot | 作用 |
+|---|---|---|
+| 侧栏底部「手机连接」 | `sidebar.footer.action` | 与「设置」并列，一点即开管理面板 |
+| 设置页「手机连接」 | `settings.section` | 同一套管理面板嵌在设置里 |
+| 浮层 | `shell.overlay` | 配对码倒计时、QR、设备列表 |
+
+面板功能：
+- 桥接状态（是否在跑、监听地址、插件版本）
+- 打开配对窗口：6 位码 + 倒计时 + `dshpocket://pair?…` 二维码
+- 已配对设备：名称、最近活跃、是否在线；可重命名 / 撤销
+
+文案走 `ctx.locale.register('pocket', { zh, en })`，跟随 dsh 的语言设置。样式只用 `--dsw-alias-*` 主题 token。
+
+桌面 App（`~/.dsh/profiles/desktop`）与 `dsh web` 共用同一套 client module 加载器：Host 把 `dsh.client` 包打进 boot 图（结构化 `IndexInjection`），Desktop 的 IPC fetch 仍能打到 Host 上的 `/pocket/*` 管理路由。因此本 UI **预期在桌面端同样可用**（证据见上文扩展点与 `@deepseek-ai/dsh-host-webserver` / `dsh-client-modules` 文档；本仓库在 CI / 本地用真实 `dsh web` 验证）。
+
+开发时改完 `src/client/**` 后需 `npm run build:client` 生成 `lib/client.js`（lazy-CJS `window.__ModuleLoader__.load` 格式）。
+
 ## 配对（M1）
 
-首次启动且还没有任何已配对设备时，会自动打开一个配对窗口，日志里打印 6 位配对码。配对码 10 分钟内有效，最多试 3 次，用一次就作废。之后要再开窗口，有三种方式：
+首次启动且还没有任何已配对设备时，会自动打开一个配对窗口，日志里打印 6 位配对码。配对码 10 分钟内有效，最多试 3 次，用一次就作废。之后要再开窗口，有四种方式：
+- **管理 UI**：侧栏「手机连接」或设置页同名分区（推荐）
 - CLI：`node bin/pocket.js pair`，用本机的 owner token 连上插件后打开窗口；`node bin/pocket.js devices` 查看设备，`node bin/pocket.js revoke <id>` 撤销设备
-- dsh 网页端口上的路由（只接受本机请求，拒绝跨站 Origin）：`curl -X POST http://127.0.0.1:<dsh端口>/pocket/pair`，`GET`/`POST /pocket/devices`
+- dsh 网页端口上的管理路由（Host 必须是回环权威，拒绝 `sec-fetch-site: cross-site` 与跨站 Origin）：
+  - `GET /pocket/status` — 运行状态 / 监听地址 / 版本 / 设备（含 online）
+  - `POST /pocket/pair` 打开窗口，`GET` 查状态（含 code），`DELETE` 关闭
+  - `GET /pocket/devices` 列表；`POST` `{id}` 撤销；`PATCH` `{id,name}` 重命名
 - 在 patch 配置里写 `pair: true`
 
 手机发送 `{"op":"pair","args":{"proto":1,"code":"123456","name":"Pixel"}}` 完成配对，会拿到 `{deviceId, token}`，之后用 `hello` 带这个 token 登录。服务端只保存 token 的 sha256，写在 `$DSH_HOME/pocket/devices.json`，权限 0600。owner token（文件 `pocket/token`）只给本机 CLI 用，只有它能打开配对窗口。
@@ -80,6 +105,8 @@ dsh 发起 `approval/request` 时，如果有已登录的设备在线，插件�
 ## 开发
 
 ```bash
-npm install && npm run lint && npm test
+npm install
+npm run build:client       # 生成 lib/client.js
+npm run lint && npm test
 npm run test:integration   # 需要 PATH 上有 dsh 0.2.1-alpha.2（Node ≥22.19）
 ```

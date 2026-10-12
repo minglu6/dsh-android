@@ -24,10 +24,13 @@ dsh web
 
 如果要通过 Tailscale 远程连接，把监听地址改成你的 tailnet IP。配置方法见 [plugin/README.md](plugin/README.md)。
 
+`dsh web`（以及桌面 App）侧栏底部会多一个「手机连接」入口，可打开配对码 / QR、查看与重命名 / 撤销已配对设备。详见 [plugin/README.md](plugin/README.md)「管理 UI」。
+
 ## 进度
 
 - [x] M0：插件骨架。支持会话列表、新建、重命名，发消息（排队或引导），取消，订阅流，翻历史，模型列表和切换，心跳，token 鉴权
 - [x] M1：审批转发（手机和网页端谁先答算谁的）、设备配对（6 位码、按设备发 token、设备列表和撤销）、断点续订
+- [x] M1.5：dsh 内管理 UI（侧栏「手机连接」+ 设置分区；状态 / 配对码+QR / 设备重命名与撤销）
 - [x] M2：Android App（WebSocket 连接）。最新调试包：[dsh-android-debug.apk](https://github.com/minglu6/dsh-android/releases/download/dsh-android-latest/dsh-android-debug.apk)
 - [ ] M3：iroh P2P 和中继
 - [ ] M4：手机本地模式
