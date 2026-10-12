@@ -34,7 +34,7 @@ import kotlinx.coroutines.launch
 @Composable
 private fun Header(title: String, onBack: (() -> Unit)?) {
     Row(Modifier.fillMaxWidth().height(56.dp).padding(horizontal = 6.dp), verticalAlignment = Alignment.CenterVertically) {
-        if (onBack != null) IconButton(onBack) { Icon(Icons.Rounded.ChevronLeft, "返回", tint = T.Ink) } else Spacer(Modifier.width(16.dp))
+        if (onBack != null) IconButton(onBack) { Icon(D.chevronLeft, "返回", tint = T.Ink) } else Spacer(Modifier.width(16.dp))
         Text(title, fontSize = 20.sp, color = T.Ink)
     }
 }
@@ -54,7 +54,7 @@ private fun Row2(title: String, sub: String? = null, icon: ImageVector? = null, 
             sub?.let { Text(it, fontSize = 12.sp, color = T.Text3, lineHeight = 17.sp, modifier = Modifier.padding(top = 2.dp)) }
         }
         value?.let { Text(it, fontSize = 15.sp, color = T.Text2, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(start = 10.dp)) }
-        trailing?.invoke() ?: if (onClick != null) Icon(Icons.Rounded.ChevronRight, null, tint = T.Text3, modifier = Modifier.size(20.dp)) else Unit
+        trailing?.invoke() ?: if (onClick != null) Icon(D.chevronRight, null, tint = T.Text3, modifier = Modifier.size(20.dp)) else Unit
     }
     if (divider) HorizontalDivider(Modifier.padding(horizontal = 16.dp), color = T.Fill)
 }
@@ -71,8 +71,7 @@ fun SessionDrawer(onPick: (String) -> Unit, onNew: () -> Unit, onSettings: () ->
     ModalDrawerSheet(drawerContainerColor = T.Drawer, drawerShape = RoundedCornerShapeEnd, modifier = Modifier.width(320.dp)) {
         Column(Modifier.fillMaxHeight().systemBarsPadding()) {
             Row(Modifier.padding(start = 18.dp, end = 18.dp, top = 18.dp, bottom = 12.dp), verticalAlignment = Alignment.CenterVertically) {
-                Text("🐋 deepseek", fontSize = 20.sp, fontWeight = FontWeight.Bold, color = T.Ink); Spacer(Modifier.width(6.dp))
-                Text("HARNESS", fontSize = 9.sp, fontWeight = FontWeight.Bold, color = Color.White, modifier = Modifier.background(T.Ink, T.R4).padding(horizontal = 4.dp, vertical = 3.dp))
+                androidx.compose.foundation.Image(D.wordmark, "deepseek HARNESS", modifier = Modifier.height(22.dp).width(167.dp))
                 Spacer(Modifier.weight(1f))
                 Row(Modifier.clip(T.R8).clickable(onClick = onConnections).padding(4.dp), verticalAlignment = Alignment.CenterVertically) {
                     StatusDot(status[active]); Spacer(Modifier.width(6.dp)); Text(profile?.name ?: "未连接", fontSize = 13.sp, color = T.Text2)
@@ -80,18 +79,18 @@ fun SessionDrawer(onPick: (String) -> Unit, onNew: () -> Unit, onSettings: () ->
             }
             Row(Modifier.padding(horizontal = 12.dp).fillMaxWidth().clip(T.R12).background(Color.White).border(1.dp, T.Border, T.R12).clickable(onClick = onNew).padding(12.dp),
                 horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically) {
-                Icon(Icons.Outlined.OpenInNew, null, Modifier.size(16.dp), tint = T.Ink); Spacer(Modifier.width(6.dp)); Text("新会话", fontSize = 15.sp)
+                Icon(D.newChat, null, Modifier.size(16.dp), tint = T.Ink); Spacer(Modifier.width(6.dp)); Text("新会话", fontSize = 15.sp)
             }
             Spacer(Modifier.height(6.dp))
-            DrawerItem(Icons.Outlined.Extension, "插件", enabled = false)
-            DrawerItem(Icons.Outlined.Schedule, "自动化任务", enabled = false)
+            DrawerItem(D.plugin, "插件", enabled = false)
+            DrawerItem(D.clock, "自动化任务", enabled = false)
             Text("工作区", fontSize = 13.sp, color = T.Text3, modifier = Modifier.padding(start = 22.dp, top = 16.dp, bottom = 6.dp))
             Column(Modifier.weight(1f).verticalScroll(rememberScrollState())) {
                 val top = sessions.filter { it.parentSessionId == null && !it.blank }
                 if (top.isEmpty()) Text(if (status[active] == Dot.Online) "暂无会话" else "连接后显示会话", fontSize = 14.sp, color = T.Caption, modifier = Modifier.padding(horizontal = 22.dp, vertical = 10.dp))
                 top.groupBy { it.cwd?.trimEnd('/')?.substringAfterLast('/') ?: "默认" }.forEach { (ws, list) ->
                     Row(Modifier.padding(horizontal = 22.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-                        Icon(Icons.Outlined.FolderOpen, null, Modifier.size(17.dp), tint = T.Accent); Spacer(Modifier.width(10.dp)); Text(ws, fontSize = 15.sp, color = T.Ink)
+                        Icon(D.folderOpen, null, Modifier.size(17.dp), tint = T.Accent); Spacer(Modifier.width(10.dp)); Text(ws, fontSize = 15.sp, color = T.Ink)
                     }
                     list.forEach { s ->
                         val sel = s.sessionId == chat?.sessionId
@@ -104,7 +103,7 @@ fun SessionDrawer(onPick: (String) -> Unit, onNew: () -> Unit, onSettings: () ->
                     }
                 }
             }
-            DrawerItem(Icons.Outlined.Settings, "设置", onClick = onSettings)
+            DrawerItem(D.settings, "设置", onClick = onSettings)
             Spacer(Modifier.height(8.dp))
         }
     }
@@ -154,7 +153,7 @@ fun ConnectionsScreen(pairLink: PairingLink?, onPairLinkConsumed: () -> Unit, ca
                     Row(verticalAlignment = Alignment.CenterVertically) { Spacer(Modifier.width(16.dp)); StatusDot(d); Box(Modifier.weight(1f)) {
                     Row2(p.name + if (p.id == active) "  · 当前" else "", "${p.host}:${p.port} · ${dotLabel(d)}", icon = null, divider = i < profiles.lastIndex, onClick = { manage = p }, trailing = {
                         Text(p.kind, fontSize = 12.sp, color = T.Text2, modifier = Modifier.border(1.dp, T.Border, T.R8).padding(horizontal = 8.dp, vertical = 4.dp))
-                        Icon(Icons.Rounded.ChevronRight, null, tint = T.Text3, modifier = Modifier.padding(start = 8.dp).size(20.dp))
+                        Icon(D.chevronRight, null, tint = T.Text3, modifier = Modifier.padding(start = 8.dp).size(20.dp))
                     }) } }
                 }
             }
@@ -180,8 +179,8 @@ fun ConnectionsScreen(pairLink: PairingLink?, onPairLinkConsumed: () -> Unit, ca
             }
             Text("${p.host}:${p.port} · ${dotLabel(status[p.id])}", style = T.Mono.copy(color = T.Text3), modifier = Modifier.padding(horizontal = 22.dp, vertical = 4.dp))
             Spacer(Modifier.height(8.dp))
-            if (p.id != active || status[p.id] != Dot.Online) OptionRow("连接", icon = Icons.Outlined.Link) { Pocket.connect(p.id); manage = null; onConnected() }
-            OptionRow("删除", icon = Icons.Outlined.Delete) { Pocket.removeProfile(p.id); manage = null }
+            if (p.id != active || status[p.id] != Dot.Online) OptionRow("连接", icon = D.link) { Pocket.connect(p.id); manage = null; onConnected() }
+            OptionRow("删除", icon = D.trash) { Pocket.removeProfile(p.id); manage = null }
         }
     }
 }
@@ -262,15 +261,15 @@ fun SettingsScreen(onBack: () -> Unit, onGeneral: () -> Unit, onConnections: () 
     Column(Modifier.fillMaxSize().background(Color.White).systemBarsPadding().verticalScroll(rememberScrollState())) {
         Header("设置", onBack)
         Card {
-            Row2("通用设置", icon = Icons.Outlined.Settings, onClick = onGeneral)
-            Row2("模型", icon = Icons.Outlined.Storage, value = catalog?.groups?.firstOrNull()?.name, enabled = false, onClick = {})
-            Row2("内置插件", icon = Icons.Outlined.Extension, enabled = false, onClick = {})
-            Row2("Agent 预设", icon = Icons.Outlined.Article, value = "标准模式", divider = false, onClick = { sheet = true })
+            Row2("通用设置", icon = D.settings, onClick = onGeneral)
+            Row2("模型", icon = D.database, value = catalog?.groups?.firstOrNull()?.name, enabled = false, onClick = {})
+            Row2("内置插件", icon = D.plugin, enabled = false, onClick = {})
+            Row2("Agent 预设", icon = D.agentPreset, value = "标准模式", divider = false, onClick = { sheet = true })
         }
-        Card { Row2("打开配置文件", icon = Icons.Outlined.InsertDriveFile, enabled = false, divider = false, onClick = {}) }
+        Card { Row2("打开配置文件", icon = D.plan, enabled = false, divider = false, onClick = {}) }
         Text("dsh-android", fontSize = 13.sp, color = T.Text3, modifier = Modifier.padding(start = 22.dp, top = 12.dp, bottom = 2.dp))
         Card {
-            Row2("连接", icon = Icons.AutoMirrored.Rounded.CallMade, value = profile?.name ?: "未连接", onClick = onConnections)
+            Row2("连接", icon = D.rightUp, value = profile?.name ?: "未连接", onClick = onConnections)
             Row2("审批通知", divider = false, trailing = {
                 Switch(notify, { notify = it; Pocket.prefs.approvalNotify = it }, colors = SwitchDefaults.colors(checkedTrackColor = T.Ink, checkedThumbColor = Color.White))
             })
@@ -317,4 +316,4 @@ fun GeneralSettingsScreen(onBack: () -> Unit) {
     }
 }
 
-@Composable private fun DownArrow() = Icon(Icons.Rounded.KeyboardArrowDown, null, tint = T.Text2, modifier = Modifier.padding(start = 2.dp).size(18.dp))
+@Composable private fun DownArrow() = Icon(D.chevronDown, null, tint = T.Text2, modifier = Modifier.padding(start = 2.dp).size(18.dp))

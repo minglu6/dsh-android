@@ -38,3 +38,6 @@ fun footerText(turns: Int, steps: Int, hit: Int?) = buildString {
     append("$turns 轮 $steps 步")
     if (hit != null) append(" · 缓存命中 $hit%")
 }
+
+/** "DeepSeek-V4.1-Flash" -> "V4.1-Flash": the vendor prefix is implied in a DeepSeek client. */
+fun shortModelName(name: String): String = name.removePrefix("DeepSeek-").removePrefix("deepseek-").ifBlank { name }
