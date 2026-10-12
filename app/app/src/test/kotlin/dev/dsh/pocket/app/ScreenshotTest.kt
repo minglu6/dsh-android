@@ -118,7 +118,21 @@ class ScreenshotTest {
     @Test fun s14_trajectory() {
         Pocket.chat.value = chatState()
         show("14-trajectory") {
-            TrajectoryView(chatState()) {}
+            TrajectoryView(chatState())
+        }
+    }
+    @Test fun s14b_trajectoryDetail() {
+        val tool = Item.Tool(
+            "t1", "c1", "read", """{"file_path":"/Users/felix/.dsh/profiles/desktop/cordis.patch.yml"}""",
+            ToolStatus.Ok,
+            result = "<path>/Users/felix/.dsh/profiles/desktop/cordis.patch.yml</path>\n<type>file</type>",
+            startedAt = 1_760_287_161_514L, endedAt = 1_760_287_161_525L,
+            schemaJson = """{"name":"read","description":"Read a UTF-8 text file and return line-numbered content.","parameters":{"type":"object","properties":{"file_path":{"type":"string"}}}}""",
+            turn = 6, step = 1,
+        )
+        val row = buildTrajectory(listOf(Item.User("u", "hi"), tool)).single().rows.single { it.kind == "工具" }
+        showWithDialogs("14b-trajectory-detail") {
+            TrajectoryDetailSheet(row, turnIndex = 6) {}
         }
     }
     @Test fun s15_generalWired() = show("15-general-settings") { GeneralSettingsScreen {} }
