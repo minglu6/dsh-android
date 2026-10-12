@@ -161,10 +161,10 @@ dsh process (profile web)
 interface Transport { suspend fun connect(): Channel; val kind: Kind }   // Channel = Flow<String> in + suspend send(String)
 ```
 
-- `WsTransport(url, token)`: OkHttp WebSocket, used for Tailscale, LAN and local. Tailscale needs nothing special; the user enters the 100.x / MagicDNS address.
-- `IrohTransport(nodeId)`: iroh on Android, either through official FFI bindings (**[unverified]**: iroh-ffi Kotlin availability for iroh 1.0 must be checked) or our own small Rust JNI lib built from tether-core with uniffi. Opens ALPN `dsh-pocket/1`, does hello on the control stream, then sends newline-JSON. Path direct/relay is surfaced to the UI dot.
-- `LocalTransport`: starts the bundled dsh (libnode.so plus runtime tar, as in tether) in a foreground service with the plugin in `mode: local`, then a `WsTransport` to 127.0.0.1.
-- The status dot follows the pocket-android convention: green when connected (iroh direct), amber when connected via relay or with high latency, red when unreachable, grey when never tried or local runtime is stopped.
+- `IrohTransport(nodeId)`: JNI `libpocket_iroh.so`; ALPN `dsh-pocket/1`; path direct/relay after 8s probe (amber dot on relay).
+- `WsTransport(url)`: loopback/dev only.
+- `LocalTransport` (M4): bundled dsh on phone + loopback WS.
+- Status dot: green = iroh direct, amber = relay, red = unreachable, grey = never tried.
 
 ## 6. Phone app modules (Kotlin + Compose)
 
@@ -187,8 +187,8 @@ interface Transport { suspend fun connect(): Channel; val kind: Kind }   // Chan
 ## 7. Milestones
 
 - **M0 (2–3 d) Plugin skeleton**: npm package plus patch. Loopback WS listener. hello with a static token from config. Ops: `sessions.list`, `sessions.create`, `prompt`, `cancel`, `follow`. Verify in the dsh 0.2.1-alpha.2 web profile with a node test client.
-- **M1 (3–4 d) Approvals plus models plus pairing**: approval broker, model ops, device store, pairing window (code plus QR), listen on Tailscale IP. Ships a usable desktop side.
-- **M2 (1 wk) Android MVP over WS**: design system, connections (Tailscale/LAN profiles plus pairing), drawer, chat with reducer, tool sheet, approval card plus notification, foreground service.
+- **M1 (3–4 d) Approvals plus models plus pairing**: approval broker, model ops, device store, pairing window (code plus QR).
+- **M2 (1 wk) Android MVP**: design system, connections, drawer, chat with reducer, tool sheet, approval card plus notification, foreground service.
 - **M3 (1 wk) iroh** ✅: Pure iroh (no Tailscale). `plugin/iroh` pocket-host (ALPN `dsh-pocket/1`). Pairing: tether-style `nodeId#code` / QR `dshpocket://pair?n=&c=`. Dial iroh only (loopback WS for tests). CI bundles `libpocket_iroh.so`; prebuilt `pocket-host` for linux/darwin-arm64.
 - **M4 (1 wk) Local mode**: port tether's runtime build script and local.rs. Bundle the plugin with `mode: local`. Lifecycle management.
 - **M5 Polish**: server-side transcript reducer, history paging, user-questions, image prompts, reconnect hardening, per-dsh-version CI matrix.
@@ -199,6 +199,5 @@ interface Transport { suspend fun connect(): Channel; val kind: Kind }   // Chan
 2. **Peer range gate**: a new dsh minor refuses to load the plugin until the range is bumped. Users can use `allow-version` as an escape hatch.
 3. **Approval race semantics**: racing `next()` against a phone answer is our design. Verify with dsh that an unsettled `next()` chain, i.e. a web UI waterfall left pending, is cleaned up when we resolve first. `req.signal` covers dsh-side cancel, but the forwarder's pending event may linger until the browser gets `cancel`.
 4. **iroh on Android from Kotlin is unverified.** It may need our own uniffi/JNI crate. That adds an NDK build plus roughly 10 MB per ABI.
-5. **LAN plaintext**: needs TLS pinning or must be documented as Tailscale-only.
-6. **Local mode size and limits**: arm64 only. Termux node build maintenance. No bash/git unless bundled, same as before.
+5. **Local mode size and limits**: arm64 only. Termux node build maintenance. No bash/git unless bundled, same as before.
 7. **Background delivery**: Android may kill the foreground service on aggressive OEMs, and there is no push fallback because dsh has no push.
