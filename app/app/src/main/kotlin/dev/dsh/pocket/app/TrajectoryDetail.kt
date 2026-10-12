@@ -60,7 +60,13 @@ enum class TrajDetailTab(val label: String) {
  * Opens as a themed [PocketSheet] (no AlertDialog / FLAG_SECURE).
  */
 @Composable
-fun TrajectoryDetailSheet(row: TrajRow, turnIndex: Int, onDismiss: () -> Unit) {
+fun TrajectoryDetailSheet(
+    row: TrajRow,
+    turnIndex: Int,
+    parentRequest: TrajectoryRequest? = null,
+    onOpenRequest: (TrajectoryRequest) -> Unit = {},
+    onDismiss: () -> Unit,
+) {
     val tabs = remember(row) { trajDetailTabs(row) }
     var tab by remember(row.key) { mutableStateOf(tabs.first()) }
     PocketSheet(onDismiss) {
@@ -118,7 +124,7 @@ fun TrajectoryDetailSheet(row: TrajRow, turnIndex: Int, onDismiss: () -> Unit) {
         }
         Spacer(Modifier.height(10.dp))
         when (tab) {
-            TrajDetailTab.Overview -> TrajOverview(row, tabs) { tab = it }
+            TrajDetailTab.Overview -> TrajOverview(row, tabs, parentRequest, onOpenRequest) { tab = it }
             TrajDetailTab.Input, TrajDetailTab.Code -> {
                 val program = codeProgram(row.toolName, row.inputDetail, row.schemaDetail)
                 if (program != null && tab == TrajDetailTab.Code) {
@@ -219,11 +225,34 @@ fun trajRowState(row: TrajRow): TrajectoryRecordState = when (row.kind) {
 }
 
 @Composable
-private fun TrajOverview(row: TrajRow, tabs: List<TrajDetailTab>, onOpen: (TrajDetailTab) -> Unit) {
+private fun TrajOverview(
+    row: TrajRow,
+    tabs: List<TrajDetailTab>,
+    parentRequest: TrajectoryRequest?,
+    onOpenRequest: (TrajectoryRequest) -> Unit,
+    onOpen: (TrajDetailTab) -> Unit,
+) {
     val state = trajRowState(row)
     Column(Modifier.padding(horizontal = 22.dp)) {
         if (row.kind == TrajL.kindTool || row.kind == TrajL.kindSubtool) {
-            OverviewKv(TrajL.detailsHierarchy, TrajL.detailsAssistantMessage)
+            if (parentRequest != null) {
+                OverviewKv(
+                    TrajL.detailsHierarchy,
+                    requestLabel(parentRequest),
+                    valueColor = T.Accent,
+                    onClick = { onOpenRequest(parentRequest) },
+                )
+            } else {
+                OverviewKv(TrajL.detailsHierarchy, TrajL.detailsAssistantMessage)
+            }
+        }
+        if (row.kind == TrajL.kindAssistant && parentRequest != null) {
+            OverviewKv(
+                TrajL.detailsHierarchy,
+                requestLabel(parentRequest),
+                valueColor = T.Accent,
+                onClick = { onOpenRequest(parentRequest) },
+            )
         }
         OverviewKv(
             TrajL.detailsStatus,
@@ -412,9 +441,18 @@ private fun TrajToolsCatalog(toolsJson: String?) {
 }
 
 @Composable
-private fun OverviewKv(label: String, value: String, valueColor: Color = T.Ink, compact: Boolean = false) {
+private fun OverviewKv(
+    label: String,
+    value: String,
+    valueColor: Color = T.Ink,
+    compact: Boolean = false,
+    onClick: (() -> Unit)? = null,
+) {
     Row(
-        Modifier.fillMaxWidth().padding(vertical = if (compact) 2.dp else 4.dp),
+        Modifier
+            .fillMaxWidth()
+            .padding(vertical = if (compact) 2.dp else 4.dp)
+            .then(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier),
         horizontalArrangement = Arrangement.SpaceBetween,
     ) {
         Text(label, fontSize = 13.sp, color = T.Text3, modifier = Modifier.padding(end = 12.dp))

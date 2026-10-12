@@ -63,9 +63,15 @@ class ScreenshotTest {
         Pocket.approvals.value = emptyList()
     }
 
-    private fun chatState() = ChatState(
+    private fun chatState(
+        hasMore: Boolean = false,
+        loadingOlder: Boolean = false,
+    ) = ChatState(
         "s1", title = "问候", running = true, loaded = true, runStartedAt = System.currentTimeMillis() - 42_000,
         usage = Usage(3, 11, 10_000, 9_600, 800),
+        hasMore = hasMore,
+        firstSeq = if (hasMore) 40L else -1L,
+        loadingOlder = loadingOlder,
         items = listOf(
             Item.System(
                 "sys1", TrajL.layoutInitialSystemPrompt, "You are a helpful coding agent.", at = 0,
@@ -94,6 +100,7 @@ class ScreenshotTest {
                 usage = StepUsage(inputTokens = 18_200, outputTokens = 431, reasoningTokens = 120),
                 provider = "deepseek", model = "deepseek-v4.1-flash",
                 toolCallIds = listOf("root", "root:ptc:1", "c1", "c2", "c3", "c4", "c5"),
+                requestConfigJson = """{"provider":"deepseek","model":"deepseek-v4.1-flash","temperature":0.2,"maxTokens":8192}""",
             ),
         ),
     )
@@ -124,9 +131,9 @@ class ScreenshotTest {
         PlusSheet({}, {}, {}, {}, {}, {}, {}, {}, {})
     }
     @Test fun s14_trajectory() {
-        Pocket.chat.value = chatState()
+        Pocket.chat.value = chatState(hasMore = true)
         show("14-trajectory") {
-            TrajectoryView(chatState())
+            TrajectoryView(chatState(hasMore = true))
         }
     }
     @Test fun s14b_trajectoryDetail() {
@@ -138,9 +145,30 @@ class ScreenshotTest {
             schemaJson = """{"name":"read","description":"Read a UTF-8 text file and return line-numbered content.","parameters":{"type":"object","properties":{"file_path":{"type":"string"}}}}""",
             turn = 6, step = 1,
         )
-        val row = buildTrajectory(listOf(Item.User("u", "hi"), tool)).single().rows.single { it.kind == TrajL.kindTool }
+        val steps = listOf(
+            StepRecord(
+                seq = 60, turn = 6, step = 1, stepStartTime = 1_760_287_161_000L, messageTime = 1_760_287_162_000L,
+                replyText = "read done", reasoningText = "", usage = StepUsage(inputTokens = 100, outputTokens = 20),
+                provider = "deepseek", model = "deepseek-v4.1-flash", toolCallIds = listOf("c1"),
+            ),
+        )
+        val requests = buildTrajectoryRequests(listOf(Item.User("u", "hi"), tool), steps)
+        val row = buildTrajectory(listOf(Item.User("u", "hi"), tool), steps).single().rows.single { it.kind == TrajL.kindTool }
         showWithDialogs("14b-trajectory-detail") {
-            TrajectoryDetailSheet(row, turnIndex = 6) {}
+            TrajectoryDetailSheet(row, turnIndex = 6, parentRequest = requests.single()) {}
+        }
+    }
+    @Test fun s14d_requestInspector() {
+        val state = chatState()
+        val requests = buildTrajectoryRequests(state.items, state.steps)
+        val assistant = requests.first { it.purpose == TrajectoryRequest.Purpose.Assistant }
+        showWithDialogs("14d-request-inspector") {
+            TrajectoryRequestSheet(assistant) {}
+        }
+    }
+    @Test fun s14e_historyLoadEarlier() {
+        show("14e-history-load-earlier") {
+            TrajectoryView(chatState(hasMore = true))
         }
     }
 

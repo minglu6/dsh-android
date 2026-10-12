@@ -2,7 +2,7 @@
 
 Source-driven audit of `@deepseek-ai/dsh-client-ui-trajectory@0.2.1-alpha.2`
 (`[deepseek-ai/deepseek-harness` @ `d743267`](https://github.com/deepseek-ai/deepseek-harness/tree/d743267388))
-against Android `dsh-android` after PRs **#24**, **#31**, **#35**.
+against Android `dsh-android` after PRs **#24**, **#31**, **#35**, **#36**.
 
 Desktop package root: `packages/client/ui-trajectory/src/client/`.
 
@@ -285,9 +285,9 @@ From `@deepseek-ai/dsh-client-ui-tool` `tool-call-model.ts` — used by **Chat**
 
 ---
 
-## 6. Android after #24 / #31 / #35 — gap list
+## 6. Android after #24 / #31 / #35 / #36 — gap list
 
-Status column is **this PR**.
+Status column tracks Request inspector + load-earlier (this PR) on top of #36 kinds/detail work.
 
 | # | Desktop | Android (pre this PR) | This PR |
 |---|---|---|---|
@@ -300,13 +300,13 @@ Status column is **this PR**.
 | G7 | Interrupted → message **失败** | Invented 系统 Notice | **Fixed** — `StepRecord.interrupted`; no invented Notice |
 | G8 | Error glyph | Ledger ✓ when not running | **Fixed** — ✗ + Err color |
 | G9 | Kind badges 已压缩/子工具 | Fallback muted | **Fixed** |
-| G10 | Request inspector | Schemas only | **Deferred** — Request # boundary needs full request model; schemas still from `request/header` |
+| G10 | Request inspector | Schemas only | **Fixed** — `TrajectoryRequest` + boundary chip + sheet tabs 概述/选项/用量/计时; `request/header` config + `llm/retry` stamped on `StepRecord` |
 | G11 | Locales from `locales.ts` | Scattered hard-coded ZH | **Fixed** — `TrajectoryLocales.kt` / `TrajL` |
 | G12 | Search haystack | Partial | **Fixed** — includes schema/source/tools |
 | G13 | `tool/ptc-dispatch*` / `compaction/*` | Ignored | **Fixed** — reducer consumes; plugin already forwards |
 | G14 | firstTokenTime | Missing | **Fixed** — stream + StepRecord |
 | G15 | Previous system + tools catalog | Latest toolsByName only | **Fixed** |
-| G16 | Load-older UI | hasMore only | **Deferred** (phone; data path exists) |
+| G16 | Load-older UI | hasMore only | **Fixed** — Trajectory top “加载更早的历史” + near-top scroll → `Pocket.loadOlderHistory()` / `history.page` (#27) |
 | G17 | Swimlane Actual | Toolbar hidden | OK (matches desktop) |
 | G18 | Chat tool cards | N/A | Out of scope (desktop Trajectory also omits) |
 
@@ -331,4 +331,6 @@ Status column is **this PR**.
 | `timeline.ts` | `TrajectoryTimeline.kt` |
 | `TrajectoryToolbar` / swimlane | `Trajectory.kt` |
 | `code-program.ts` | `CodeProgram.kt` |
-| table / layout / snapshot tests | `Trajectory*Test`, `TranscriptReducerTest`, Roborazzi per kind |
+| `requestNumbers` / REQUEST_TABS | `TrajectoryRequest.kt` / `TrajectoryRequestDetail.kt` |
+| history load-earlier | `HistoryLoadEarlierRow` + `Pocket.loadOlderHistory` |
+| table / layout / snapshot tests | `Trajectory*Test`, `TrajectoryRequestTest`, `TranscriptReducerTest`, Roborazzi per kind |
