@@ -115,6 +115,10 @@ test('prompt builds content, validates mode', async () => {
   assert.equal(req.mode, 'steer')
   assert.equal(typeof req.requestId, 'string')
   assert.deepEqual(req.content, [{ type: 'text', text: 'hi' }, { type: 'image', mediaType: 'image/png', data: 'AAA=' }])
+  const withFile = await c.call('prompt', { sessionId: 's1', mode: 'queue', text: 'doc', files: [{ receiptId: 'r1' }] })
+  assert.equal(withFile.result.accepted, true)
+  const fileReq = sc.calls.filter((x) => x[0] === 'prompt').at(-1)[1]
+  assert.deepEqual(fileReq.content, [{ type: 'text', text: 'doc' }, { type: 'file', receiptId: 'r1' }])
   c.ws.close()
 })
 

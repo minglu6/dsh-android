@@ -124,7 +124,13 @@ class PocketClient(
     suspend fun listSessions(): List<SessionSummary> = call("sessions.list")["items"].arr().orEmpty().mapNotNull(SessionSummary::parse)
     suspend fun createSession(cwd: String? = null, agentPreset: String? = null): String =
         call("sessions.create", jsonOf("cwd" to cwd, "agentPreset" to agentPreset))["sessionId"].str() ?: throw PocketError("bad-reply", "no sessionId")
-    suspend fun prompt(sessionId: String, text: String, mode: String, images: List<PromptImage> = emptyList()) =
+    suspend fun prompt(
+        sessionId: String,
+        text: String,
+        mode: String,
+        images: List<PromptImage> = emptyList(),
+        files: List<PromptFile> = emptyList(),
+    ) =
         call("prompt", buildJsonObject {
             put("sessionId", sessionId); put("text", text); put("mode", mode)
             if (images.isNotEmpty()) putJsonArray("images") {
@@ -134,6 +140,9 @@ class PocketClient(
                         img.name?.let { put("name", it) }
                     })
                 }
+            }
+            if (files.isNotEmpty()) putJsonArray("files") {
+                files.forEach { f -> add(buildJsonObject { put("receiptId", f.receiptId) }) }
             }
         })
     suspend fun cancel(sessionId: String) = call("cancel", jsonOf("sessionId" to sessionId))
@@ -197,6 +206,65 @@ class PocketClient(
     suspend fun permission(sessionId: String): String? = call("permissions.get", jsonOf("sessionId" to sessionId))["current"].str()
     suspend fun setPermission(sessionId: String, name: String): String? = call("permissions.set", jsonOf("sessionId" to sessionId, "name" to name))["current"].str()
     suspend fun presets(): List<String> = call("presets.list")["presets"].arr().orEmpty().mapNotNull { it["id"].str() }
+
+    suspend fun searchSessions(query: String): JsonElement =
+        call("sessions.search", jsonOf("query" to query))
+
+    suspend fun workspaceState(): JsonElement = call("workspace.state")
+    suspend fun archiveSession(sessionId: String, stopActivity: Boolean = false): JsonElement =
+        call("workspace.archiveSession", jsonOf("sessionId" to sessionId, "stopActivity" to if (stopActivity) true else null))
+    suspend fun unarchiveSession(sessionId: String): JsonElement =
+        call("workspace.unarchiveSession", jsonOf("sessionId" to sessionId))
+    suspend fun pinSession(sessionId: String): JsonElement =
+        call("workspace.pinSession", jsonOf("sessionId" to sessionId))
+    suspend fun unpinSession(sessionId: String): JsonElement =
+        call("workspace.unpinSession", jsonOf("sessionId" to sessionId))
+
+    suspend fun getFeedback(sessionId: String): JsonElement =
+        call("feedback.get", jsonOf("sessionId" to sessionId))
+    suspend fun setFeedback(
+        sessionId: String,
+        messageId: String,
+        rating: String?,
+        category: String? = null,
+        note: String? = null,
+        ifVersion: String? = null,
+    ): JsonElement = call(
+        "feedback.set",
+        buildJsonObject {
+            put("sessionId", sessionId)
+            put("messageId", messageId)
+            if (rating == null) put("rating", JsonNull) else put("rating", rating)
+            category?.let { put("category", it) }
+            note?.let { put("note", it) }
+            ifVersion?.let { put("ifVersion", it) }
+        },
+    )
+
+    suspend fun sessionAttachment(sessionId: String, attachmentId: String): JsonElement =
+        call("session.attachment", jsonOf("sessionId" to sessionId, "attachmentId" to attachmentId))
+    suspend fun uploadAttachment(sessionId: String, data: String, name: String? = null): JsonElement =
+        call("attachments.upload", jsonOf("sessionId" to sessionId, "data" to data, "name" to name))
+
+    suspend fun referenceFiles(sessionId: String, query: String = ""): JsonElement =
+        call("references.files", jsonOf("sessionId" to sessionId, "query" to query))
+    suspend fun referenceSessions(sessionId: String, query: String = ""): JsonElement =
+        call("references.sessions", jsonOf("sessionId" to sessionId, "query" to query))
+
+    suspend fun answerUserQuestion(sessionId: String, callId: String, answers: List<JsonObject>): JsonElement =
+        call(
+            "userQuestions.answer",
+            buildJsonObject {
+                put("sessionId", sessionId)
+                put("callId", callId)
+                put("answers", buildJsonObject {
+                    putJsonArray("answers") { answers.forEach { add(it) } }
+                })
+            },
+        )
+
+    suspend fun workspaceChangesSummary(sessionId: String, seq: Long): JsonElement =
+        call("workspaceChanges.summary", jsonOf("sessionId" to sessionId, "seq" to seq))
 
     fun close() {
         pump?.cancel(); pump = null

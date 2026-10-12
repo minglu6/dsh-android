@@ -13,18 +13,23 @@ data class SessionSummary(
     val blank: Boolean,
     val updatedAt: Long,
     val parentSessionId: String?,
+    /** Optional flags when the Host includes them on list/search rows. */
+    val archived: Boolean? = null,
+    val pinned: Boolean? = null,
 ) {
     companion object {
         fun parse(e: JsonElement?): SessionSummary? {
             val id = e["sessionId"].str() ?: return null
             return SessionSummary(
                 sessionId = id,
-                title = e["projections"]["values"]["title"].str(),
+                title = e["projections"]["values"]["title"].str() ?: e["title"].str() ?: e["snippet"].str(),
                 cwd = e["cwd"].str(),
                 running = e["running"].bool() ?: false,
                 blank = e["blank"].bool() ?: false,
                 updatedAt = e["updatedAt"].long() ?: 0,
                 parentSessionId = e["parentSessionId"].str(),
+                archived = e["archived"].bool(),
+                pinned = e["pinned"].bool(),
             )
         }
     }
@@ -65,6 +70,121 @@ data class Approval(val approvalId: String, val sessionId: String?, val toolName
 
 /** One image part for `prompt` (base64 payload, no data: URL prefix). */
 data class PromptImage(val mediaType: String, val data: String, val name: String? = null)
+
+/** Staged non-image file receipt for `prompt` (`{type:'file', receiptId}`). */
+data class PromptFile(val receiptId: String)
+
+/** One question in a `user-question` push / ask_user_question batch. */
+data class UserQuestionOption(val label: String, val description: String? = null)
+
+data class UserQuestionItem(
+    val id: String,
+    val question: String,
+    val detail: String? = null,
+    val header: String? = null,
+    val options: List<UserQuestionOption> = emptyList(),
+    val multiSelect: Boolean = false,
+    /** When `kind` is `plan-review`, [approveLabel] is the option that approves. */
+    val intentKind: String? = null,
+    val approveLabel: String? = null,
+) {
+    companion object {
+        fun parse(e: JsonElement?): UserQuestionItem? {
+            val id = e["id"].str() ?: return null
+            val q = e["question"].str() ?: return null
+            val intent = e["intent"]
+            return UserQuestionItem(
+                id = id,
+                question = q,
+                detail = e["detail"].str(),
+                header = e["header"].str(),
+                options = e["options"].arr().orEmpty().mapNotNull { o ->
+                    val label = o["label"].str() ?: return@mapNotNull null
+                    UserQuestionOption(label, o["description"].str())
+                },
+                multiSelect = e["multiSelect"].bool() == true,
+                intentKind = intent["kind"].str(),
+                approveLabel = intent["approve"].str(),
+            )
+        }
+    }
+}
+
+/** Open / continued user-question card from pocket push `user-question`. */
+data class UserQuestion(
+    val questionId: String,
+    val sessionId: String?,
+    val callId: String?,
+    val questions: List<UserQuestionItem>,
+    val state: String? = null,
+) {
+    companion object {
+        fun parse(e: JsonObject): UserQuestion? {
+            val questionId = e["questionId"].str() ?: e["callId"].str() ?: return null
+            val questions = e["questions"].arr().orEmpty().mapNotNull(UserQuestionItem::parse)
+            if (questions.isEmpty()) return null
+            return UserQuestion(
+                questionId = questionId,
+                sessionId = e["sessionId"].str(),
+                callId = e["callId"].str() ?: questionId,
+                questions = questions,
+                state = e["wait"]?.let { "open" } ?: e["state"].str(),
+            )
+        }
+    }
+}
+
+/** One message-feedback rating from `feedback.get`. */
+data class MessageFeedback(
+    val messageId: String,
+    val rating: String?,
+    val version: String? = null,
+    val category: String? = null,
+    val note: String? = null,
+) {
+    companion object {
+        fun parse(e: JsonElement?): MessageFeedback? {
+            val id = e["messageId"].str() ?: return null
+            return MessageFeedback(
+                messageId = id,
+                rating = e["rating"].str(),
+                version = e["version"].str(),
+                category = e["category"].str(),
+                note = e["note"].str(),
+            )
+        }
+    }
+}
+
+/** `@` file mention candidate from `references.files`. */
+data class FileReference(val path: String, val kind: String? = null) {
+    companion object {
+        fun parse(e: JsonElement?): FileReference? {
+            val path = e["path"].str() ?: e["mention"].str() ?: return null
+            return FileReference(path, e["kind"].str())
+        }
+    }
+}
+
+/** `@` session / subagent mention candidate from `references.sessions`. */
+data class SessionReference(val mention: String, val title: String?, val kind: String? = null) {
+    companion object {
+        fun parse(e: JsonElement?): SessionReference? {
+            val mention = e["mention"].str() ?: e["sessionId"].str()?.let { "@$it" } ?: return null
+            return SessionReference(mention, e["title"].str(), e["kind"].str())
+        }
+    }
+}
+
+/** Upload receipt from `attachments.upload`. */
+data class UploadReceipt(val receiptId: String, val name: String? = null, val attachmentId: String? = null) {
+    companion object {
+        fun parse(e: JsonElement?): UploadReceipt? {
+            val id = e["receiptId"].str() ?: return null
+            return UploadReceipt(id, e["file"]["name"].str() ?: e["name"].str(), e["file"]["attachmentId"].str())
+        }
+    }
+}
 
 /**
  * Pairing payload for LAN / Tailscale WebSocket.

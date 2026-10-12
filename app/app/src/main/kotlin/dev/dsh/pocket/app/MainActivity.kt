@@ -81,6 +81,22 @@ private fun Root(deepLink: MutableStateFlow<PairingLink?>) {
         ConnectionService.start(ctx)
     }
     LaunchedEffect(Unit) { Pocket.errors.collect { snack.showSnackbar(it) } }
+    LaunchedEffect(Unit) {
+        Pocket.notices.collect { msg ->
+            if (msg == L.archivedToast()) {
+                val result = snack.showSnackbar(
+                    message = msg,
+                    actionLabel = L.undo(),
+                    withDismissAction = true,
+                )
+                if (result == SnackbarResult.ActionPerformed) {
+                    Pocket.lastArchivedId?.let { Pocket.unarchiveSession(it) }
+                }
+            } else {
+                snack.showSnackbar(msg)
+            }
+        }
+    }
     LaunchedEffect(link) { if (link != null) screen = Screen.Connections }
 
     BackHandler(screen != Screen.Chat && active != null) { screen = if (screen == Screen.General) Screen.Settings else Screen.Chat }

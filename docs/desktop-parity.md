@@ -79,13 +79,13 @@ Data: Cordis waterfall `approval/request` → pocket push `{ev:"approval"}` / `a
 | | 工具 {name} 请求越权执行 | — |
 | | 拒绝 / 允许一次 | rejected / allowed-once |
 
-Ask-user tool (`ui-user-questions`): separate waterfall `user-questions/request` — **needs-plugin** on phone.
+Ask-user tool (`ui-user-questions`): waterfall `user-questions/request` — **done** (push `user-question` + `userQuestions.answer`).
 
 ### 1.6 Attachments
 
 Composer images/files: `conversation.attachment.*`, `conversation.image.*`, `conversation.file.*`.  
 Data: `prompt` content parts (`text` / `image`); desktop also stages files via Host attachment APIs.  
-Phone: image picker → `prompt` images (done). Folder attach = **hide** (desktop-only). Non-image file stage = **needs-plugin** (`session.attachment` / upload).
+Phone: image picker → `prompt` images (done). Non-image files via `attachments.upload` + `prompt` files (done). Folder attach = **hide** (desktop-only).
 
 ### 1.7 @-mentions & /commands
 
@@ -97,7 +97,7 @@ Phone: image picker → `prompt` images (done). Folder attach = **hide** (deskto
 | Mentions | `reference.*` | `@file` / `@session` via ui-reference |
 | Built-ins | goal/plan/feedback/compact/permission/export labels in `ui-commands` | `commands.execute` |
 
-Phone today: placeholders + Plus sheet for built-ins. Live `/` popup and `@` mention search = **feasible** (commands) / **needs-plugin** (file mention index).
+Phone: Plus sheet + live `/` CommandPopupSheet + `@` MentionPopupSheet (`references.files` / `references.sessions`, insert into composer) — **done**.
 
 ### 1.8 Message actions (copy / like / retry / fork)
 
@@ -265,20 +265,20 @@ Appearance values from `ui-theme` locales. Performance: `settings.performance.{c
 | Markdown core | present (#34) | keep aligning |
 | Approvals card | present | — |
 | Image attach (send) | present | — |
-| Image bubbles in transcript | missing | feasible |
-| Non-image file attach | missing | needs-plugin / hide folders |
-| `/` command popup | Plus sheet only | feasible |
-| `@` file/session mentions | placeholder only | needs-plugin |
+| Image bubbles in transcript | **done** (`session.attachment` + ImageRef) | was feasible |
+| Non-image file attach | **done** (`attachments.upload` + `prompt` files) | was needs-plugin; folders still hide |
+| `/` command popup | **done** (CommandPopupSheet when composer starts with `/`) | was feasible |
+| `@` file/session mentions | **done** (`references.files` / `references.sessions`) | was needs-plugin |
 | Copy on messages | **done** (this PR) | feasible |
 | Branch / fork from message | **done** (`sessions.fork` + actions) | was needs-plugin |
-| Like / dislike | missing | **needs-plugin** (message-feedback) |
+| Like / dislike | **done** (`feedback.get` / `feedback.set` + category sheet) | was needs-plugin |
 | Message clock | **done** (this PR) | feasible |
 | Retry / turn-error / maxTokens rows | **done** (this PR) | feasible |
 | Stopped / interrupted copy | **done** (`message.stopped` 已停止) | feasible |
-| Deliverable / changed-file cards | missing | feasible after event parse |
+| Deliverable / changed-file cards | **done** (parse `deliverables/presented` / `workspace/changes`) | Changes count enrichment still Host-summary limited |
 | Streaming + stop | present | — |
 | Todo panel (清单) | **done** (parse `todo/write` + projections; sheet) | was needs-plugin |
-| User-questions prompts | missing | **needs-plugin** |
+| User-questions prompts | **done** (push `user-question` + `userQuestions.answer`) | was needs-plugin |
 
 ### Header / composer / sidebar / panels / settings
 
@@ -290,33 +290,34 @@ Appearance values from `ui-theme` locales. Performance: `settings.performance.{c
 | Model + effort + permission | present | — |
 | Workspace / preset chips | present (cwd list only) | hide OS picker |
 | Plus menu built-ins | present | — |
-| Queue/steer busy behaviour | prefs exist; UI partial | feasible |
+| Queue/steer busy behaviour | **done** (发送消息 / 排队发送 / 插话发送; Steer label fixed) | was feasible |
 | Drawer width / workspaces / new session | present | — |
-| Session search | missing | needs-plugin |
-| Archive / pin / fork from sidebar | fork via message/More; archive/pin missing | needs-plugin |
+| Session search | **done** (`sessions.search`) | was needs-plugin |
+| Archive / pin / fork from sidebar | **done** (workspace archive/pin + row ⋯ / long-press) | was needs-plugin |
 | 插件 / 自动化任务 | removed | hide |
 | Files / terminal / jobs / todo sheets | present | — |
 | Browser | hidden | hide |
 | Settings general rows | present | — |
-| Language / appearance prefs | stored; UI stays zh + light `T.*` | feasible (partial) |
+| Language / appearance prefs | **done** (labels wired via L; en for new surfaces) | was feasible (partial) |
 | Models / plugins / open config | removed | hide |
 
 ---
 
 ## 10. Plugin RPC map (current → needed)
 
-**Present:** `sessions.list/create/rename`, `prompt`, `cancel`, `follow`/`unfollow`, `history.page`, `models.*`, `permissions.*`, `presets.list`, `approval.*`, `devices.*`, `pairing.*`, `commands.execute`, `session.export`, `files.list/read`, `jobs.list/kill`, `terminal.*`.
+**Present:** `sessions.list/create/rename`, `prompt` (text/images/**files**), `cancel`, `follow`/`unfollow`, `history.page`, `models.*`, `permissions.*`, `presets.list`, `approval.*`, `devices.*`, `pairing.*`, `commands.execute`, `session.export`, `files.list/read`, `jobs.list/kill`, `terminal.*`, `sessions.fork`.
 
-**Added in this pass:** `sessions.fork` → `sessionController.fork`. Todos arrive via follow `todo/write` events and `projections.values.todos` (no extra op).
+**Added in this pass (parity-ops):** `sessions.search`, `workspace.state` / `archiveSession` / `unarchiveSession` / `pinSession` / `unpinSession`, `feedback.get` / `feedback.set`, `references.files` / `references.sessions`, `session.attachment`, `attachments.upload`, `userQuestions.answer` (+ push `user-question` / `user-question.closed`).
 
-**Still needed for remaining gaps:**
+**Still limited / unfinished:**
 
-| Op | Host | Unlocks |
-|---|---|---|
-| `sessions.search` | `sessionController.search` | sidebar search |
-| `workspace.archiveSession` / `unarchive` / `pin` / `unpin` | workspace controller | sidebar archive/pin |
-| `feedback.get` / `feedback.set` (message) | message-feedback | like/dislike |
-| `userQuestions.answer` (+ push ask events) | user-questions waterfall | ask-user cards |
+| Gap | Notes |
+|---|---|
+| Folder attach | desktop-only (**hide**) |
+| Appearance theme tokens | prefs + labels done; UI chrome still light `T.*` (Material dark follows Appearance pref) |
+| OS workspace picker / browser / plugin manager / schedules / credentials | **hide** |
+
+**Also added:** `workspaceChanges.summary` → Host `workspaceChanges.summary(sessionId, seq)` to enrich changed-file cards; `@` mention pick inserts into composer.
 
 ---
 
