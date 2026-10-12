@@ -132,31 +132,39 @@ Live attempt baseline + stream records in follow frames; Android `TranscriptRedu
 
 ## 2. Session header
 
-Packages: `ui-session`, `ui-layout`, experimental `client-ui-agent-team`.
+Packages: `ui-conversation` (header shell), `ui-agent-preset`, experimental `client-ui-agent-team`, `ui-jobs`, `session-log-export`.  
+(`ui-session` is the SessionProvider binding only — not chrome.)
 
 | Control | Locale | Behaviour / data |
 |---|---|---|
-| Title | workspace `session.new` 新会话 / `session.untitled` 未命名 | projections `title` or summary |
-| Tabs | `view.chat` 对话 (+ trajectory — out of scope) | local |
-| 智能体团队 | agent-team locales | list parent+children via `sessions.list` / `parentSessionId` |
-| Agent 预设 chip | agent-preset locales | create-time; view-only mid-session |
-| ⋯ menu | rename / 会话统计 / 下载 Session 日志 / 反馈 | `sessions.rename`; usage projections; `session.export`; `commands.execute` `/feedback` |
+| Title / lineage | workspace `session.untitled` 未命名; aria `session.hierarchy` 会话层级 | `displayTitle` + subagent ancestry; open parent via workspace |
+| Tabs | `view.chat` 对话 (+ trajectory — out of scope) | Conversation Views |
+| 智能体团队 | agent-team `trigger` 智能体团队 | header action order −20; projection `agentTeam` |
+| Agent 预设 chip | agent-preset names + `headerHint` | read-only mid-session (`agentPreset` projection) |
+| 后台任务 chip | job `count.live.*` / `list.aria` 后台任务 | **header** action (not right-panel guide); `ctx.jobs` |
+| 提醒 | schedule catalog `trigger.label` 提醒 | header utility; opens schedule tab |
+| ⋯ menu | `更多操作`; **下载 Session 日志**; **反馈** | session-log-export ZIP + `feedbackUi.openSession` — **rename is not here** (sidebar row menu) |
 
-Stats dialog: `stats.dialog.title` 会话统计, `stats.counts`, `stats.cacheHit`, `stats.dialog.*`.
+**会话统计** lives in the **composer dock** (`ui-chat` StatsPills: `stats.dialog.title` 会话统计, `stats.counts`, `stats.cacheHit`, …), not the header ⋯.
+
+Phone note: Android currently also puts rename + stats into the ⋯ sheet for reachability; desktop keeps rename on the sidebar row.
 
 ---
 
 ## 3. Composer
 
-Package: `ui-conversation` input bar.
+Package: `ui-conversation` input bar (+ `ui-commands`, `ui-model-selection`, `ui-permission-presets`, `ui-plan`, `ui-goal`, `ui-chat` stats dock).
 
 | Control | Locale | Data |
 |---|---|---|
-| Model + reasoning effort | model-selection locales; sheet title on phone「模型与推理等级」 | `models.catalog` / `models.select` (+ `reasoningEffort`) |
-| Permission mode | permission-presets locales;「访问模式」 | `permissions.get/set` |
+| Model + reasoning effort | `menu.aria` 模型与推理等级; `menu.effort` 推理等级 | `models.catalog` / `models.select` (+ `reasoningEffort`) |
+| Permission mode | permission-presets「访问模式」 | `permissions.get/set` (desktop also `/permission`) |
+| Plan chip | `chip.label` 计划 | projection `plan`; `/plan off` |
+| Goal bar | goal locales（进行中的目标…） | `conversation.input.dock` id `goal` |
 | Workspace chip (empty home) | `hero.chooseWorkspace` 选择工作区 | known cwds / Host picker (**hide** OS picker) |
-| Mode / preset chip | agent-preset | create args |
-| + menu | `command.section.*` + labels | see §1.7 |
+| Mode / preset chip | agent-preset `seatHint` | create-time only |
+| + / `/` menu | `command.section.add` 添加; `section.commands` 指令 | see §1.7 |
+| Stats pills | `stats.*` | composer dock (activity + usage) |
 | Send / queue / steer | `input.send`, `input.send.queue`, `input.send.steer` | `prompt` mode |
 | Stop | `input.stop` 停止生成 | `cancel` |
 | Busy send pref | `settings.enter.*` | phone-local prefs |
@@ -186,19 +194,25 @@ Empty: `empty.none` 暂无会话 / `empty.noMatches` 无匹配结果.
 
 ## 5. Right panel
 
-Packages: `ui-sidebar-right` + files / terminal / browser / documentpreview / jobs / deliverables.  
-Phone adaptation: themed bottom sheets (already used for files/terminal/jobs).
+Packages: `ui-sidebar-right` + files / terminal / browser / documentpreview / deliverables.  
+**Desktop guide launchers are only three:** Workspace files, New terminal, Browser (orders 10/20/30).  
+Phone adaptation: themed bottom sheets.
 
 | Entry | Locale | Data | Decision |
 |---|---|---|---|
 | 工作区文件 | `guide.title` 工作区文件 | `files.list` / `files.read` | feasible (done) |
-| 终端 | `title` 终端 | `terminal.*` | feasible (done) |
-| 后台任务 | `list.aria` 后台任务 | `jobs.list` / `jobs.kill` | feasible (done) |
+| 终端 | `title` 终端 / guide `新建终端` | `terminal.*` | feasible (done) |
 | 浏览器 | `guide.title` 浏览器 | client iframe only | **hide** |
-| 文档预览 | documentpreview locales | Host file bytes + preview | **needs-plugin** / heavy; preview text subset feasible via `files.read` |
-| 清单 / Todo panel | `todo.title` 任务 | follow projections `todos` | **needs-plugin** (forward projection) then feasible |
+| 文档预览 | documentpreview locales | Host file bytes + preview (opened via `openResource`, not a guide capsule) | **needs-plugin** / heavy; text subset via `files.read` |
 | Dock split / float | `dock.*` | desktop layout | **hide** (phone sheets) |
-| Deliverable cards | `deliverables.*` | events | feasible once events parsed |
+| Deliverable / changes-review tabs | `deliverables.*` | events / turn payloads | feasible once events parsed |
+
+**Not right-panel guide entries (desktop placement):**
+
+| Surface | Desktop home | Locale | Phone |
+|---|---|---|---|
+| 后台任务 | **Session header** job list action | `job.list.aria` 后台任务 | sheet from panel launcher (done) — acceptable phone regroup |
+| 任务 / 清单 (Todo) | **Conversation dock** `TodoPanel` (+ `todo_write` tool row) | `todo.title` 任务 | sheet from panel when todos present (done) — not a desktop right-rail launcher |
 
 ---
 
@@ -250,7 +264,8 @@ Appearance values from `ui-theme` locales. Performance: `settings.performance.{c
 | User / assistant / reasoning / tool / process fold | present | — |
 | Markdown core | present (#34) | keep aligning |
 | Approvals card | present | — |
-| Image attach | present | — |
+| Image attach (send) | present | — |
+| Image bubbles in transcript | missing | feasible |
 | Non-image file attach | missing | needs-plugin / hide folders |
 | `/` command popup | Plus sheet only | feasible |
 | `@` file/session mentions | placeholder only | needs-plugin |
@@ -269,18 +284,21 @@ Appearance values from `ui-theme` locales. Performance: `settings.performance.{c
 
 | Item | Status | Tag |
 |---|---|---|
-| Title, team, preset, ⋯, stats, export, feedback | present | — |
+| Title, team, preset, ⋯ (export/feedback), rename/stats on phone ⋯ | present (phone regroup vs desktop) | — |
+| Header jobs chip | jobs via panel sheet | phone regroup |
+| Composer stats pills | in More 会话统计 | phone regroup |
 | Model + effort + permission | present | — |
 | Workspace / preset chips | present (cwd list only) | hide OS picker |
 | Plus menu built-ins | present | — |
 | Queue/steer busy behaviour | prefs exist; UI partial | feasible |
 | Drawer width / workspaces / new session | present | — |
 | Session search | missing | needs-plugin |
-| Archive / pin / fork from sidebar | missing | needs-plugin |
+| Archive / pin / fork from sidebar | fork via message/More; archive/pin missing | needs-plugin |
 | 插件 / 自动化任务 | removed | hide |
-| Files / terminal / jobs sheets | present | — |
+| Files / terminal / jobs / todo sheets | present | — |
 | Browser | hidden | hide |
 | Settings general rows | present | — |
+| Language / appearance prefs | stored; UI stays zh + light `T.*` | feasible (partial) |
 | Models / plugins / open config | removed | hide |
 
 ---
