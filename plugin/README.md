@@ -91,8 +91,12 @@ dsh 发起 `approval/request` 时，如果有已登录的设备在线，插件�
 | `unfollow` | 取消订阅 |
 | `permissions.catalog` / `permissions.get` / `permissions.set` | 访问模式（`read-only` / `workspace-write` / `danger-full-access`），走 dsh 的 `permissionPresets` 服务 |
 | `presets.list` | Agent 预设列表（standard / ptc / minimal / cordis） |
+| `commands.execute` | 斜杠指令（`/compact`、`/plan`、`/goal …`、`/feedback …`），需 `commands` + `agents` |
+| `session.export` | 将会话历史打成 ZIP（JSONL），手机端分享/保存 |
+| `files.list` / `files.read` | 工作区文件浏览（`workspaceFiles`） |
+| `jobs.list` / `jobs.kill` | 后台任务列表与终止（`jobController`） |
 
-`permissions.*` 和 `presets.list` 依赖可选服务，服务不在时不出现在 hello 的 `ops` 里。
+`permissions.*`、`presets.list`、`commands.execute`、`files.*`、`jobs.*` 依赖可选服务，服务不在时不出现在 hello 的 `ops` 里。`session.export` 始终注册。
 
 - 服务端推送：
 

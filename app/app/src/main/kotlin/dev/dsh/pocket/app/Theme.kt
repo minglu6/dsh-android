@@ -42,8 +42,19 @@ object T {
 
 @Composable
 fun PocketTheme(content: @Composable () -> Unit) {
+    // Appearance is phone-local (Host `ui-theme.preference`). Custom T.* tokens stay light so Roborazzi
+    // and the current layout chrome keep official light surfaces; Material scheme follows preference.
+    val appearance = runCatching { Pocket.prefs.appearance }.getOrDefault(Appearance.Light)
+    val dark = when (appearance) {
+        Appearance.Dark -> true
+        Appearance.System -> androidx.compose.foundation.isSystemInDarkTheme()
+        Appearance.Light -> false
+    }
     MaterialTheme(
-        colorScheme = lightColorScheme(
+        colorScheme = if (dark) androidx.compose.material3.darkColorScheme(
+            primary = T.Accent, onPrimary = Color.White, background = Color(0xFF151517), surface = Color(0xFF232324),
+            onSurface = Color(0xFFF9FAFB), onBackground = Color(0xFFF9FAFB), error = T.Err,
+        ) else lightColorScheme(
             primary = T.Accent, onPrimary = Color.White, background = Color.White, surface = Color.White,
             onSurface = T.Ink, onBackground = T.Ink, surfaceVariant = T.Fill, onSurfaceVariant = T.Text2,
             outline = T.Border, outlineVariant = T.Border, error = T.Err, surfaceContainerLow = Color.White,

@@ -7,7 +7,8 @@ import { createDeviceStore } from './src/devices.js'
 import { createPairing } from './src/pairing.js'
 import { createPocketServer } from './src/server.js'
 import { loadOrCreateToken } from './src/token.js'
-import { permissionOps, presetOps } from './src/extra-ops.js'
+import { zipSync, strToU8 } from 'fflate'
+import { permissionOps, presetOps, commandOps, filesOps, jobsOps, exportOps } from './src/extra-ops.js'
 import { registerPairRoute } from './src/web-route.js'
 import { createManageApi, pairingUri } from './src/manage.js'
 
@@ -53,6 +54,12 @@ export function apply(ctx, config = {}) {
   const manage = createManageApi({ host, port, devices, pairing, server, openPairing })
   ctx.inject(['permissionPresets', 'agents'], (c) => { c.effect(() => server.registerOps(permissionOps(c.permissionPresets, c.agents))) })
   ctx.inject(['agentPresets'], (c) => { c.effect(() => server.registerOps(presetOps(c.agentPresets))) })
+  ctx.inject(['commands', 'agents'], (c) => { c.effect(() => server.registerOps(commandOps(c.commands, c.agents))) })
+  ctx.inject(['workspaceFiles', 'sessions'], (c) => {
+    c.effect(() => server.registerOps(filesOps(c.workspaceFiles, c.sessions, c.get?.('sandboxPolicy'))))
+  })
+  ctx.inject(['jobController'], (c) => { c.effect(() => server.registerOps(jobsOps(c.jobController))) })
+  server.registerOps(exportOps(ctx.sessionController, { zipSync, strToU8 }))
   ctx.inject(['webServer'], (webCtx) => registerPairRoute(webCtx, manage))
 
   ctx.effect(() => {

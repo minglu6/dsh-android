@@ -63,6 +63,9 @@ data class Approval(val approvalId: String, val sessionId: String?, val toolName
     }
 }
 
+/** One image part for `prompt` (base64 payload, no data: URL prefix). */
+data class PromptImage(val mediaType: String, val data: String, val name: String? = null)
+
 data class PairingLink(val host: String, val port: Int, val code: String) {
     companion object {
         /**

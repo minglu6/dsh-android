@@ -2,9 +2,19 @@
   "name": "dsh-plugin-pocket",
   "version": "0.1.0",
   "description": "Bridge plugin for the dsh-android native app: a small authenticated JSON/WebSocket protocol over DeepSeek Harness sessions",
-  "keywords": ["dsh", "dsh-plugin", "deepseek-harness", "android", "remote"],
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "deepseek-harness",
+    "android",
+    "remote"
+  ],
   "license": "MIT",
-  "repository": { "type": "git", "url": "git+https://github.com/minglu6/dsh-android.git", "directory": "plugin" },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/minglu6/dsh-android.git",
+    "directory": "plugin"
+  },
   "type": "module",
   "main": "index.js",
   "exports": {
@@ -12,9 +22,20 @@
     "./client": "./lib/client.js",
     "./package.json": "./package.json"
   },
-  "bin": { "dsh-pocket": "bin/pocket.js" },
-  "files": ["index.js", "src", "lib", "bin", "cordis.patch.yml", "README.md"],
-  "engines": { "node": "^22.19.0 || >=24.0.0" },
+  "bin": {
+    "dsh-pocket": "bin/pocket.js"
+  },
+  "files": [
+    "index.js",
+    "src",
+    "lib",
+    "bin",
+    "cordis.patch.yml",
+    "README.md"
+  ],
+  "engines": {
+    "node": "^22.19.0 || >=24.0.0"
+  },
   "scripts": {
     "build:client": "tsdown",
     "pretest": "npm run build:client",
@@ -23,7 +44,9 @@
     "test:integration": "npm run build:client && node --test test/integration/*.test.js"
   },
   "dsh": {
-    "bundle": { "patch": "./cordis.patch.yml" },
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
     "client": {
       "platform": "web",
       "inject": [
@@ -33,13 +56,16 @@
     }
   },
   "dependencies": {
+    "fflate": "^0.8.3",
     "ws": "^8.18.0"
   },
   "peerDependencies": {
     "@deepseek-ai/dsh-api-session-controller": ">=0.2.1-alpha.2 <0.2.2-0"
   },
   "peerDependenciesMeta": {
-    "@deepseek-ai/dsh-api-session-controller": { "optional": true }
+    "@deepseek-ai/dsh-api-session-controller": {
+      "optional": true
+    }
   },
   "devDependencies": {
     "@deepseek-ai/cordis": "^4.0.2",

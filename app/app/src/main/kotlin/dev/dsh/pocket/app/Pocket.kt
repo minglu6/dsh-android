@@ -204,6 +204,47 @@ object Pocket {
         runCatching { client?.answerApproval(approvalId, outcome) }.onFailure { errors.tryEmit(it.message ?: "审批失败") }
     }
 
+    fun hasOp(op: String) = op in ops.value
+
+    fun executeCommand(line: String) = main.launch {
+        val c = client ?: run { errors.tryEmit("未连接"); return@launch }
+        val st = chat.value ?: run { errors.tryEmit("无会话"); return@launch }
+        if (!hasOp("commands.execute")) { errors.tryEmit("桌面端未提供指令"); return@launch }
+        runCatching {
+            val r = c.executeCommand(st.sessionId, line)
+            r["result"]["text"].str()?.takeIf { it.isNotBlank() }?.let { errors.tryEmit(it) }
+        }.onFailure { errors.tryEmit(it.message ?: "指令失败") }
+    }
+
+    fun exportSession(onBytes: (filename: String, bytes: ByteArray) -> Unit) = main.launch {
+        val c = client ?: run { errors.tryEmit("未连接"); return@launch }
+        val st = chat.value ?: run { errors.tryEmit("无会话"); return@launch }
+        if (!hasOp("session.export")) { errors.tryEmit("桌面端未提供导出"); return@launch }
+        runCatching {
+            val r = c.exportSession(st.sessionId)
+            val name = r["filename"].str() ?: "dsh-session.zip"
+            val b64 = r["data"].str() ?: error("empty export")
+            onBytes(name, android.util.Base64.decode(b64, android.util.Base64.DEFAULT))
+        }.onFailure { errors.tryEmit(it.message ?: "导出失败") }
+    }
+
+    fun sendImages(text: String, images: List<PromptImage>) = main.launch {
+        val c = client ?: return@launch; val st = chat.value ?: return@launch
+        val mode = if (st.running) prefs.busySend.mode else "queue"
+        if (text.isNotBlank()) echo(text)
+        runCatching { c.prompt(st.sessionId, text, mode, images) }.onFailure { errors.tryEmit(it.message ?: "发送失败") }
+    }
+
+    suspend fun listFiles(sessionId: String, path: String) = client?.listFiles(sessionId, path)
+        ?: throw PocketError("transport", "未连接")
+    suspend fun readFile(sessionId: String, path: String) = client?.readFile(sessionId, path)
+        ?: throw PocketError("transport", "未连接")
+    suspend fun listJobs(sessionId: String) = client?.listJobs(sessionId)
+        ?: throw PocketError("transport", "未连接")
+    fun killJob(sessionId: String, jobId: String) = main.launch {
+        runCatching { client?.killJob(sessionId, jobId) }.onFailure { errors.tryEmit(it.message ?: "终止失败") }
+    }
+
     /** Pair with a desktop: exchanges the 6-digit code for a device token and saves a profile. */
     suspend fun pair(name: String, host: String, port: Int, code: String): Result<Profile> = withContext(Dispatchers.IO) {
         val c = PocketClient()
