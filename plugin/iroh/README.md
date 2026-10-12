@@ -6,7 +6,7 @@ Modeled on [dsh-tether](https://github.com/zexadev/dsh-tether): N0 discovery + *
 
 **Relay:** both `pocket-host` and Android `pocket-ffi` bake in the Tokyo relay via shared `endpoint_builder()`. Desktop can override with `DSH_IROH_RELAY_URLS` (comma-separated HTTPS URLs).
 
-**Line limit:** `MAX_LINE` / `MAX_UNPAIRED_LINE` are **1 MiB** in `pocket-iroh` (shared by `pocket-host` and Android `pocket-ffi`). The plugin also slims `sessions.list` to the fields Android `SessionSummary` needs so a large desktop session roster stays well under the cap.
+**Line limit:** `MAX_LINE` / `MAX_UNPAIRED_LINE` are **1 MiB** in `pocket-iroh` (shared by `pocket-host` and Android `pocket-ffi`). Frame reads use a 32 KiB chunked `LineReader` (not one byte per `recv.read`). The plugin also slims `sessions.list` and caps follow snapshots (default 50 messages, ~900 KiB soft budget) so phone history stays under the cap.
 
 ## Crates
 

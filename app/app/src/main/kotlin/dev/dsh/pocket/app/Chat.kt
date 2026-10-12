@@ -256,8 +256,16 @@ fun EmptyState(icon: androidx.compose.ui.graphics.vector.ImageVector, title: Str
 private fun Transcript(st: ChatState, onTool: (Item.Tool) -> Unit) {
     val list = rememberLazyListState()
     val n = st.items.size
+    val lastKey = st.items.lastOrNull()?.key
     val lastLen = (st.items.lastOrNull() as? Item.Text)?.text?.length ?: 0
-    LaunchedEffect(n, lastLen, st.running) { if (n > 0) list.animateScrollToItem(n) }
+    // Anchor on the last item key so prepending older history does not jump to the bottom.
+    LaunchedEffect(lastKey, lastLen, st.running) { if (n > 0 && !st.loadingOlder) list.animateScrollToItem(n) }
+    // Desktop dsh pages older history when the viewport reaches the top.
+    LaunchedEffect(list.firstVisibleItemIndex, st.hasMore, st.loadingOlder, st.loaded) {
+        if (st.loaded && st.hasMore && !st.loadingOlder && list.firstVisibleItemIndex == 0 && n > 0) {
+            Pocket.loadOlderHistory()
+        }
+    }
     if (st.loaded && n == 0 && !st.running) { EmptyState(D.chat, "开始对话", "发送第一条消息"); return }
     if (!st.loaded) { Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator(color = T.Accent, strokeWidth = 2.dp, modifier = Modifier.size(24.dp)) }; return }
     LazyColumn(state = list, modifier = Modifier.fillMaxSize(), contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {

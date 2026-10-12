@@ -152,24 +152,69 @@ pub fn load_or_create_secret(path: &Path) -> Result<SecretKey> {
     Ok(key)
 }
 
-pub async fn read_line_bounded(recv: &mut RecvStream, max: usize) -> Result<String> {
-    let mut buf = Vec::new();
-    let mut byte = [0u8; 1];
-    loop {
-        let Some(n) = recv.read(&mut byte).await? else {
-            bail!("peer closed mid-line");
-        };
-        if n == 0 {
-            continue;
+/// Chunk size for newline-delimited frame reads (16–64 KiB range).
+pub const LINE_READ_CHUNK: usize = 32 * 1024;
+
+/// Carry leftover bytes across `read_line` calls when a chunk contains data past `\n`.
+/// One reader per `RecvStream` — do not share across streams.
+#[derive(Default)]
+pub struct LineReader {
+    leftover: Vec<u8>,
+}
+
+impl LineReader {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Feed one chunk into `leftover`; return a completed line (without `\n`) when found.
+    /// Pure helper — unit-tested without a live RecvStream.
+    pub fn push_chunk(leftover: &mut Vec<u8>, chunk: &[u8], max: usize) -> Result<Option<String>> {
+        leftover.extend_from_slice(chunk);
+        if let Some(pos) = leftover.iter().position(|&b| b == b'\n') {
+            let mut line = leftover.split_off(pos + 1);
+            std::mem::swap(&mut line, leftover);
+            line.pop(); // drop the `\n`
+            if line.len() > max {
+                bail!("line over limit ({max} bytes)");
+            }
+            return Ok(Some(
+                String::from_utf8(line).context("control stream is not UTF-8")?,
+            ));
         }
-        if byte[0] == b'\n' {
-            return Ok(String::from_utf8(buf).context("control stream is not UTF-8")?);
-        }
-        buf.push(byte[0]);
-        if buf.len() > max {
+        if leftover.len() > max {
             bail!("line over limit ({max} bytes)");
         }
+        Ok(None)
     }
+
+    pub async fn read_line(&mut self, recv: &mut RecvStream, max: usize) -> Result<String> {
+        // Serve a buffered line from a prior multi-line chunk first.
+        if let Some(line) = Self::push_chunk(&mut self.leftover, &[], max)? {
+            return Ok(line);
+        }
+        let mut chunk = [0u8; LINE_READ_CHUNK];
+        loop {
+            let Some(n) = recv.read(&mut chunk).await? else {
+                if self.leftover.is_empty() {
+                    bail!("peer closed mid-line");
+                }
+                bail!("peer closed mid-line");
+            };
+            if n == 0 {
+                continue;
+            }
+            if let Some(line) = Self::push_chunk(&mut self.leftover, &chunk[..n], max)? {
+                return Ok(line);
+            }
+        }
+    }
+}
+
+/// Read one newline-delimited frame with a fresh [`LineReader`].
+/// Prefer a long-lived [`LineReader`] on the session when chunks may contain multiple lines.
+pub async fn read_line_bounded(recv: &mut RecvStream, max: usize) -> Result<String> {
+    LineReader::new().read_line(recv, max).await
 }
 
 pub async fn write_line(send: &mut SendStream, line: &str) -> Result<()> {
@@ -219,6 +264,62 @@ mod tests {
     fn max_line_is_at_least_1_mib() {
         assert!(MAX_LINE >= 1024 * 1024, "MAX_LINE={MAX_LINE}");
         assert!(MAX_UNPAIRED_LINE >= 1024 * 1024, "MAX_UNPAIRED_LINE={MAX_UNPAIRED_LINE}");
+    }
+
+    #[test]
+    fn line_read_chunk_is_16_to_64_kib() {
+        assert!(LINE_READ_CHUNK >= 16 * 1024, "LINE_READ_CHUNK={LINE_READ_CHUNK}");
+        assert!(LINE_READ_CHUNK <= 64 * 1024, "LINE_READ_CHUNK={LINE_READ_CHUNK}");
+    }
+
+    #[test]
+    fn push_chunk_splits_on_newline_and_keeps_leftover() {
+        let mut buf = Vec::new();
+        assert!(LineReader::push_chunk(&mut buf, b"hel", 64).unwrap().is_none());
+        assert_eq!(buf, b"hel");
+        let line = LineReader::push_chunk(&mut buf, b"lo\nwor", 64)
+            .unwrap()
+            .expect("line");
+        assert_eq!(line, "hello");
+        assert_eq!(buf, b"wor");
+        let line2 = LineReader::push_chunk(&mut buf, b"ld\n", 64)
+            .unwrap()
+            .expect("line2");
+        assert_eq!(line2, "world");
+        assert!(buf.is_empty());
+    }
+
+    #[test]
+    fn push_chunk_rejects_oversize_before_newline() {
+        let mut buf = Vec::new();
+        let err = LineReader::push_chunk(&mut buf, b"abcdef", 4).unwrap_err();
+        assert!(err.to_string().contains("line over limit"), "{err}");
+    }
+
+    #[test]
+    fn push_chunk_rejects_oversize_completed_line() {
+        let mut buf = Vec::new();
+        let err = LineReader::push_chunk(&mut buf, b"abcdef\n", 4).unwrap_err();
+        assert!(err.to_string().contains("line over limit"), "{err}");
+    }
+
+    #[test]
+    fn push_chunk_multiple_lines_in_one_chunk() {
+        let mut buf = Vec::new();
+        let a = LineReader::push_chunk(&mut buf, b"a\nb\nc\n", 64)
+            .unwrap()
+            .expect("a");
+        assert_eq!(a, "a");
+        assert_eq!(buf, b"b\nc\n");
+        let b = LineReader::push_chunk(&mut buf, &[], 64)
+            .unwrap()
+            .expect("b");
+        assert_eq!(b, "b");
+        let c = LineReader::push_chunk(&mut buf, &[], 64)
+            .unwrap()
+            .expect("c");
+        assert_eq!(c, "c");
+        assert!(buf.is_empty());
     }
 
     #[test]

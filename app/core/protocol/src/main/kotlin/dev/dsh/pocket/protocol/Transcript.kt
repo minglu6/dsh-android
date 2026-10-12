@@ -1,5 +1,6 @@
 package dev.dsh.pocket.protocol
 
+import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 
@@ -36,6 +37,10 @@ class TranscriptReducer {
     private val localEchoes = ArrayList<Pair<Int, String>>()
     private var live: LiveAttempt? = null
     var cursor: Long = -1; private set
+    /** Lowest event seq currently folded (for history.page beforeSeq). */
+    var firstSeq: Long = -1; private set
+    /** True when older history exists beyond the current window (from snapshot/page hasMore). */
+    var hasMore: Boolean = false; private set
     var title: String? = null; private set
     var running = false; private set
     private var turns = 0
@@ -51,9 +56,21 @@ class TranscriptReducer {
     /** Apply one follow frame; returns true when visible state changed. */
     fun apply(frame: JsonElement?): Boolean {
         when (frame["type"].str()) {
-            "snapshot" -> { val keep = localEchoes.map { it.second }; reset(); records(frame["records"])
-                keep.filter { t -> committed.none { it is Item.User && it.text == t } }.forEach(::echo); readProjections(frame["projections"]); cursor = frame["cursor"].long() ?: cursor; baseline(frame["assistantStream"]) }
-            "resume" -> { records(frame["records"]); readProjections(frame["projections"]); cursor = maxOf(cursor, frame["cursor"].long() ?: cursor); baseline(frame["assistantStream"]) }
+            "snapshot" -> {
+                val keep = localEchoes.map { it.second }; reset(); records(frame["records"])
+                keep.filter { t -> committed.none { it is Item.User && it.text == t } }.forEach(::echo)
+                readProjections(frame["projections"])
+                cursor = frame["cursor"].long() ?: cursor
+                hasMore = frame["hasMore"].bool() ?: false
+                firstSeq = minSeq(frame["records"]) ?: firstSeq
+                baseline(frame["assistantStream"])
+            }
+            "resume" -> {
+                records(frame["records"]); readProjections(frame["projections"])
+                cursor = maxOf(cursor, frame["cursor"].long() ?: cursor)
+                if (firstSeq < 0) firstSeq = minSeq(frame["records"]) ?: firstSeq
+                baseline(frame["assistantStream"])
+            }
             "event" -> event(frame["event"])
             "assistant-stream" -> stream(frame["frame"])
             else -> return false
@@ -61,8 +78,54 @@ class TranscriptReducer {
         return true
     }
 
+    /**
+     * Prepend an older [history.page] window (records with seq &lt; [firstSeq]), same shape as
+     * official dsh infinite-scroll history loading.
+     */
+    fun prepend(records: JsonElement?, pageHasMore: Boolean): Boolean {
+        val arr = records.arr().orEmpty()
+        val older = arr.filter { rec ->
+            val seq = rec["event"]["seq"].long() ?: return@filter false
+            firstSeq < 0 || seq < firstSeq
+        }
+        if (older.isEmpty()) {
+            hasMore = pageHasMore
+            return false
+        }
+        val tmp = TranscriptReducer()
+        older.forEach { rec -> if (rec["type"].str() == "event") tmp.event(rec["event"], skipDup = false) }
+        val prefix = ArrayList(tmp.committed)
+        val n = prefix.size
+        if (n == 0) {
+            hasMore = pageHasMore
+            minSeq(JsonArray(older))?.let { firstSeq = it }
+            return false
+        }
+        shiftIndexes(n)
+        for ((k, v) in tmp.toolIndex) toolIndex.putIfAbsent(k, v)
+        for ((k, v) in tmp.userByRpc) userByRpc.putIfAbsent(k, v)
+        for ((k, v) in tmp.approvalCall) approvalCall.putIfAbsent(k, v)
+        committed.addAll(0, prefix)
+        hasMore = pageHasMore
+        firstSeq = minSeq(JsonArray(older)) ?: firstSeq
+        return true
+    }
+
+    private fun shiftIndexes(n: Int) {
+        for (k in toolIndex.keys.toList()) toolIndex[k] = toolIndex.getValue(k) + n
+        for (k in userByRpc.keys.toList()) userByRpc[k] = userByRpc.getValue(k) + n
+        for (i in localEchoes.indices) {
+            val (idx, text) = localEchoes[i]
+            localEchoes[i] = (idx + n) to text
+        }
+    }
+
+    private fun minSeq(records: JsonElement?): Long? =
+        records.arr()?.mapNotNull { it["event"]["seq"].long() }?.minOrNull()
+
     private fun reset() {
-        committed.clear(); toolIndex.clear(); approvalCall.clear(); userByRpc.clear(); localEchoes.clear(); live = null; cursor = -1
+        committed.clear(); toolIndex.clear(); approvalCall.clear(); userByRpc.clear(); localEchoes.clear(); live = null
+        cursor = -1; firstSeq = -1; hasMore = false
         turns = 0; steps = 0; inputTokens = 0; cacheRead = 0; outputTokens = 0; running = false
     }
 
@@ -86,11 +149,12 @@ class TranscriptReducer {
         live = l
     }
 
-    private fun event(e: JsonElement?) {
+    private fun event(e: JsonElement?, skipDup: Boolean = true) {
         if (e == null || e["ignorable"].bool() == true) return
         val seq = e["seq"].long() ?: return
-        if (seq <= cursor) return
-        cursor = seq
+        if (skipDup && seq <= cursor) return
+        if (seq > cursor) cursor = seq
+        if (firstSeq < 0 || seq < firstSeq) firstSeq = seq
         val data = e["data"]
         when (e["type"].str()) {
             "turn/start" -> { turns++; running = true }

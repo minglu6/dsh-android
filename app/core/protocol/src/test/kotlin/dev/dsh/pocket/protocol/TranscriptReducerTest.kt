@@ -74,6 +74,46 @@ class TranscriptReducerTest {
         assertEquals(listOf("a", "b"), r.items().map { (it as Item.User).text })
     }
 
+    @Test fun snapshotTracksHasMoreAndFirstSeq() {
+        val r = TranscriptReducer()
+        r.apply(j("""{"type":"snapshot","cursor":5,"hasMore":true,"records":[
+            {"type":"event","event":{"type":"user/message","seq":3,"time":3,"data":{"content":[{"type":"text","text":"older"}]}}},
+            {"type":"event","event":{"type":"user/message","seq":5,"time":5,"data":{"content":[{"type":"text","text":"newer"}]}}}
+        ],"projections":{}}"""))
+        assertTrue(r.hasMore)
+        assertEquals(3, r.firstSeq)
+        assertEquals(5, r.cursor)
+    }
+
+    @Test fun prependOlderHistoryKeepsTailAndUpdatesFirstSeq() {
+        val r = TranscriptReducer()
+        r.apply(j("""{"type":"snapshot","cursor":4,"hasMore":true,"records":[
+            {"type":"event","event":{"type":"user/message","seq":3,"time":3,"data":{"content":[{"type":"text","text":"mid"}]}}},
+            {"type":"event","event":{"type":"user/message","seq":4,"time":4,"data":{"content":[{"type":"text","text":"new"}]}}}
+        ],"projections":{}}"""))
+        assertEquals(listOf("mid", "new"), r.items().map { (it as Item.User).text })
+        val changed = r.prepend(j("""[
+            {"type":"event","event":{"type":"user/message","seq":1,"time":1,"data":{"content":[{"type":"text","text":"old1"}]}}},
+            {"type":"event","event":{"type":"user/message","seq":2,"time":2,"data":{"content":[{"type":"text","text":"old2"}]}}}
+        ]"""), pageHasMore = false)
+        assertTrue(changed)
+        assertEquals(listOf("old1", "old2", "mid", "new"), r.items().map { (it as Item.User).text })
+        assertEquals(1, r.firstSeq)
+        assertEquals(4, r.cursor)
+        assertFalse(r.hasMore)
+    }
+
+    @Test fun prependIgnoresOverlapAndClearsHasMoreOnEmptyPage() {
+        val r = TranscriptReducer()
+        r.apply(j("""{"type":"snapshot","cursor":2,"hasMore":true,"records":[
+            {"type":"event","event":{"type":"user/message","seq":1,"time":1,"data":{"content":[{"type":"text","text":"a"}]}}},
+            {"type":"event","event":{"type":"user/message","seq":2,"time":2,"data":{"content":[{"type":"text","text":"b"}]}}}
+        ],"projections":{}}"""))
+        assertFalse(r.prepend(j("""[{"type":"event","event":{"type":"user/message","seq":2,"time":2,"data":{"content":[{"type":"text","text":"dup"}]}}}]"""), pageHasMore = false))
+        assertEquals(listOf("a", "b"), r.items().map { (it as Item.User).text })
+        assertFalse(r.hasMore)
+    }
+
     @Test fun hidesInjectedContextAndMarksToolErrors() {
         val r = TranscriptReducer()
         r.apply(j("""{"type":"snapshot","cursor":0,"records":[],"projections":{}}"""))

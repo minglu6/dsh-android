@@ -15,8 +15,7 @@ use clap::{Parser, Subcommand};
 use iroh::endpoint::Connection;
 use iroh::EndpointId;
 use pocket_iroh::{
-    endpoint_builder, load_or_create_secret, read_line_bounded, report_path, write_line, ALPN,
-    MAX_LINE,
+    endpoint_builder, load_or_create_secret, report_path, write_line, LineReader, ALPN, MAX_LINE,
 };
 use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncBufReadExt, BufReader};
@@ -230,8 +229,9 @@ async fn handle_phone(
         }
     };
     let reader = async {
+        let mut lines = LineReader::new();
         loop {
-            match read_line_bounded(&mut recv, MAX_LINE).await {
+            match lines.read_line(&mut recv, MAX_LINE).await {
                 Ok(line) => emit(&PluginOut::PeerData {
                     id: id.clone(),
                     line,
@@ -272,9 +272,10 @@ async fn phone_sim_main(data_dir: PathBuf, peer: String, first: Option<String>) 
     // the session — otherwise the peer closes before the host accepts the bi-stream.
     let mut stdin = BufReader::new(tokio::io::stdin()).lines();
     let mut stdin_open = true;
+    let mut lines = LineReader::new();
     loop {
         tokio::select! {
-            r = read_line_bounded(&mut recv, MAX_LINE) => {
+            r = lines.read_line(&mut recv, MAX_LINE) => {
                 let line = r?;
                 println!("{line}");
             }

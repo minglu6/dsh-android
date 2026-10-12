@@ -8,6 +8,12 @@ export const PROTO = 1
 const PRE_AUTH_MAX = 64 * 1024
 const MAX_PAYLOAD = 32 * 1024 * 1024
 const HELLO_TIMEOUT_MS = 10_000
+/** Default follow window when the client omits maxMessages (phone must stay under iroh MAX_LINE). */
+export const DEFAULT_FOLLOW_MAX_MESSAGES = 50
+/** Soft budget for an encoded follow push line; leave headroom under pocket-iroh MAX_LINE (1 MiB). */
+export const FRAME_SOFT_LIMIT = 900 * 1024
+/** Hard ceiling — must match plugin/iroh/pocket-iroh/src/lib.rs MAX_LINE. */
+export const FRAME_HARD_LIMIT = 1024 * 1024
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 const eventSeq = (rec) => rec?.event?.seq
@@ -17,6 +23,103 @@ class OpError extends Error {
 }
 const need = (cond, msg) => { if (!cond) throw new OpError('bad-request', msg) }
 const str = (v) => typeof v === 'string' && v.length > 0
+
+/** Byte length of a follow push envelope (what crosses the iroh line reader). */
+export function followPushBytes(frame, subId = 's0') {
+  return Buffer.byteLength(JSON.stringify({ ev: 'follow', subId, frame }), 'utf8')
+}
+
+function truncateText(text, maxChars) {
+  if (typeof text !== 'string' || text.length <= maxChars) return text
+  return `${text.slice(0, maxChars)}\n…[truncated]`
+}
+
+function truncateContentBlocks(blocks, maxChars) {
+  if (!Array.isArray(blocks)) return blocks
+  return blocks.map((b) => {
+    if (!b || typeof b !== 'object') return b
+    if (b.type === 'text' && typeof b.text === 'string' && b.text.length > maxChars) {
+      return { ...b, text: truncateText(b.text, maxChars) }
+    }
+    if (b.type === 'reasoning' && typeof b.text === 'string' && b.text.length > maxChars) {
+      return { ...b, text: truncateText(b.text, maxChars) }
+    }
+    return b
+  })
+}
+
+/**
+ * Shrink huge tool outputs / text blocks inside a snapshot|resume frame so the
+ * encoded push stays under the iroh line cap. Full text is available later via
+ * history.page when the client expands or pages.
+ */
+export function truncateToolOutputsInFrame(frame, maxChars = 8_000) {
+  if (!frame || typeof frame !== 'object' || !Array.isArray(frame.records)) return frame
+  const records = frame.records.map((rec) => {
+    if (rec?.type !== 'event' || !rec.event || typeof rec.event !== 'object') return rec
+    const ev = rec.event
+    const data = ev.data
+    if (!data || typeof data !== 'object') return rec
+    if (ev.type === 'tool/result' && data.message && typeof data.message === 'object') {
+      const content = truncateContentBlocks(data.message.content, maxChars)
+      return { ...rec, event: { ...ev, data: { ...data, message: { ...data.message, content } } } }
+    }
+    if (ev.type === 'assistant/message' && data.message && typeof data.message === 'object') {
+      const content = truncateContentBlocks(data.message.content, maxChars)
+      return { ...rec, event: { ...ev, data: { ...data, message: { ...data.message, content } } } }
+    }
+    if (ev.type === 'user/message') {
+      const msg = data.content != null ? data : data.message
+      if (msg && typeof msg === 'object' && Array.isArray(msg.content)) {
+        const content = truncateContentBlocks(msg.content, maxChars)
+        if (data.content != null) return { ...rec, event: { ...ev, data: { ...data, content } } }
+        return { ...rec, event: { ...ev, data: { ...data, message: { ...msg, content } } } }
+      }
+    }
+    return rec
+  })
+  return { ...frame, records }
+}
+
+/**
+ * Ensure a follow frame fits under FRAME_SOFT_LIMIT (and never over FRAME_HARD_LIMIT):
+ * prefer a smaller history window, then truncate inline tool/text payloads.
+ */
+export async function fitFollowFrame(sc, frame, args, signal, softLimit = FRAME_SOFT_LIMIT) {
+  if (!frame || (frame.type !== 'snapshot' && frame.type !== 'resume')) return frame
+  let fitted = frame
+  let size = followPushBytes(fitted)
+  if (size <= softLimit) return fitted
+
+  let maxMsg = Number.isSafeInteger(args.maxMessages) ? args.maxMessages : DEFAULT_FOLLOW_MAX_MESSAGES
+  const throughSeq = Number.isSafeInteger(frame.cursor) ? frame.cursor : Number.MAX_SAFE_INTEGER
+  while (size > softLimit && maxMsg > 5 && typeof sc?.page === 'function') {
+    maxMsg = Math.max(5, Math.floor(maxMsg / 2))
+    const page = await sc.page({
+      address: { kind: 'session', sessionId: args.sessionId },
+      throughSeq,
+      maxMessages: maxMsg,
+    }, signal)
+    const records = page?.records ?? []
+    // Shrinking the window means older history exists even if the page flag is false.
+    const hasMore = page?.hasMore === true || records.length < (frame.records?.length ?? 0) || frame.hasMore === true
+    fitted = { ...fitted, type: fitted.type === 'resume' ? 'resume' : 'snapshot', records, hasMore }
+    size = followPushBytes(fitted)
+  }
+
+  let textCap = 8_000
+  while (size > softLimit && textCap >= 250) {
+    fitted = truncateToolOutputsInFrame(fitted, textCap)
+    size = followPushBytes(fitted)
+    if (size <= softLimit) break
+    textCap = Math.floor(textCap / 2)
+  }
+
+  if (size > FRAME_HARD_LIMIT) {
+    throw new OpError('frame-too-large', `follow frame exceeds MAX_LINE (${size} bytes)`)
+  }
+  return fitted
+}
 
 /**
  * Keep only fields Android `SessionSummary.parse` reads.
@@ -308,15 +411,22 @@ export function createPocketServer(opts) {
   }
 
   async function pump(client, subId, ac, args) {
+    // Phone clients that omit maxMessages used to get the full dsh snapshot (often
+    // multi-MB). Cap at 50 and keep dsh hasMore/cursor so the app can page older history.
+    const maxMessages = Number.isSafeInteger(args.maxMessages) ? args.maxMessages : DEFAULT_FOLLOW_MAX_MESSAGES
+    const followArgs = { ...args, maxMessages }
     try {
       const it = sc.follow({
         address: { kind: 'session', sessionId: args.sessionId }, assistantStream: true,
-        ...(Number.isSafeInteger(args.maxMessages) ? { maxMessages: args.maxMessages } : {}),
+        maxMessages,
       }, ac.signal)
       let first = true
       for await (let frame of it) {
         if (ac.signal.aborted) break
-        if (first && frame?.type === 'snapshot' && args.afterSeq !== undefined) frame = await resumeFrame(frame, args, ac.signal)
+        if (first && frame?.type === 'snapshot' && args.afterSeq !== undefined) frame = await resumeFrame(frame, followArgs, ac.signal)
+        if (frame?.type === 'snapshot' || frame?.type === 'resume') {
+          frame = await fitFollowFrame(sc, frame, followArgs, ac.signal)
+        }
         first = false
         client.push({ ev: 'follow', subId, frame })
       }

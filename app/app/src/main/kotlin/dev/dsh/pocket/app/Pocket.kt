@@ -21,6 +21,9 @@ data class ChatState(
     val usage: Usage = Usage(0, 0, 0, 0, 0),
     val loaded: Boolean = false,
     val runStartedAt: Long? = null,
+    val hasMore: Boolean = false,
+    val loadingOlder: Boolean = false,
+    val loadError: String? = null,
 )
 
 data class ModelChoice(val provider: String, val model: String, val name: String, val effort: String?)
@@ -57,6 +60,12 @@ object Pocket {
     private var terminalSubId: String? = null
     private val stray = HashMap<String, MutableList<JsonObject>>()
     private var irohDir: File? = null
+    /** Re-follow attempts for the open session (oversize / transport flaps). Cap at [MAX_FOLLOW_ATTEMPTS]. */
+    private var followSessionId: String? = null
+    private var followAttempts = 0
+    private val followMaxMessages = 50
+    private val historyPageMax = 100
+    private val maxFollowAttempts = 3
 
     fun init(ctx: Context) {
         if (::prefs.isInitialized) return
@@ -145,8 +154,11 @@ object Pocket {
                 if (!currentCoroutineContext().isActive) { c.close(); throw e }
             } catch (e: Exception) { /* fall through to retry */ }
             client = null; c.close(); setRoute(profileId, null)
-            val reason = c.closeReason.orEmpty() + ""
+            val reason = c.closeReason.orEmpty()
             if ("4401" in reason || "4403" in reason || "auth/" in reason) { setDot(p.id, Dot.Unauthorized); return }
+            if (reason.contains("line over limit", ignoreCase = true)) {
+                failChatLoad("会话帧过大（超过 iroh 行限制），已停止重试加载")
+            }
             setDot(p.id, Dot.Offline)
             delay(backoff); backoff = (backoff * 2).coerceAtMost(30_000)
         }
@@ -166,7 +178,11 @@ object Pocket {
                 val sid = m["subId"].str() ?: return
                 if (sid == subId) applyFrame(m["frame"]) else stray.getOrPut(sid) { mutableListOf() }.add(m)
             }
-            "follow.end", "follow.error" -> if (m["subId"].str() == subId) subId = null
+            "follow.error" -> if (m["subId"].str() == subId) {
+                subId = null
+                failChatLoad(m["error"]["message"].str() ?: m["error"]["code"].str() ?: "follow error")
+            }
+            "follow.end" -> if (m["subId"].str() == subId) subId = null
             "session" -> when (m["kind"].str()) {
                 "added" -> SessionSummary.parse(m["summary"])?.let { s -> sessions.value = listOf(s) + sessions.value.filter { it.sessionId != s.sessionId } }
                 "removed" -> sessions.value = sessions.value.filter { it.sessionId != m["sessionId"].str() }
@@ -218,28 +234,82 @@ object Pocket {
         val st = chat.value ?: return
         val wasRunning = reducer.running
         reducer.apply(f)
-        chat.value = st.copy(items = reducer.items(), title = reducer.title ?: st.title, running = reducer.running, usage = reducer.usage, loaded = true,
-            runStartedAt = if (reducer.running) (if (wasRunning) st.runStartedAt else System.currentTimeMillis()) else null)
+        val kind = f["type"].str()
+        if (kind == "snapshot" || kind == "resume") followAttempts = 0
+        // Snapshot arrival → render immediately (loaded=true stops the forever spinner).
+        chat.value = st.copy(
+            items = reducer.items(),
+            title = reducer.title ?: st.title,
+            running = reducer.running,
+            usage = reducer.usage,
+            loaded = true,
+            hasMore = reducer.hasMore,
+            loadError = null,
+            runStartedAt = if (reducer.running) (if (wasRunning) st.runStartedAt else System.currentTimeMillis()) else null,
+        )
+    }
+
+    private fun failChatLoad(message: String) {
+        errors.tryEmit(message)
+        chat.value = chat.value?.copy(loaded = true, loadError = message)
     }
 
     private suspend fun refollow(c: PocketClient, sessionId: String, afterSeq: Long?) {
+        if (followSessionId != sessionId) {
+            followSessionId = sessionId
+            followAttempts = 0
+        }
+        if (followAttempts >= maxFollowAttempts) {
+            if (chat.value?.loadError == null) failChatLoad("会话加载失败：已重试 $maxFollowAttempts 次")
+            else chat.value = chat.value?.copy(loaded = true)
+            return
+        }
+        followAttempts++
         subId?.let { old -> runCatching { c.unfollow(old) } }
         subId = null
-        val sid = c.follow(sessionId, afterSeq)
+        val sid = c.follow(sessionId, afterSeq, maxMessages = followMaxMessages)
         subId = sid
         stray.remove(sid)?.forEach { applyFrame(it["frame"]) }
         stray.clear()
     }
 
     fun openSession(sessionId: String) = main.launch {
+        followSessionId = sessionId
+        followAttempts = 0
         reducer = TranscriptReducer()
         chat.value = ChatState(sessionId, title = sessions.value.firstOrNull { it.sessionId == sessionId }?.title)
         val c = client ?: return@launch
-        runCatching { refollow(c, sessionId, null) }.onFailure { errors.tryEmit(it.message ?: "follow failed") }
+        runCatching { refollow(c, sessionId, null) }.onFailure { failChatLoad(it.message ?: "follow failed") }
         if ("permissions.get" in ops.value) runCatching { c.permission(sessionId)?.let { permission.value = permission.value + (sessionId to it) } }
     }
 
-    fun closeChat() = main.launch { subId?.let { s -> client?.let { runCatching { it.unfollow(s) } } }; subId = null; chat.value = null }
+    /** Page older history when the user scrolls to the top (same contract as desktop dsh). */
+    fun loadOlderHistory() = main.launch {
+        val st = chat.value ?: return@launch
+        if (!st.hasMore || st.loadingOlder || !st.loaded) return@launch
+        val c = client ?: return@launch
+        val through = reducer.cursor
+        val before = reducer.firstSeq
+        if (through < 0 || before < 0) return@launch
+        chat.value = st.copy(loadingOlder = true)
+        runCatching {
+            val page = c.historyPage(st.sessionId, throughSeq = through, beforeSeq = before, maxMessages = historyPageMax)
+            reducer.prepend(page["records"], page["hasMore"].bool() ?: false)
+            chat.value = chat.value?.copy(
+                items = reducer.items(),
+                hasMore = reducer.hasMore,
+                loadingOlder = false,
+            )
+        }.onFailure {
+            errors.tryEmit(it.message ?: "加载历史失败")
+            chat.value = chat.value?.copy(loadingOlder = false)
+        }
+    }
+
+    fun closeChat() = main.launch {
+        subId?.let { s -> client?.let { runCatching { it.unfollow(s) } } }
+        subId = null; followSessionId = null; followAttempts = 0; chat.value = null
+    }
 
     /** Create a session (optionally with preset), then send [text] into it. */
     fun newSession(text: String, preset: String?, pendingPermission: String?, pendingModel: ModelChoice?, cwd: String? = null) = main.launch {

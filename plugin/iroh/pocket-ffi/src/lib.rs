@@ -10,8 +10,7 @@ use jni::objects::{JClass, JString};
 use jni::sys::{jint, jlong, jstring};
 use jni::JNIEnv;
 use pocket_iroh::{
-    endpoint_builder, load_or_create_secret, read_line_bounded, report_path, write_line, ALPN,
-    MAX_LINE,
+    endpoint_builder, load_or_create_secret, report_path, write_line, LineReader, ALPN, MAX_LINE,
 };
 use tokio::runtime::Runtime;
 use tokio::sync::Mutex;
@@ -30,6 +29,7 @@ struct PocketSession {
     conn: iroh::endpoint::Connection,
     send: Mutex<iroh::endpoint::SendStream>,
     recv: Mutex<iroh::endpoint::RecvStream>,
+    lines: Mutex<LineReader>,
     path: Arc<Mutex<Option<String>>>,
 }
 
@@ -185,6 +185,7 @@ pub extern "system" fn Java_dev_dsh_pocket_app_iroh_IrohNative_endpointConnect(
                 conn,
                 send: Mutex::new(send),
                 recv: Mutex::new(recv),
+                lines: Mutex::new(LineReader::new()),
                 path,
             })) as jlong
         }
@@ -257,9 +258,10 @@ pub extern "system" fn Java_dev_dsh_pocket_app_iroh_IrohNative_sessionRecv(
     let sess = unsafe { &*(sess as *const PocketSession) };
     match sess.shared.rt.block_on(async {
         let mut recv = sess.recv.lock().await;
+        let mut lines = sess.lines.lock().await;
         match tokio::time::timeout(
             Duration::from_millis((timeout_ms as u64).max(1)),
-            read_line_bounded(&mut recv, MAX_LINE),
+            lines.read_line(&mut recv, MAX_LINE),
         )
         .await
         {
