@@ -25,8 +25,16 @@ function tr(t: TFn, key: string, vars: Record<string, string | number>): string 
   )
 }
 
-// Used only if locale.bind returns the raw key without substituting vars.
 const zhFallback = { revokeBody: '将撤销「{name}」。之后该手机需重新配对才能连接。' }
+
+/** Visual twin of primitives `StateDot` (10px slot / 6px core); no package require. */
+function StatusDot({ state }: { state: 'done' | 'error' | 'idle' }): JSX.Element {
+  return (
+    <span style={styles.stateDotSlot(state)} aria-hidden="true">
+      <span style={styles.stateDotCore} />
+    </span>
+  )
+}
 
 function DeviceItem({
   device, t, api, onChanged,
@@ -65,7 +73,7 @@ function DeviceItem({
 
   return (
     <div style={styles.deviceRow}>
-      <span style={styles.dot(device.online)} title={device.online ? t('online') : t('offline')} />
+      <StatusDot state={device.online ? 'done' : 'idle'} />
       <div style={{ flex: 1, minWidth: 0 }}>
         {editing ? (
           <input
@@ -80,29 +88,29 @@ function DeviceItem({
             autoFocus
           />
         ) : (
-          <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: 13 }}>
-            {device.name}
-          </div>
+          <div style={styles.deviceName}>{device.name}</div>
         )}
-        <div style={styles.muted}>
+        <div style={styles.deviceMeta}>
           {device.online ? t('online') : t('offline')}
           {' · '}
           {t('lastSeen')}: {formatLastSeen(t, device.lastSeenAt)}
         </div>
       </div>
-      {editing ? (
-        <>
-          <button type="button" style={styles.ghostBtn} disabled={busy} onClick={() => void save()}>{t('renameSave')}</button>
-          <button type="button" style={styles.ghostBtn} disabled={busy} onClick={() => { setEditing(false); setName(device.name) }}>{t('renameCancel')}</button>
-        </>
-      ) : (
-        <>
-          <button type="button" style={styles.ghostBtn} disabled={busy} onClick={() => setEditing(true)}>{t('rename')}</button>
-          <button type="button" style={styles.dangerBtn} disabled={busy} onClick={() => setConfirmOpen(true)}>
-            {t('revoke')}
-          </button>
-        </>
-      )}
+      <div style={styles.deviceActions}>
+        {editing ? (
+          <>
+            <button type="button" style={styles.outlineBtnSm} disabled={busy} onClick={() => void save()}>{t('renameSave')}</button>
+            <button type="button" style={styles.outlineBtnSm} disabled={busy} onClick={() => { setEditing(false); setName(device.name) }}>{t('renameCancel')}</button>
+          </>
+        ) : (
+          <>
+            <button type="button" style={styles.outlineBtnSm} disabled={busy} onClick={() => setEditing(true)}>{t('rename')}</button>
+            <button type="button" style={styles.dangerBtn} disabled={busy} onClick={() => setConfirmOpen(true)}>
+              {t('revoke')}
+            </button>
+          </>
+        )}
+      </div>
       <ConfirmDialog
         open={confirmOpen}
         title={t('revokeTitle')}
@@ -185,40 +193,40 @@ export function ManagePanel({
 
   const pairing = status?.pairing
   const expires = pairing?.open ? Math.max(0, pairing.expiresInSec ?? 0) : 0
-  // tick forces countdown re-render while open
   void tick
+
+  const connectorOk = Boolean(status?.running) && !error
 
   return (
     <div style={styles.settingsRoot}>
-      {loading && !status ? <div style={styles.muted}>{t('loading')}</div> : null}
-      {error ? <div style={{ ...styles.muted, color: 'var(--dsw-alias-state-error-primary)' }}>{t('loadFailed')}: {error}</div> : null}
+      {loading && !status ? <div style={styles.hint}>{t('loading')}</div> : null}
+      {error ? <div style={styles.errorText}>{t('loadFailed')}: {error}</div> : null}
 
       {status ? (
-        <section>
-          <div style={styles.sectionLabel}>{t('statusTitle')}</div>
-          <div style={styles.row}>
-            <span style={styles.statusLine}>
+        <div style={{ ...styles.settingsRow, alignItems: 'flex-start' }}>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={styles.rowTitle}>{t('statusTitle')}</div>
+            <div style={{ ...styles.valueLine, marginTop: 6 }}>
               {status.running ? t('statusRunning') : t('statusStopped')}
-              <span
-                style={styles.statusDot(status.running && !error)}
-                aria-hidden="true"
-              />
-            </span>
-            <button type="button" style={styles.ghostBtn} onClick={() => void refresh()}>{t('refresh')}</button>
+              <StatusDot state={connectorOk ? 'done' : 'error'} />
+            </div>
+            <div style={styles.metaStack}>
+              <div style={styles.metaLine}>
+                {t('listen')}: {status.listen.map((l) => l.address).join(', ') || `${status.host}:${status.port}`}
+              </div>
+              <div style={styles.metaLine}>{t('version')}: {status.version}</div>
+            </div>
           </div>
-          <div style={{ ...styles.muted, marginTop: 6 }}>
-            {t('listen')}: {status.listen.map((l) => l.address).join(', ') || `${status.host}:${status.port}`}
-          </div>
-          <div style={styles.muted}>{t('version')}: {status.version}</div>
-        </section>
+          <button type="button" style={styles.outlineBtnSm} onClick={() => void refresh()}>{t('refresh')}</button>
+        </div>
       ) : null}
 
-      <section>
-        <div style={styles.sectionLabel}>{t('code')}</div>
+      <div style={styles.settingsBlock}>
+        <div style={styles.rowTitle}>{t('code')}</div>
         {pairing?.open && pairing.code ? (
           <>
             <div style={styles.code}>{pairing.code}</div>
-            <div style={{ ...styles.muted, textAlign: 'center' }}>
+            <div style={{ ...styles.hint, textAlign: 'center' }}>
               {t('expiresIn', { n: expires })}
               {' · '}
               {t('expiresMin', { n: Math.max(1, Math.round(expires / 60)) })}
@@ -231,12 +239,12 @@ export function ManagePanel({
                     dangerouslySetInnerHTML={{ __html: qrSvg(pairing.uri, 168) }}
                   />
                 </div>
-                <div style={{ ...styles.muted, textAlign: 'center' }}>{t('scanHint')}</div>
-                <div style={{ display: 'flex', gap: 8, justifyContent: 'center', marginTop: 8 }}>
-                  <button type="button" style={styles.ghostBtn} onClick={() => void copyUri()}>
+                <div style={{ ...styles.rowDescription, textAlign: 'center' }}>{t('scanHint')}</div>
+                <div style={{ ...styles.actionRow, justifyContent: 'center' }}>
+                  <button type="button" style={styles.outlineBtn} onClick={() => void copyUri()}>
                     {copied ? t('copied') : t('copy')}
                   </button>
-                  <button type="button" style={styles.ghostBtn} onClick={() => void closePair()}>{t('pairClose')}</button>
+                  <button type="button" style={styles.outlineBtn} onClick={() => void closePair()}>{t('pairClose')}</button>
                   <button type="button" style={styles.primaryBtn} onClick={() => void openPair()}>{t('pairAgain')}</button>
                 </div>
               </>
@@ -244,30 +252,32 @@ export function ManagePanel({
           </>
         ) : (
           <>
-            <div style={styles.muted}>{t('noCode')}</div>
-            <div style={{ marginTop: 10 }}>
+            <div style={{ ...styles.rowDescription, marginTop: 4 }}>{t('noCode')}</div>
+            <div style={styles.actionRow}>
               <button type="button" style={styles.primaryBtn} onClick={() => void openPair()}>{t('pair')}</button>
             </div>
           </>
         )}
-      </section>
+      </div>
 
-      <section>
-        <div style={styles.sectionLabel}>{t('devices')}</div>
+      <div style={styles.settingsBlock}>
+        <div style={styles.rowTitle}>{t('devices')}</div>
         {(status?.devices.length ?? 0) === 0 ? (
-          <div style={styles.muted}>{t('empty')}</div>
+          <div style={{ ...styles.rowDescription, marginTop: 8 }}>{t('empty')}</div>
         ) : (
-          status!.devices.map((d) => (
-            <DeviceItem
-              key={d.id}
-              device={d}
-              t={t}
-              api={api}
-              onChanged={(devices) => setStatus((s) => (s ? { ...s, devices } : s))}
-            />
-          ))
+          <div style={{ marginTop: 4 }}>
+            {status!.devices.map((d) => (
+              <DeviceItem
+                key={d.id}
+                device={d}
+                t={t}
+                api={api}
+                onChanged={(devices) => setStatus((s) => (s ? { ...s, devices } : s))}
+              />
+            ))}
+          </div>
         )}
-      </section>
+      </div>
     </div>
   )
 }

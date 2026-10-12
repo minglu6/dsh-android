@@ -1,93 +1,235 @@
-/** Inline styles using only `--dsw-alias-*` tokens (no literal theme colors). */
+/**
+ * Inline styles aligned with dsh settings chrome / ui-primitives tokens.
+ * Does not `require` `@deepseek-ai/dsh-client-ui-primitives` (plugin hard rule);
+ * geometry mirrors SettingsForm fields, DeveloperToolsRow, Button, StateDot.
+ */
 export const styles = {
+  /** Settings content column — same stacking as GeneralSection. */
   settingsRoot: {
     display: 'flex',
     flexDirection: 'column' as const,
-    gap: 16,
-    padding: '4px 0 24px',
+    width: '100%',
+    padding: '0 0 24px',
   },
-  sectionLabel: {
-    fontSize: 12,
-    color: 'var(--dsw-alias-label-secondary)',
-    marginBottom: 8,
-  },
-  muted: {
-    fontSize: 12,
-    color: 'var(--dsw-alias-label-tertiary)',
-  },
-  row: {
+
+  /**
+   * One settings row: title + optional description on the left, control on the
+   * right — matches ui-settings-general DeveloperToolsRow (16px pad, 0.5px rule).
+   */
+  settingsRow: {
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'space-between',
-    gap: 10,
-    fontSize: 13,
+    gap: 24,
+    padding: '16px 0',
+    borderBottom: '0.5px solid var(--dsw-alias-border-l2)',
   },
+  /** Stacked body rows (status meta, pairing body) under a section head. */
+  settingsBlock: {
+    display: 'flex',
+    flexDirection: 'column' as const,
+    gap: 0,
+    padding: '16px 0',
+    borderBottom: '0.5px solid var(--dsw-alias-border-l2)',
+  },
+  rowTitle: {
+    fontSize: 14,
+    lineHeight: '20px',
+    color: 'var(--dsw-alias-label-primary)',
+  },
+  rowDescription: {
+    marginTop: 4,
+    fontSize: 12,
+    lineHeight: '18px',
+    color: 'var(--dsw-alias-label-secondary)',
+  },
+  hint: {
+    margin: 0,
+    fontSize: 12,
+    lineHeight: '18px',
+    color: 'var(--dsw-alias-label-tertiary)',
+  },
+  errorText: {
+    margin: '0 0 12px',
+    fontSize: 12,
+    lineHeight: '18px',
+    color: 'var(--dsw-alias-state-error-primary)',
+  },
+
+  /** Value line next to a row title (e.g. Running + StateDot). */
+  valueLine: {
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: 8,
+    fontSize: 14,
+    lineHeight: '20px',
+    color: 'var(--dsw-alias-label-primary)',
+  },
+
+  /**
+   * Mirror of primitives StateDot solid appearance:
+   * 10px layout slot, 6px currentColor core via inset 20% (soft visual weight).
+   */
+  stateDotSlot: (state: 'done' | 'error' | 'idle') => ({
+    position: 'relative' as const,
+    display: 'inline-block',
+    flex: 'none',
+    width: 10,
+    height: 10,
+    color:
+      state === 'done'
+        ? 'var(--dsw-alias-state-success-primary)'
+        : state === 'error'
+          ? 'var(--dsw-alias-state-error-primary)'
+          : 'var(--dsw-alias-state-idle-primary, var(--dsw-alias-label-tertiary))',
+  }),
+  /** Inner core for StateDot-style slot (absolute inset 20% → ~6px). */
+  stateDotCore: {
+    position: 'absolute' as const,
+    inset: '20%',
+    borderRadius: '50%',
+    background: 'currentColor',
+  },
+
+  metaStack: {
+    display: 'flex',
+    flexDirection: 'column' as const,
+    gap: 4,
+    marginTop: 10,
+  },
+  metaLine: {
+    fontSize: 12,
+    lineHeight: '18px',
+    color: 'var(--dsw-alias-label-tertiary)',
+  },
+
+  /** Official Button md primary. */
   primaryBtn: {
     appearance: 'none' as const,
+    boxSizing: 'border-box' as const,
+    display: 'inline-flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    height: 36,
+    padding: '0 14px',
     border: 'none',
-    borderRadius: 8,
-    padding: '8px 14px',
+    borderRadius: 'var(--dsw-radius-md, 8px)',
     background: 'var(--dsw-alias-button-primary-fill)',
-    color: 'var(--dsw-alias-button-primary-label, var(--dsw-alias-bg-base))',
+    color: 'var(--dsw-alias-label-primary-foreground, var(--dsw-alias-bg-base))',
     cursor: 'pointer',
     font: 'inherit',
-    fontSize: 13,
-    fontWeight: 500,
+    fontSize: 14,
+    lineHeight: '22px',
   },
-  ghostBtn: {
+  /** Official Button md outline. */
+  outlineBtn: {
     appearance: 'none' as const,
-    border: '1px solid var(--dsw-alias-border-l2)',
-    borderRadius: 8,
-    padding: '7px 12px',
+    boxSizing: 'border-box' as const,
+    display: 'inline-flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    height: 36,
+    padding: '0 14px',
+    border: '0.5px solid var(--dsw-alias-border-l3)',
+    borderRadius: 'var(--dsw-radius-md, 8px)',
     background: 'transparent',
     color: 'var(--dsw-alias-label-primary)',
     cursor: 'pointer',
     font: 'inherit',
-    fontSize: 13,
+    fontSize: 14,
+    lineHeight: '22px',
   },
+  /** Official Button sm outline — compact row actions. */
+  outlineBtnSm: {
+    appearance: 'none' as const,
+    boxSizing: 'border-box' as const,
+    display: 'inline-flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    height: 28,
+    padding: '0 10px',
+    border: '0.5px solid var(--dsw-alias-border-l3)',
+    borderRadius: 'var(--dsw-radius-sm, 6px)',
+    background: 'transparent',
+    color: 'var(--dsw-alias-label-primary)',
+    cursor: 'pointer',
+    font: 'inherit',
+    fontSize: 12,
+    lineHeight: '18px',
+  },
+  /** Textual destructive action (no fill). */
   dangerBtn: {
     appearance: 'none' as const,
+    boxSizing: 'border-box' as const,
+    display: 'inline-flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    height: 28,
+    padding: '0 10px',
     border: 'none',
-    borderRadius: 8,
-    padding: '6px 10px',
+    borderRadius: 'var(--dsw-radius-sm, 6px)',
     background: 'transparent',
     color: 'var(--dsw-alias-state-error-primary)',
     cursor: 'pointer',
     font: 'inherit',
     fontSize: 12,
+    lineHeight: '18px',
   },
   destructiveBtn: {
     appearance: 'none' as const,
+    boxSizing: 'border-box' as const,
+    display: 'inline-flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    height: 36,
+    padding: '0 14px',
     border: 'none',
-    borderRadius: 8,
-    padding: '8px 14px',
+    borderRadius: 'var(--dsw-radius-md, 8px)',
     background: 'var(--dsw-alias-state-error-primary)',
     color: 'var(--dsw-alias-label-primary-foreground, #fff)',
     cursor: 'pointer',
     font: 'inherit',
-    fontSize: 13,
+    fontSize: 14,
+    lineHeight: '22px',
     fontWeight: 500,
   },
+  /** Alias kept for ConfirmDialog cancel. */
+  ghostBtn: {
+    appearance: 'none' as const,
+    boxSizing: 'border-box' as const,
+    display: 'inline-flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    height: 36,
+    padding: '0 14px',
+    border: '0.5px solid var(--dsw-alias-border-l3)',
+    borderRadius: 'var(--dsw-radius-md, 8px)',
+    background: 'transparent',
+    color: 'var(--dsw-alias-label-primary)',
+    cursor: 'pointer',
+    font: 'inherit',
+    fontSize: 14,
+    lineHeight: '22px',
+  },
+
   dialogMask: {
     position: 'fixed' as const,
     inset: 0,
-    // Above dsh Modal / settings panel (z-index 1000); same band as Toast / Menu portal
     zIndex: 1100,
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
     pointerEvents: 'auto' as const,
-    // Match dsh Modal mask: dark translucent fill, no blur
     background: 'rgba(0, 0, 0, 0.45)',
     padding: 24,
   },
   dialogCard: {
     width: 'min(400px, calc(100vw - 48px))',
-    borderRadius: 12,
-    border: '1px solid var(--dsw-alias-border-l2)',
+    borderRadius: 'var(--dsw-radius-panel, 12px)',
+    border: '0.5px solid var(--dsw-alias-border-l2)',
     background: 'var(--dsw-alias-bg-base)',
     color: 'var(--dsw-alias-label-primary)',
-    boxShadow: 'var(--dsw-elevation-overlay, 0 12px 40px rgba(0,0,0,0.25))',
+    boxShadow: 'var(--dsw-elevation-prominent, 0 12px 40px rgba(0,0,0,0.25))',
     padding: '20px 22px 18px',
     display: 'flex',
     flexDirection: 'column' as const,
@@ -96,7 +238,7 @@ export const styles = {
   dialogTitle: {
     margin: 0,
     fontSize: 16,
-    fontWeight: 600,
+    fontWeight: 500,
     lineHeight: '24px',
   },
   dialogBody: {
@@ -111,66 +253,75 @@ export const styles = {
     gap: 8,
     marginTop: 8,
   },
+
   code: {
     fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace',
-    fontSize: 32,
-    letterSpacing: '0.18em',
+    fontSize: 28,
+    letterSpacing: '0.16em',
     fontWeight: 600,
     textAlign: 'center' as const,
-    padding: '8px 0 4px',
+    color: 'var(--dsw-alias-label-primary)',
+    padding: '12px 0 4px',
   },
   qrWrap: {
     display: 'flex',
     justifyContent: 'center',
-    padding: '8px 0',
+    padding: '12px 0 4px',
   },
   qrBox: {
     padding: 10,
-    borderRadius: 10,
+    borderRadius: 'var(--dsw-radius-md, 8px)',
     background: '#fff',
-    border: '1px solid var(--dsw-alias-border-l3)',
+    border: '0.5px solid var(--dsw-alias-border-l3)',
     lineHeight: 0,
   },
+  actionRow: {
+    display: 'flex',
+    flexWrap: 'wrap' as const,
+    gap: 8,
+    marginTop: 12,
+  },
+
   deviceRow: {
     display: 'flex',
     alignItems: 'center',
-    gap: 10,
-    padding: '8px 0',
-    borderTop: '1px solid var(--dsw-alias-border-l3)',
+    gap: 12,
+    padding: '16px 0',
+    borderBottom: '0.5px solid var(--dsw-alias-border-l2)',
   },
-  dot: (online: boolean) => ({
-    flex: 'none',
-    width: 8,
-    height: 8,
-    borderRadius: '50%',
-    background: online
-      ? 'var(--dsw-alias-state-success-primary)'
-      : 'var(--dsw-alias-border-l2)',
-  }),
-  /** Connector running → green; stopped / failed → red. */
-  statusDot: (ok: boolean) => ({
-    flex: 'none',
-    width: 8,
-    height: 8,
-    borderRadius: '50%',
-    background: ok
-      ? 'var(--dsw-alias-state-success-primary)'
-      : 'var(--dsw-alias-state-error-primary)',
-  }),
-  statusLine: {
-    display: 'inline-flex',
+  deviceName: {
+    fontSize: 14,
+    lineHeight: '20px',
+    color: 'var(--dsw-alias-label-primary)',
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+    whiteSpace: 'nowrap' as const,
+  },
+  deviceMeta: {
+    marginTop: 4,
+    fontSize: 12,
+    lineHeight: '18px',
+    color: 'var(--dsw-alias-label-secondary)',
+  },
+  deviceActions: {
+    display: 'flex',
     alignItems: 'center',
     gap: 8,
+    flex: 'none',
   },
+
   input: {
+    boxSizing: 'border-box' as const,
     flex: 1,
     minWidth: 0,
-    border: '1px solid var(--dsw-alias-border-l2)',
-    borderRadius: 6,
-    padding: '6px 8px',
-    background: 'var(--dsw-alias-bg-base)',
+    height: 34,
+    border: '0.5px solid var(--dsw-alias-border-l4)',
+    borderRadius: 'var(--dsw-radius-md, 8px)',
+    padding: '0 12px',
+    background: 'var(--dsw-alias-bg-layer-3, var(--dsw-alias-bg-base))',
     color: 'var(--dsw-alias-label-primary)',
     font: 'inherit',
     fontSize: 13,
+    lineHeight: '1.5',
   },
 } as const
