@@ -23,6 +23,8 @@ data class ChatState(
     val hasMore: Boolean = false,
     val firstSeq: Long = -1,
     val loadingOlder: Boolean = false,
+    /** Latest agent todo list (`todo/write` / projections.todos). */
+    val todos: List<TodoItem> = emptyList(),
 )
 
 data class ModelChoice(val provider: String, val model: String, val name: String, val effort: String?)
@@ -237,6 +239,7 @@ object Pocket {
             hasMore = reducer.hasMore,
             firstSeq = reducer.firstSeq,
             runStartedAt = if (reducer.running) (if (wasRunning) st.runStartedAt else System.currentTimeMillis()) else null,
+            todos = reducer.todos(),
         )
     }
 
@@ -353,6 +356,22 @@ object Pocket {
     }
 
     fun rename(sessionId: String, title: String) = main.launch { runCatching { client?.call("sessions.rename", jsonOf("sessionId" to sessionId, "title" to title)) } }
+
+    /**
+     * Fork the open session at [atSeq] (desktop `message.branch`).
+     * Omitting [atSeq] uses the Host's latest completed-turn prefix.
+     */
+    fun forkSession(atSeq: Long? = null) = main.launch {
+        val c = client ?: run { errors.tryEmit("未连接"); return@launch }
+        val st = chat.value ?: run { errors.tryEmit("无会话"); return@launch }
+        if (!hasOp("sessions.fork")) { errors.tryEmit("桌面端未提供分叉"); return@launch }
+        runCatching {
+            val childId = c.forkSession(st.sessionId, atSeq)["sessionId"].str()
+                ?: error("fork 未返回 sessionId")
+            refreshTitles(c)
+            openSession(childId)
+        }.onFailure { errors.tryEmit(it.message ?: "无法分叉会话，请重试") }
+    }
 
     fun answer(approvalId: String, outcome: String) = main.launch {
         approvals.value = approvals.value.filter { it.approvalId != approvalId }

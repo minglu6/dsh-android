@@ -193,7 +193,7 @@ class ScreenshotTest {
     @Test fun s16_panelWithTerminal() {
         Pocket.ops.value = setOf("files.list", "terminal.create", "jobs.list")
         showWithDialogs("16-panel-terminal") {
-            PanelSheet("/tmp/ws", {}, {}, {}, {})
+            PanelSheet(cwd = "/tmp/ws", onDismiss = {}, onFiles = {}, onTerminal = {}, onJobs = {})
         }
     }
     @Test fun s17_profileManageSheet() = showWithDialogs("17-profile-manage") {
@@ -210,6 +210,28 @@ class ScreenshotTest {
         rule.onNodeWithText("重命名").performClick()
         rule.waitForIdle()
         captureScreenRoboImage(out("18-profile-rename"))
+    }
+    @Test fun s20_todoSheet() = showWithDialogs("20-todo-sheet") {
+        TodoSheet(
+            listOf(
+                TodoItem("读配置", "completed"),
+                TodoItem("改代码", "in_progress"),
+                TodoItem("写测试", "pending"),
+            ),
+        ) {}
+    }
+    @Test fun s21_panelWithTodo() {
+        Pocket.ops.value = setOf("files.list", "jobs.list")
+        showWithDialogs("21-panel-todo") {
+            PanelSheet(
+                cwd = "/tmp/ws",
+                todos = listOf(TodoItem("读配置", "completed"), TodoItem("改代码", "in_progress")),
+                onDismiss = {},
+                onFiles = {},
+                onTerminal = {},
+                onJobs = {},
+            )
+        }
     }
     @Test fun s19_terminalSheet() {
         Pocket.ops.value = setOf("terminal.create", "terminal.follow")

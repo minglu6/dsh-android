@@ -19,6 +19,7 @@ function mockSc() {
     list: rec('list', { items: [{ sessionId: 's1', running: false }] }),
     create: rec('create', { sessionId: 'new1' }),
     rename: rec('rename', { title: 'T', seq: 3 }),
+    fork: rec('fork', (r) => ({ sessionId: `fork-of-${r.sessionId}`, atSeq: r.atSeq ?? null })),
     prompt: rec('prompt', { accepted: true }),
     cancel: rec('cancel', { accepted: true }),
     updateQueue: rec('updateQueue', { accepted: true }),
@@ -86,14 +87,21 @@ test('rejects ops before hello', async () => {
   assert.equal(await c.closed, 4401)
 })
 
-test('hello lists ops; sessions.list/create/rename pass through', async () => {
+test('hello lists ops; sessions.list/create/rename/fork pass through', async () => {
   const c = connect(); await c.open
   const h = await c.call('hello', { proto: 1, token: TOKEN })
   assert.ok(h.result.ops.includes('prompt'))
+  assert.ok(h.result.ops.includes('sessions.fork'))
   assert.deepEqual((await c.call('sessions.list')).result.items[0].sessionId, 's1')
   assert.equal((await c.call('sessions.create', { cwd: '/tmp' })).result.sessionId, 'new1')
   assert.deepEqual(sc.calls.find((x) => x[0] === 'create')[1], { cwd: '/tmp' })
   assert.equal((await c.call('sessions.rename', { sessionId: 's1', title: 'T' })).ok, true)
+  const forked = await c.call('sessions.fork', { sessionId: 's1', atSeq: 42 })
+  assert.equal(forked.result.sessionId, 'fork-of-s1')
+  assert.deepEqual(sc.calls.find((x) => x[0] === 'fork')[1], { sessionId: 's1', atSeq: 42 })
+  const forkedLatest = await c.call('sessions.fork', { sessionId: 's1' })
+  assert.equal(forkedLatest.result.sessionId, 'fork-of-s1')
+  assert.deepEqual(sc.calls.filter((x) => x[0] === 'fork').at(-1)[1], { sessionId: 's1' })
   c.ws.close()
 })
 

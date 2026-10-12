@@ -254,15 +254,15 @@ Appearance values from `ui-theme` locales. Performance: `settings.performance.{c
 | Non-image file attach | missing | needs-plugin / hide folders |
 | `/` command popup | Plus sheet only | feasible |
 | `@` file/session mentions | placeholder only | needs-plugin |
-| Copy on messages | missing | **feasible** |
-| Branch / fork from message | missing | **needs-plugin** (`sessions.fork`) then feasible |
+| Copy on messages | **done** (this PR) | feasible |
+| Branch / fork from message | **done** (`sessions.fork` + actions) | was needs-plugin |
 | Like / dislike | missing | **needs-plugin** (message-feedback) |
-| Message clock | missing (times exist on items) | **feasible** |
-| Retry / turn-error / maxTokens rows | partial (retry notice only) | **feasible** (parse + locale) |
-| Stopped / interrupted copy | 「已中断」; align `message.stopped` | **feasible** |
+| Message clock | **done** (this PR) | feasible |
+| Retry / turn-error / maxTokens rows | **done** (this PR) | feasible |
+| Stopped / interrupted copy | **done** (`message.stopped` 已停止) | feasible |
 | Deliverable / changed-file cards | missing | feasible after event parse |
 | Streaming + stop | present | — |
-| Todo panel (清单) | missing | **needs-plugin** (projections.todos) |
+| Todo panel (清单) | **done** (parse `todo/write` + projections; sheet) | was needs-plugin |
 | User-questions prompts | missing | **needs-plugin** |
 
 ### Header / composer / sidebar / panels / settings
@@ -289,14 +289,14 @@ Appearance values from `ui-theme` locales. Performance: `settings.performance.{c
 
 **Present:** `sessions.list/create/rename`, `prompt`, `cancel`, `follow`/`unfollow`, `history.page`, `models.*`, `permissions.*`, `presets.list`, `approval.*`, `devices.*`, `pairing.*`, `commands.execute`, `session.export`, `files.list/read`, `jobs.list/kill`, `terminal.*`.
 
-**Needed for remaining feasible gaps:**
+**Added in this pass:** `sessions.fork` → `sessionController.fork`. Todos arrive via follow `todo/write` events and `projections.values.todos` (no extra op).
+
+**Still needed for remaining gaps:**
 
 | Op | Host | Unlocks |
 |---|---|---|
-| `sessions.fork` | `sessionController.fork` | message branch + sidebar fork |
 | `sessions.search` | `sessionController.search` | sidebar search |
 | `workspace.archiveSession` / `unarchive` / `pin` / `unpin` | workspace controller | sidebar archive/pin |
-| Forward `projections.values.todos` on follow (or `projections.get`) | session projections | 清单 sheet |
 | `feedback.get` / `feedback.set` (message) | message-feedback | like/dislike |
 | `userQuestions.answer` (+ push ask events) | user-questions waterfall | ask-user cards |
 

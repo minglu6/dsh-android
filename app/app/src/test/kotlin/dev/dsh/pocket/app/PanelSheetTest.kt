@@ -65,7 +65,7 @@ class PanelSheetTest {
         Pocket.ops.value = emptySet()
         rule.setContent {
             PocketTheme {
-                PanelSheet("/tmp/ws", {}, {}, {}, {})
+                PanelSheet(cwd = "/tmp/ws", onDismiss = {}, onFiles = {}, onTerminal = {}, onJobs = {})
             }
         }
         rule.mainClock.advanceTimeBy(1500)

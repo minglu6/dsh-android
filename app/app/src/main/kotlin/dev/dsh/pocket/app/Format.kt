@@ -53,3 +53,30 @@ fun footerText(turns: Int, steps: Int, hit: Int?) = buildString {
 
 /** "DeepSeek-V4.1-Flash" -> "V4.1-Flash": the vendor prefix is implied in a DeepSeek client. */
 fun shortModelName(name: String): String = name.removePrefix("DeepSeek-").removePrefix("deepseek-").ifBlank { name }
+
+/**
+ * Desktop `formatMessageClock` / `clock.md` / `clock.ymd`:
+ * same calendar day → `HH:mm`; same year → `{m}月{d}日 HH:mm`; else `{y}年{m}月{d}日`.
+ */
+fun formatMessageClock(timestampMs: Long, nowMs: Long = System.currentTimeMillis()): String {
+    val cal = java.util.Calendar.getInstance().apply { timeInMillis = timestampMs }
+    val now = java.util.Calendar.getInstance().apply { timeInMillis = nowMs }
+    fun two(n: Int) = n.toString().padStart(2, '0')
+    val hm = "${two(cal.get(java.util.Calendar.HOUR_OF_DAY))}:${two(cal.get(java.util.Calendar.MINUTE))}"
+    val sameDay = cal.get(java.util.Calendar.YEAR) == now.get(java.util.Calendar.YEAR)
+        && cal.get(java.util.Calendar.DAY_OF_YEAR) == now.get(java.util.Calendar.DAY_OF_YEAR)
+    if (sameDay) return hm
+    val m = cal.get(java.util.Calendar.MONTH) + 1
+    val d = cal.get(java.util.Calendar.DAY_OF_MONTH)
+    val sameYear = cal.get(java.util.Calendar.YEAR) == now.get(java.util.Calendar.YEAR)
+    val date = if (sameYear) "${m}月${d}日"
+    else "${cal.get(java.util.Calendar.YEAR)}年${m}月${d}日"
+    return "$date $hm"
+}
+
+/** Desktop todo status labels (`todo.status.*`). */
+fun todoStatusLabel(status: String): String = when (status) {
+    "completed" -> "已完成"
+    "in_progress" -> "进行中"
+    else -> "待处理"
+}
