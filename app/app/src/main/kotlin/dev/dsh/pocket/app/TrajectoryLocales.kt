@@ -1,0 +1,123 @@
+package dev.dsh.pocket.app
+
+/**
+ * Desktop `@deepseek-ai/dsh-client-ui-trajectory` `locales.ts` zh dictionary
+ * (`deepseek-harness` @ d743267). Invent no copy — every user-visible trajectory
+ * string must come from here (or from recorded session payload).
+ */
+object TrajL {
+    const val viewTrajectory = "轨迹"
+    const val toolbarDuration = "时长"
+    const val toolbarTurns = "轮次"
+    const val toolbarCalls = "调用"
+    const val toolbarSearch = "搜索轨迹"
+    const val toolbarSearchPlaceholder = "搜索"
+
+    const val kindSystem = "系统"
+    const val kindUser = "用户"
+    const val kindContext = "上下文"
+    const val kindCompacted = "已压缩"
+    const val kindAssistant = "助手"
+    const val kindTool = "工具"
+    const val kindSubtool = "子工具"
+
+    const val columnInput = "输入"
+    const val columnOutput = "输出"
+    const val columnThink = "思考"
+    const val columnTime = "时间"
+    const val columnModel = "模型"
+    const val columnTools = "工具"
+
+    fun turnLabel(turn: Int) = "第 $turn 轮"
+    const val sectionBetweenTurns = "轮次之间"
+    fun groupStep(step: Int) = "第 $step 步"
+    fun groupCompaction(seq: Long) = "压缩 $seq"
+
+    const val statusFailed = "失败"
+    const val statusPending = "等待中"
+    const val statusCompleted = "已完成"
+
+    const val timingNotAvailable = "不可用"
+    const val timingStarted = "开始时间"
+    const val timingTotalDuration = "总时长"
+    const val timingTtft = "首 token 延迟"
+    const val timingGeneration = "生成"
+    const val timingThroughput = "吞吐量"
+    const val timingDuration = "时长"
+    const val timingSource = "计时来源"
+    const val timingSessionTimestamps = "会话时间戳"
+    const val timingSessionTimestampsRunning = "会话时间戳（运行中）"
+    const val timingFirstTokenUnavailable = "首 token 时间不可用"
+    const val timingRequest = "请求计时"
+
+    fun unitMilliseconds(value: String) = "$value 毫秒"
+    fun unitTokens(value: Long) = "$value tok"
+    fun unitTokensPerSecond(value: String) = "$value tok/s"
+
+    const val usageTokens = "Token"
+    const val usageReasoning = "推理"
+    const val usageContent = "内容"
+    const val usageInput = "输入"
+    const val usageOutput = "输出"
+
+    const val tabSummary = "概述"
+    const val tabRawOutput = "原始输出"
+    const val tabPreview = "预览"
+    const val tabRaw = "原始内容"
+    const val tabSource = "来源"
+    const val tabPayload = "参数"
+    const val tabResult = "结果"
+    const val tabSchema = "Schema"
+    const val tabTiming = "计时"
+    const val tabDiff = "差异"
+    const val tabSystemPrompt = "系统提示词"
+    const val tabTools = "工具"
+    const val tabOptions = "选项"
+    const val tabUsage = "用量"
+
+    const val recordToolCallOnly = "（仅工具调用）"
+    const val recordNoContent = "无内容"
+    const val recordNoPayload = "未捕获参数"
+    const val recordNoResult = "未捕获结果"
+    const val recordNoOutput = "无输出"
+    const val recordSchemaUnavailable = "Schema 不可用"
+    const val recordParameters = "参数"
+    const val recordThinking = "思考"
+    const val recordSystemPromptMissing = "本次请求没有系统提示词"
+    const val recordToolsMissing = "本次请求没有工具"
+    const val recordSystemPrompt = "系统提示词"
+    const val recordTools = "工具"
+
+    const val codeSource = "代码"
+    const val codeOutput = "输出"
+    const val codeRunning = "执行中…"
+    const val codeOriginalJson = "原始 JSON"
+
+    const val detailsStatus = "状态"
+    const val detailsHierarchy = "层级"
+    const val detailsAssistantMessage = "助手消息"
+    const val detailsToolCall = "工具调用"
+    const val detailsSource = "来源"
+    const val detailsEvent = "事件详情"
+    const val detailsClose = "关闭详情"
+
+    const val sourceUser = "用户"
+    const val sourceUnknown = "未知"
+    const val sourceNotRecorded = "未记录来源"
+
+    const val layoutCompacting = "正在压缩上下文…"
+    const val layoutCompactionFailed = "上下文压缩失败"
+    const val layoutCompacted = "上下文已压缩"
+    const val layoutToolCallOnly = "仅工具调用"
+    const val layoutInitialSystemPrompt = "初始系统提示词"
+    const val layoutSystemPromptUpdated = "系统提示词已更新"
+    const val layoutToolsUpdated = "工具已更新"
+    const val layoutSystemPromptAndToolsUpdated = "系统提示词和工具已更新"
+    const val layoutCompactionInterrupted = "上下文压缩在完成前被中断。"
+    fun layoutImageCount(count: Int) = "图片 ×$count"
+    fun layoutFileAttachments(count: Int) = "文件 ×$count"
+    fun layoutToolAdded(name: String) = "已添加工具：$name"
+    fun layoutToolRemoved(name: String) = "已移除工具：$name"
+
+    const val emptyTrajectory = "暂无轨迹"
+}

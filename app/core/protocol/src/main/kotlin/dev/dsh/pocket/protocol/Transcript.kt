@@ -18,6 +18,8 @@ sealed interface Item {
         val pending: Boolean = false,
         /** Session-event time (ms), for trajectory swimlane. */
         val at: Long? = null,
+        /** Desktop `messageSource` JSON for the Trajectory 来源 tab. */
+        val messageSourceJson: String? = null,
     ) : Item
     data class Reasoning(override val key: String, val text: String, val durationMs: Long?, val live: Boolean) : Item
     data class Text(override val key: String, val text: String, val live: Boolean) : Item
@@ -30,6 +32,11 @@ sealed interface Item {
         /** Turn/step from the owning step (desktop inspector header 「第 N 轮 · 第 M 步」). */
         val turn: Int? = null,
         val step: Int? = null,
+        /**
+         * Desktop PTC `parentCallId` — when set, layout emits `kind: 'subtool'`
+         * (`tool/ptc-dispatch-start` / `tool/ptc-dispatch`).
+         */
+        val parentCallId: String? = null,
     ) : Item
     data class Notice(override val key: String, val text: String) : Item
     /**
@@ -41,6 +48,8 @@ sealed interface Item {
         val text: String,
         val sourceKind: String? = null,
         val at: Long? = null,
+        /** Desktop `messageSource` JSON for the Trajectory 来源 tab. */
+        val messageSourceJson: String? = null,
     ) : Item
     /**
      * `system/message` surface prompt for the Trajectory 系统 row
@@ -51,8 +60,32 @@ sealed interface Item {
         val label: String,
         val text: String,
         val at: Long? = null,
+        /** Previous system prompt text for the 差异 tab (desktop `previousPromptDetail`). */
+        val previousText: String? = null,
+        /** Pretty JSON array of tools from the latest `request/header` (桌面 工具 tab). */
+        val toolsJson: String? = null,
+        /** Previous tools JSON for diff (added/removed names). */
+        val previousToolsJson: String? = null,
+    ) : Item
+    /**
+     * Desktop `kind: 'compacted'` from `compaction/start|summary|end`
+     * (`trajectory-compaction-definition.ts`).
+     */
+    data class Compacted(
+        override val key: String,
+        val compactionId: String,
+        val status: CompactionStatus,
+        val summary: String? = null,
+        val error: String? = null,
+        val interrupted: Boolean = false,
+        val startedAt: Long? = null,
+        val endedAt: Long? = null,
+        val turn: Int? = null,
     ) : Item
 }
+
+/** Desktop compaction request status. */
+enum class CompactionStatus { Running, Ok, Error }
 
 enum class ToolStatus { Running, AwaitingApproval, Ok, Error }
 
@@ -159,12 +192,16 @@ data class StepRecord(
     val step: Int,
     val stepStartTime: Long?,
     val messageTime: Long?,
+    /** Desktop `assistantMetrics.firstTokenTime` (ms). */
+    val firstTokenTime: Long? = null,
     val replyText: String,
     val reasoningText: String,
     val usage: StepUsage,
     val provider: String?,
     val model: String?,
     val toolCallIds: List<String>,
+    /** Desktop interrupted assistant → cell `isError`. */
+    val interrupted: Boolean = false,
 )
 
 /**
@@ -185,8 +222,15 @@ class TranscriptReducer {
      * we attach the pretty JSON on each tool upsert (same lookup by name).
      */
     private val toolsByName = HashMap<String, String>()
+    /** Ordered pretty tool schemas for the system 工具 tab (desktop ToolCatalog). */
+    private var toolsCatalogJson: String? = null
+    private var previousToolsCatalogJson: String? = null
+    /** Last emitted system prompt body (for 差异 / previousPromptDetail). */
+    private var lastSystemPromptText: String? = null
     /** Whether a trajectory 系统 row has already been emitted (initial vs updated label). */
     private var systemPromptSeen = false
+    /** Open compaction requests keyed by compactionId. */
+    private val compactIndex = HashMap<String, Int>()
     private var live: LiveAttempt? = null
     var cursor: Long = -1; private set
     /** Lowest event seq currently folded (for history.page beforeSeq). */
@@ -277,10 +321,12 @@ class TranscriptReducer {
 
     private fun rebuildIndexes() {
         toolIndex.clear()
+        compactIndex.clear()
         userByRpc.clear()
         committed.forEachIndexed { i, item ->
             when (item) {
                 is Item.Tool -> if (item.callId.isNotEmpty()) toolIndex[item.callId] = i
+                is Item.Compacted -> compactIndex[item.compactionId] = i
                 else -> {}
             }
         }
@@ -292,8 +338,10 @@ class TranscriptReducer {
     }
 
     private fun reset() {
-        committed.clear(); toolIndex.clear(); approvalCall.clear(); userByRpc.clear(); localEchoes.clear()
-        stepStartTimes.clear(); settledSteps.clear(); toolsByName.clear(); systemPromptSeen = false; live = null
+        committed.clear(); toolIndex.clear(); compactIndex.clear(); approvalCall.clear(); userByRpc.clear(); localEchoes.clear()
+        stepStartTimes.clear(); settledSteps.clear(); toolsByName.clear()
+        toolsCatalogJson = null; previousToolsCatalogJson = null; lastSystemPromptText = null
+        systemPromptSeen = false; live = null
         cursor = -1; firstSeq = -1; hasMore = false
         turns = 0; steps = 0; openTurn = null; openStep = null
         inputTokens = 0; cacheRead = 0; outputTokens = 0; running = false
@@ -353,12 +401,15 @@ class TranscriptReducer {
             }
             "assistant/message" -> {
                 steps++
+                val firstTokenFromLive = live?.firstTokenTime
                 live = null
                 val turn = data["turn"].long()?.toInt() ?: turns
                 val step = data["step"].long()?.toInt() ?: steps
                 val messageTime = e["time"].long()
                 val stepStartTime = stepStartTimes.remove("$turn:$step")
                 val timing = reasoningTiming(data["stream"])
+                val firstTokenTime = firstTokenFromLive
+                    ?: assistantStreamFirstTokenTime(data["stream"])
                 val replyParts = ArrayList<String>()
                 val reasoningParts = ArrayList<String>()
                 val toolCallIds = ArrayList<String>()
@@ -397,20 +448,23 @@ class TranscriptReducer {
                     cacheRead += it["cacheReadTokens"].long() ?: 0
                 }
                 val source = data["message"]["source"]
+                val interrupted = data["interrupted"].bool() == true
                 settledSteps += StepRecord(
                     seq = seq,
                     turn = turn,
                     step = step,
                     stepStartTime = stepStartTime,
                     messageTime = messageTime,
+                    firstTokenTime = firstTokenTime,
                     replyText = replyParts.joinToString("\n\n"),
                     reasoningText = reasoningParts.joinToString("\n\n"),
                     usage = stepUsage,
                     provider = source["provider"].str(),
                     model = source["model"].str(),
                     toolCallIds = toolCallIds,
+                    interrupted = interrupted,
                 )
-                if (data["interrupted"].bool() == true) committed += Item.Notice("i$seq", "已中断")
+                // Desktop: interrupted assistant is `message` with isError — no invented 系统 Notice.
             }
             "tool/call" -> upsertTool(
                 data["callId"].str() ?: "c$seq",
@@ -421,12 +475,20 @@ class TranscriptReducer {
                 step = data["step"].long()?.toInt() ?: openStep,
             )
             "tool/result" -> {
-                val id = data["message"]["toolCallId"].str() ?: return
+                val id = data["message"]["toolCallId"].str()
+                    ?: data["message"]["source"]["callId"].str()
+                    ?: return
                 val text = data["message"]["content"].arr().orEmpty().filter { it["type"].str() == "text" }.joinToString("\n") { it["text"].str().orEmpty() }
                 val err = data["error"]
                 val isErr = err != null || data["message"]["isError"].bool() == true
                 updateTool(id) { it.copy(status = if (isErr) ToolStatus.Error else ToolStatus.Ok, result = text, error = err?.let { x -> x["reason"].str() ?: x["code"].str() }, endedAt = e["time"].long()) }
             }
+            // Desktop PTC subtools (`trajectory-tool-definition` dispatch edges).
+            "tool/ptc-dispatch-start" -> upsertPtcDispatch(data, e["time"].long(), settled = false)
+            "tool/ptc-dispatch" -> upsertPtcDispatch(data, e["time"].long(), settled = true)
+            "compaction/start" -> upsertCompactionStart(data, e["time"].long())
+            "compaction/summary" -> upsertCompactionSummary(data)
+            "compaction/end" -> upsertCompactionEnd(data, e["time"].long())
             "approval/asked" -> data["callId"].str()?.let { id ->
                 data["id"].str()?.let { approvalCall[it] = id }
                 updateTool(id) { it.copy(status = ToolStatus.AwaitingApproval) }
@@ -440,7 +502,7 @@ class TranscriptReducer {
                     committed[i] = if (outcome == "allowed-once") t.copy(status = ToolStatus.Running) else t.copy(status = ToolStatus.Error, error = outcome)
                 }
             }
-            "llm/retry" -> committed += Item.Notice("n$seq", "请求重试中")
+            // Desktop trajectory has no ledger row for llm/retry — do not invent a 系统 Notice.
         }
     }
 
@@ -460,7 +522,12 @@ class TranscriptReducer {
     private fun upsertContext(msg: JsonElement?, key: String, at: Long?) {
         val text = messageText(msg)
         if (text.isBlank()) return
-        committed += Item.Context(key, text, sourceKind = msg["source"]["kind"].str(), at = at)
+        committed += Item.Context(
+            key, text,
+            sourceKind = msg["source"]["kind"].str(),
+            at = at,
+            messageSourceJson = prettySource(msg["source"]),
+        )
     }
 
     /**
@@ -476,14 +543,22 @@ class TranscriptReducer {
         val text = messageText(msg)
         if (text.isBlank()) return
         val label = if (systemPromptSeen) "系统提示词已更新" else "初始系统提示词"
+        val previous = lastSystemPromptText.takeIf { systemPromptSeen }
         systemPromptSeen = true
-        committed += Item.System("sys$seq", label, text, at = e["time"].long())
+        lastSystemPromptText = text
+        committed += Item.System(
+            "sys$seq", label, text, at = e["time"].long(),
+            previousText = previous,
+            toolsJson = toolsCatalogJson,
+            previousToolsJson = previousToolsCatalogJson.takeIf { previous != null },
+        )
     }
 
     private fun upsertUser(msg: JsonElement?, key: String, pending: Boolean, at: Long? = null) {
         val blocks = msg["content"].arr().orEmpty()
         val text = blocks.filter { it["type"].str() == "text" }.joinToString("\n") { it["text"].str().orEmpty() }
         val images = blocks.count { it["type"].str() == "image" }
+        val sourceJson = prettySource(msg["source"])
         val rpc = msg["source"]["rpcId"].str()
         val idx = rpc?.let { userByRpc[it] }
             ?: localEchoes.indexOfFirst { it.second == text }.takeIf { it >= 0 }?.let { localEchoes.removeAt(it).first }
@@ -492,12 +567,20 @@ class TranscriptReducer {
             committed[idx] = old.copy(
                 text = text, images = images, pending = pending && old.pending,
                 at = at ?: old.at,
+                messageSourceJson = sourceJson ?: old.messageSourceJson,
             )
             if (rpc != null) userByRpc[rpc] = idx
         } else {
             if (rpc != null) userByRpc[rpc] = committed.size
-            committed += Item.User(key, text, images, pending, at = at)
+            committed += Item.User(key, text, images, pending, at = at, messageSourceJson = sourceJson)
         }
+    }
+
+    private fun prettySource(source: JsonElement?): String? {
+        val obj = source.obj() ?: return null
+        return runCatching {
+            PrettyToolJson.encodeToString(JsonElement.serializer(), obj)
+        }.getOrNull()
     }
 
     /** Optimistic echo of a message the user just sent; reconciled with the server copy by text. */
@@ -509,16 +592,34 @@ class TranscriptReducer {
     /**
      * Index `request/header` → `header.tools[]` by name (desktop `indexTools` + `captureSchemas`).
      * Each schema is stored as pretty JSON for the Schema tab (`attachToolSchema`).
+     * Also snapshots the full catalog for system 工具 / 差异 tabs.
      */
     private fun indexRequestHeaderTools(data: JsonElement?) {
         val tools = data["header"]["tools"].arr() ?: return
+        val pretty = ArrayList<JsonElement>()
         for (tool in tools) {
             val name = tool["name"].str() ?: continue
-            toolsByName[name] = prettyToolSchema(tool) ?: continue
+            val schema = prettyToolSchema(tool) ?: continue
+            toolsByName[name] = schema
+            pretty += PocketJson.parseToJsonElement(schema)
+        }
+        if (pretty.isNotEmpty()) {
+            previousToolsCatalogJson = toolsCatalogJson
+            toolsCatalogJson = runCatching {
+                PrettyToolJson.encodeToString(JsonElement.serializer(), JsonArray(pretty))
+            }.getOrNull()
         }
     }
 
-    private fun upsertTool(id: String, name: String, args: String, time: Long?, turn: Int? = null, step: Int? = null) {
+    private fun upsertTool(
+        id: String,
+        name: String,
+        args: String,
+        time: Long?,
+        turn: Int? = null,
+        step: Int? = null,
+        parentCallId: String? = null,
+    ) {
         val schema = name.takeIf { it.isNotEmpty() }?.let { toolsByName[it] }
         val i = toolIndex[id]
         if (i != null) {
@@ -530,21 +631,106 @@ class TranscriptReducer {
                 schemaJson = schema ?: toolsByName[resolvedName] ?: t.schemaJson,
                 turn = turn ?: t.turn,
                 step = step ?: t.step,
+                parentCallId = parentCallId ?: t.parentCallId,
             )
         } else {
             toolIndex[id] = committed.size
             committed += Item.Tool(
                 "k$id", id, name, args, ToolStatus.Running,
                 startedAt = time, schemaJson = schema, turn = turn, step = step,
+                parentCallId = parentCallId,
             )
         }
     }
-    private fun updateTool(id: String, f: (Item.Tool) -> Item.Tool) { toolIndex[id]?.let { committed[it] = f(committed[it] as Item.Tool) } }
+
+    private fun updateTool(id: String, f: (Item.Tool) -> Item.Tool) {
+        toolIndex[id]?.let { committed[it] = f(committed[it] as Item.Tool) }
+    }
+
+    /** Desktop `tool/ptc-dispatch-start` / `tool/ptc-dispatch` → subtool cells. */
+    private fun upsertPtcDispatch(data: JsonElement?, time: Long?, settled: Boolean) {
+        val subCallId = data["subCallId"].str() ?: return
+        val parentCallId = data["parentCallId"].str() ?: return
+        val name = data["name"].str().orEmpty()
+        val argsEl = data["arguments"]
+        val args = when {
+            argsEl is JsonPrimitive -> argsEl.str().orEmpty()
+            argsEl != null -> runCatching {
+                PrettyToolJson.encodeToString(JsonElement.serializer(), argsEl)
+            }.getOrDefault("{}")
+            else -> "{}"
+        }
+        upsertTool(
+            subCallId, name, args, time,
+            turn = openTurn, step = openStep, parentCallId = parentCallId,
+        )
+        if (!settled) return
+        val text = data["content"].arr().orEmpty()
+            .filter { it["type"].str() == "text" }
+            .joinToString("\n") { it["text"].str().orEmpty() }
+        val err = data["error"]
+        val isErr = data["isError"].bool() == true || err != null
+        updateTool(subCallId) {
+            it.copy(
+                status = if (isErr) ToolStatus.Error else ToolStatus.Ok,
+                result = text.ifBlank { null },
+                error = err?.let { x -> x["reason"].str() ?: x["code"].str() },
+                endedAt = time,
+                parentCallId = parentCallId,
+            )
+        }
+    }
+
+    private fun upsertCompactionStart(data: JsonElement?, time: Long?) {
+        val id = data["compactionId"].str() ?: return
+        if (compactIndex.containsKey(id)) return
+        compactIndex[id] = committed.size
+        committed += Item.Compacted(
+            key = "cmp$id",
+            compactionId = id,
+            status = CompactionStatus.Running,
+            startedAt = time,
+            turn = data["turn"].long()?.toInt() ?: openTurn,
+        )
+    }
+
+    private fun upsertCompactionSummary(data: JsonElement?) {
+        val id = data["compactionId"].str() ?: return
+        val summary = data["summary"].str()
+            ?: data["message"]["content"].arr().orEmpty()
+                .filter { it["type"].str() == "text" }
+                .joinToString("\n") { it["text"].str().orEmpty() }
+                .ifBlank { null }
+        compactIndex[id]?.let { i ->
+            val c = committed[i] as Item.Compacted
+            committed[i] = c.copy(summary = summary ?: c.summary)
+        }
+    }
+
+    private fun upsertCompactionEnd(data: JsonElement?, time: Long?) {
+        val id = data["compactionId"].str() ?: return
+        val err = data["error"]
+        val interrupted = err?.let { it["code"].str() == "interrupted" || it["reason"].str() == "interrupted" } == true
+            || data["interrupted"].bool() == true
+        val isErr = err != null
+        compactIndex[id]?.let { i ->
+            val c = committed[i] as Item.Compacted
+            committed[i] = c.copy(
+                status = if (isErr) CompactionStatus.Error else CompactionStatus.Ok,
+                error = err?.let { x -> x["reason"].str() ?: x["message"].str() ?: x["code"].str() },
+                interrupted = interrupted,
+                endedAt = time,
+            )
+        }
+    }
 
     private fun stream(f: JsonElement?) {
         when (f["type"].str()) {
             "start" -> { live = LiveAttempt(f["attemptId"].str() ?: "live"); running = true }
-            "chunk" -> { val l = live ?: LiveAttempt(f["attemptId"].str() ?: "live").also { live = it }; l.chunk(f["chunk"], f["time"].long()) }
+            "chunk" -> {
+                val l = live ?: LiveAttempt(f["attemptId"].str() ?: "live").also { live = it }
+                l.chunk(f["chunk"], f["time"].long())
+            }
             // Cancel / abort ends the attempt with abandoned; clear running even if turn/end is delayed.
             "end" -> if (f["outcome"]["kind"].str() == "abandoned") { live = null; running = false }
         }
@@ -562,6 +748,26 @@ class TranscriptReducer {
             val end = recs.maxOf { r -> (r["time0"].long() ?: 0) + r["dt"].arr().orEmpty().sumOf { it.long() ?: 0 } }
             return (end - start).coerceAtLeast(0)
         }
+
+        /**
+         * Desktop `assistantStreamFirstTokenTime`: earliest wall time of a
+         * non-reasoning token-producing stream record.
+         */
+        fun assistantStreamFirstTokenTime(stream: JsonElement?): Long? {
+            val recs = stream.arr().orEmpty()
+            var earliest: Long? = null
+            for (r in recs) {
+                val type = r["type"].str() ?: continue
+                if (type == "reasoning-chunks" || type == "reasoning-delta") continue
+                val t = when (type) {
+                    "text-chunks", "tool-call-chunks" -> r["time0"].long() ?: r["time"].long()
+                    "chunk" -> r["time"].long()
+                    else -> r["time"].long() ?: r["time0"].long()
+                } ?: continue
+                earliest = earliest?.let { minOf(it, t) } ?: t
+            }
+            return earliest
+        }
     }
 }
 
@@ -569,13 +775,22 @@ class TranscriptReducer {
 private class LiveAttempt(val id: String) {
     private class Block(val type: String, val sb: StringBuilder = StringBuilder(), var toolId: String? = null, var toolName: String? = null, var startedAt: Long? = null)
     private val blocks = sortedMapOf<Int, Block>()
+    /** Desktop firstTokenTime — first non-reasoning delta wall time. */
+    var firstTokenTime: Long? = null
+        private set
 
     fun record(rec: JsonElement) {
         when (rec["type"].str()) {
             "chunk" -> chunk(rec["chunk"], rec["time"].long())
-            "text-chunks" -> block(rec["index"].long()?.toInt() ?: 0, "text").sb.append(rec["texts"].arr().orEmpty().joinToString("") { it.str().orEmpty() })
+            "text-chunks" -> {
+                noteToken(rec["time0"].long() ?: rec["time"].long())
+                block(rec["index"].long()?.toInt() ?: 0, "text").sb.append(rec["texts"].arr().orEmpty().joinToString("") { it.str().orEmpty() })
+            }
             "reasoning-chunks" -> block(rec["index"].long()?.toInt() ?: 0, "reasoning").apply { startedAt = startedAt ?: rec["time0"].long() }.sb.append(rec["texts"].arr().orEmpty().joinToString("") { it.str().orEmpty() })
-            "tool-call-chunks" -> block(rec["index"].long()?.toInt() ?: 0, "tool-call").apply { toolId = rec["id"].str(); toolName = rec["name"].str() ?: toolName }.sb.append(rec["args"].arr().orEmpty().joinToString("") { it.str().orEmpty() })
+            "tool-call-chunks" -> {
+                noteToken(rec["time0"].long() ?: rec["time"].long())
+                block(rec["index"].long()?.toInt() ?: 0, "tool-call").apply { toolId = rec["id"].str(); toolName = rec["name"].str() ?: toolName }.sb.append(rec["args"].arr().orEmpty().joinToString("") { it.str().orEmpty() })
+            }
             else -> chunk(rec, null)
         }
     }
@@ -584,10 +799,20 @@ private class LiveAttempt(val id: String) {
         val idx = c["index"].long()?.toInt() ?: 0
         when (c["type"].str()) {
             "block-start" -> block(idx, c["blockType"].str() ?: "text").startedAt = time
-            "text-delta" -> block(idx, "text").sb.append(c["text"].str().orEmpty())
+            "text-delta" -> {
+                noteToken(time)
+                block(idx, "text").sb.append(c["text"].str().orEmpty())
+            }
             "reasoning-delta" -> block(idx, "reasoning").apply { startedAt = startedAt ?: time }.sb.append(c["text"].str().orEmpty())
-            "tool-call-delta" -> block(idx, "tool-call").apply { toolId = c["id"].str() ?: toolId; toolName = c["name"].str() ?: toolName }.sb.append(c["argumentsDelta"].str().orEmpty())
+            "tool-call-delta" -> {
+                noteToken(time)
+                block(idx, "tool-call").apply { toolId = c["id"].str() ?: toolId; toolName = c["name"].str() ?: toolName }.sb.append(c["argumentsDelta"].str().orEmpty())
+            }
         }
+    }
+
+    private fun noteToken(time: Long?) {
+        if (firstTokenTime == null && time != null) firstTokenTime = time
     }
 
     private fun block(i: Int, type: String) = blocks.getOrPut(i) { Block(type) }

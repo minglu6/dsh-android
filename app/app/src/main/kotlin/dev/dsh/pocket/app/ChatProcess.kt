@@ -210,7 +210,7 @@ fun foldChatItems(
                 flushTurn()
                 user = item
             }
-            is Item.Context, is Item.System -> Unit // chat-hidden (desktop parity)
+            is Item.Context, is Item.System, is Item.Compacted -> Unit // chat-hidden (desktop parity)
             else -> body += item
         }
     }

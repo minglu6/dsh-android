@@ -33,6 +33,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import dev.dsh.pocket.protocol.CompactionStatus
 import dev.dsh.pocket.protocol.Item
 import dev.dsh.pocket.protocol.StepRecord
 import dev.dsh.pocket.protocol.ToolStatus
@@ -63,6 +64,21 @@ data class TrajRow(
     val schemaDetail: String? = null,
     /** Markdown / system / context body for non-tool detail tabs. */
     val rawDetail: String? = null,
+    /** Desktop `messageSource` JSON for 来源 tab. */
+    val messageSourceJson: String? = null,
+    /** Previous system prompt for 差异 tab. */
+    val previousText: String? = null,
+    /** Tools catalog JSON for system 工具 tab. */
+    val toolsJson: String? = null,
+    val previousToolsJson: String? = null,
+    /** Wire tool name (for `run_code` / CodeProgram). */
+    val toolName: String? = null,
+    /** Inline `→` result preview on the ledger (desktop RecordListText). */
+    val resultPreview: String? = null,
+    /** Assistant tool-call-only placeholder (desktop muted `（仅工具调用）`). */
+    val toolCallOnly: Boolean = false,
+    /** Desktop `assistantMetrics.firstTokenTime`. */
+    val firstTokenTime: Long? = null,
     /** Turn / step for the inspector header (`第 N 轮 · 第 M 步`). */
     val turn: Int? = null,
     val step: Int? = null,
@@ -80,12 +96,26 @@ data class TrajTurn(val index: Int, val rows: List<TrajRow>)
 private fun firstLine(text: String): String =
     text.lineSequence().map { it.trim() }.firstOrNull { it.isNotEmpty() }.orEmpty()
 
+/**
+ * Desktop `trajectoryPreviewText` (simplified): collapse whitespace, cap length.
+ * Full markdown plain-text extraction is not required for the phone ledger line.
+ */
+fun trajectoryPreviewText(text: String, max: Int = 512): String =
+    text.replace(Regex("\\s+"), " ").trim().take(max).let {
+        if (text.replace(Regex("\\s+"), " ").trim().length > max) "$it…" else it
+    }
+
 /** Desktop ledger preview: one-line ellipsis of injected / multi-line content. */
 private fun oneLinePreview(text: String, max: Int = 96): String =
-    text.replace('\n', ' ').replace(Regex("\\s+"), " ").trim().take(max)
+    trajectoryPreviewText(text, max)
 
-private fun assistantTitle(reply: String, reasoning: String): String =
-    firstLine(reply).ifEmpty { firstLine(reasoning) }.ifEmpty { "仅工具调用" }
+private fun assistantTitle(reply: String, reasoning: String): Pair<String, Boolean> {
+    val fromReply = firstLine(reply)
+    if (fromReply.isNotEmpty()) return fromReply to false
+    val fromThink = firstLine(reasoning)
+    if (fromThink.isNotEmpty()) return fromThink to false
+    return TrajL.layoutToolCallOnly to true
+}
 
 private fun assistantRow(step: StepRecord): TrajRow {
     val start = step.stepStartTime
@@ -95,11 +125,12 @@ private fun assistantRow(step: StepRecord): TrajRow {
     val input = step.usage.inputTokens?.let { kfmt(it) }.orEmpty()
     val output = step.usage.outputTokens?.let { kfmt(it) }.orEmpty()
     val think = step.usage.reasoningTokens?.let { kfmt(it) } ?: "—"
+    val (title, toolOnly) = assistantTitle(step.replyText, step.reasoningText)
     return TrajRow(
         key = "a${step.seq}",
         depth = 0,
-        kind = "助手",
-        title = assistantTitle(step.replyText, step.reasoningText),
+        kind = TrajL.kindAssistant,
+        title = title,
         input = input,
         output = output,
         think = think,
@@ -107,30 +138,52 @@ private fun assistantRow(step: StepRecord): TrajRow {
         detail = step.replyText.takeIf { it.isNotBlank() }?.let { Item.Text("a${step.seq}", it, live = false) },
         thinkingDetail = step.reasoningText.takeIf { it.isNotBlank() },
         outputDetail = step.replyText.takeIf { it.isNotBlank() },
-        rawDetail = step.replyText.takeIf { it.isNotBlank() },
+        rawDetail = listOfNotNull(
+            step.reasoningText.takeIf { it.isNotBlank() },
+            step.replyText.takeIf { it.isNotBlank() },
+        ).joinToString("\n\n").ifBlank { null },
+        toolCallOnly = toolOnly,
+        firstTokenTime = step.firstTokenTime,
         turn = step.turn,
         step = step.step,
         startedAt = start,
         timeSeconds = elapsedMs?.let { it / 1000.0 },
+        isError = step.interrupted,
         searchText = listOf(step.replyText, step.reasoningText, step.model, step.provider).joinToString("\n"),
     )
 }
 
-private fun liveAssistantRow(key: String, reply: String, reasoning: String): TrajRow =
-    TrajRow(
+private fun liveAssistantRow(key: String, reply: String, reasoning: String): TrajRow {
+    val (title, toolOnly) = assistantTitle(reply, reasoning)
+    return TrajRow(
         key = key,
         depth = 0,
-        kind = "助手",
-        title = assistantTitle(reply, reasoning),
+        kind = TrajL.kindAssistant,
+        title = title,
         think = "—",
         time = "…",
         running = true,
         detail = reply.takeIf { it.isNotBlank() }?.let { Item.Text(key, it, live = true) },
         thinkingDetail = reasoning.takeIf { it.isNotBlank() },
         outputDetail = reply.takeIf { it.isNotBlank() },
-        rawDetail = reply.takeIf { it.isNotBlank() },
+        rawDetail = listOfNotNull(
+            reasoning.takeIf { it.isNotBlank() },
+            reply.takeIf { it.isNotBlank() },
+        ).joinToString("\n\n").ifBlank { null },
+        toolCallOnly = toolOnly,
         searchText = "$reply\n$reasoning",
     )
+}
+
+/** Desktop `summarizeResult` one-line preview after `→`. */
+private fun toolResultPreview(item: Item.Tool): String? {
+    if (item.error != null) return item.error
+    val result = item.result?.trim().orEmpty()
+    if (result.isEmpty()) {
+        return if (item.status == ToolStatus.Ok) TrajL.recordNoOutput else null
+    }
+    return trajectoryPreviewText(result, 96)
+}
 
 private fun toolRow(item: Item.Tool): TrajRow {
     val running = item.status == ToolStatus.Running || item.status == ToolStatus.AwaitingApproval
@@ -145,25 +198,88 @@ private fun toolRow(item: Item.Tool): TrajRow {
         running -> "…"
         else -> ""
     }
-    val arg = primaryArg(item.name, item.arguments)?.take(48).orEmpty()
+    val program = codeProgram(item.name, item.arguments, item.schemaJson)
+    val title = when {
+        program != null -> "$PTC_TOOL_NAME · ${program.description.replace(Regex("\\s+"), " ")}"
+        else -> {
+            val arg = primaryArg(item.name, item.arguments)?.take(48).orEmpty()
+            if (arg.isEmpty()) item.name else "${item.name} · $arg"
+        }
+    }
     val outputDetail = when {
         item.error != null -> listOfNotNull(item.error, item.result).joinToString("\n")
         item.result != null -> item.result
         else -> null
     }
+    val isSub = !item.parentCallId.isNullOrBlank()
     return TrajRow(
-        item.key, 1, "工具", "${item.name}${if (arg.isNotEmpty()) " $arg" else ""}",
-        time = dur, running = running, detail = item,
+        item.key,
+        depth = if (isSub) 2 else 1,
+        kind = if (isSub) TrajL.kindSubtool else TrajL.kindTool,
+        title = title,
+        time = dur,
+        running = running,
+        detail = item,
         inputDetail = item.arguments.takeIf { it.isNotBlank() },
         outputDetail = outputDetail,
         schemaDetail = item.schemaJson,
+        toolName = item.name,
+        resultPreview = toolResultPreview(item),
         turn = item.turn,
         step = item.step,
         startedAt = started,
-        timeSeconds = durMs?.let { it / 1000.0 },
+        timeSeconds = when {
+            running && durMs == null -> null
+            durMs != null -> durMs / 1000.0
+            else -> null
+        },
         isError = item.status == ToolStatus.Error,
-        searchText = listOf(item.name, item.arguments, item.result, item.error, item.schemaJson).joinToString("\n"),
+        searchText = listOf(item.name, item.arguments, item.result, item.error, item.schemaJson, item.parentCallId).joinToString("\n"),
     )
+}
+
+private fun compactedRow(item: Item.Compacted): TrajRow {
+    val running = item.status == CompactionStatus.Running
+    val title = when {
+        running -> TrajL.layoutCompacting
+        item.interrupted -> TrajL.layoutCompactionInterrupted
+        item.status == CompactionStatus.Error -> item.error ?: TrajL.layoutCompactionFailed
+        !item.summary.isNullOrBlank() -> oneLinePreview(item.summary!!)
+        else -> TrajL.layoutCompacted
+    }
+    val startedAt = item.startedAt
+    val endedAt = item.endedAt
+    val durMs = if (startedAt != null && endedAt != null) {
+        (endedAt - startedAt).coerceAtLeast(0)
+    } else null
+    return TrajRow(
+        key = item.key,
+        depth = 0,
+        kind = TrajL.kindCompacted,
+        title = title,
+        time = when {
+            durMs != null -> formatElapsed(durMs)
+            running -> "…"
+            else -> ""
+        },
+        running = running,
+        detail = item,
+        outputDetail = item.summary,
+        rawDetail = item.summary ?: item.error,
+        turn = item.turn,
+        startedAt = item.startedAt,
+        timeSeconds = if (running) null else durMs?.let { it / 1000.0 },
+        isError = item.status == CompactionStatus.Error,
+        searchText = listOf(item.summary, item.error, item.compactionId).joinToString("\n"),
+    )
+}
+
+private fun userTitle(item: Item.User): String {
+    val parts = ArrayList<String>()
+    if (item.images > 0) parts += TrajL.layoutImageCount(item.images)
+    val preview = oneLinePreview(item.text, 80)
+    if (preview.isNotEmpty()) parts += preview
+    return parts.joinToString(" · ").ifEmpty { TrajL.recordNoContent }
 }
 
 private fun itemSeq(item: Item): Long? = when (item) {
@@ -219,20 +335,25 @@ fun buildTrajectory(items: List<Item>, steps: List<StepRecord> = emptyList()): L
         when (item) {
             is Item.System -> addPrefixOrRow(
                 TrajRow(
-                    item.key, 0, "系统", item.label,
+                    item.key, 0, TrajL.kindSystem, item.label,
                     detail = item, rawDetail = item.text,
+                    previousText = item.previousText,
+                    toolsJson = item.toolsJson,
+                    previousToolsJson = item.previousToolsJson,
                     startedAt = item.at, timeSeconds = 0.0,
-                    searchText = "${item.label}\n${item.text}",
+                    searchText = listOf(item.label, item.text, item.toolsJson, item.previousText).joinToString("\n"),
                 ),
             )
             is Item.Context -> addPrefixOrRow(
                 TrajRow(
-                    item.key, 0, "上下文", oneLinePreview(item.text),
+                    item.key, 0, TrajL.kindContext, oneLinePreview(item.text),
                     detail = item, inputDetail = item.text, rawDetail = item.text,
+                    messageSourceJson = item.messageSourceJson,
                     startedAt = item.at, timeSeconds = 0.0,
-                    searchText = item.text,
+                    searchText = listOf(item.text, item.sourceKind, item.messageSourceJson).joinToString("\n"),
                 ),
             )
+            is Item.Compacted -> addPrefixOrRow(compactedRow(item))
             is Item.User -> {
                 flush()
                 turnIdx++
@@ -242,20 +363,21 @@ fun buildTrajectory(items: List<Item>, steps: List<StepRecord> = emptyList()): L
                     pendingPrefix.clear()
                 }
                 rows += TrajRow(
-                    item.key, 0, "用户", oneLinePreview(item.text, 80),
+                    item.key, 0, TrajL.kindUser, userTitle(item),
                     time = formatElapsed(0),
                     inputDetail = item.text, rawDetail = item.text,
+                    messageSourceJson = item.messageSourceJson,
                     turn = turnIdx,
                     startedAt = item.at,
                     timeSeconds = 0.0,
-                    searchText = item.text,
+                    searchText = listOf(item.text, item.messageSourceJson).joinToString("\n"),
                 )
             }
             is Item.Reasoning -> {
                 if (item.live) {
                     val key = liveAssistantKey ?: item.key
                     liveAssistantKey = key
-                    val idx = rows.indexOfLast { it.key == key && it.kind == "助手" }
+                    val idx = rows.indexOfLast { it.key == key && it.kind == TrajL.kindAssistant }
                     val row = liveAssistantRow(key, reply = "", reasoning = item.text)
                     if (idx >= 0) rows[idx] = row else rows += row
                 } else {
@@ -266,21 +388,25 @@ fun buildTrajectory(items: List<Item>, steps: List<StepRecord> = emptyList()): L
                 if (item.live) {
                     val key = liveAssistantKey ?: item.key
                     liveAssistantKey = key
-                    val prev = rows.lastOrNull { it.key == key && it.kind == "助手" }
+                    val prev = rows.lastOrNull { it.key == key && it.kind == TrajL.kindAssistant }
                     val reasoning = prev?.thinkingDetail.orEmpty()
                     val row = liveAssistantRow(key, reply = item.text, reasoning = reasoning)
-                    val idx = rows.indexOfLast { it.key == key && it.kind == "助手" }
+                    val idx = rows.indexOfLast { it.key == key && it.kind == TrajL.kindAssistant }
                     if (idx >= 0) rows[idx] = row else rows += row
                 } else {
                     val seq = itemSeq(item)
                     val stepIdx = seq?.let { stepBySeq[it] }
                     when {
                         stepIdx != null -> emitStep(stepIdx)
-                        steps.isEmpty() -> rows += TrajRow(
-                            item.key, 0, "助手", firstLine(item.text).ifEmpty { "仅工具调用" },
-                            think = "—", detail = item, rawDetail = item.text, outputDetail = item.text,
-                            searchText = item.text,
-                        )
+                        steps.isEmpty() -> {
+                            val (title, toolOnly) = assistantTitle(item.text, "")
+                            rows += TrajRow(
+                                item.key, 0, TrajL.kindAssistant, title,
+                                think = "—", detail = item, rawDetail = item.text, outputDetail = item.text,
+                                toolCallOnly = toolOnly,
+                                searchText = item.text,
+                            )
+                        }
                     }
                 }
             }
@@ -288,8 +414,9 @@ fun buildTrajectory(items: List<Item>, steps: List<StepRecord> = emptyList()): L
                 stepByTool[item.callId]?.let(::emitStep)
                 rows += toolRow(item)
             }
+            // Desktop has no invented Notice ledger rows; keep only if host still emits them.
             is Item.Notice -> rows += TrajRow(
-                item.key, 0, "系统", item.text.take(80),
+                item.key, 0, TrajL.kindSystem, oneLinePreview(item.text, 80),
                 detail = item, rawDetail = item.text, searchText = item.text,
             )
         }
@@ -349,7 +476,7 @@ fun TrajectoryView(st: ChatState) {
         return
     }
     if (turns.isEmpty()) {
-        EmptyState(D.inspect, "暂无轨迹")
+        EmptyState(D.inspect, TrajL.emptyTrajectory)
         return
     }
     var selected by remember { mutableStateOf<TrajRow?>(null) }
@@ -386,23 +513,22 @@ fun TrajectoryView(st: ChatState) {
             }
         }
         Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp), horizontalArrangement = Arrangement.End) {
-            Text("输入", style = monoCap(), modifier = Modifier.width(44.dp))
-            Text("输出", style = monoCap(), modifier = Modifier.width(40.dp))
-            Text("思考", style = monoCap(), modifier = Modifier.width(40.dp))
-            Text("时间", style = monoCap(), modifier = Modifier.width(40.dp))
+            Text(TrajL.columnInput, style = monoCap(), modifier = Modifier.width(44.dp))
+            Text(TrajL.columnOutput, style = monoCap(), modifier = Modifier.width(40.dp))
+            Text(TrajL.columnThink, style = monoCap(), modifier = Modifier.width(40.dp))
+            Text(TrajL.columnTime, style = monoCap(), modifier = Modifier.width(40.dp))
         }
         HorizontalDivider(color = T.Fill)
         LazyColumn(Modifier.weight(1f)) {
             turns.forEach { turn ->
                 val visibleRows = turn.rows.filter { row ->
                     (searchMatches == null || row.key in searchMatches) &&
-                        !(callsCollapsed && row.kind == "工具")
+                        !(callsCollapsed && (row.kind == TrajL.kindTool || row.kind == TrajL.kindSubtool))
                 }
                 if (searchMatches != null && visibleRows.isEmpty()) return@forEach
                 item(key = "turn-${turn.index}") {
-                    // Desktop locales: turn.label →「第 {turn} 轮」
                     Text(
-                        "第 ${turn.index} 轮",
+                        TrajL.turnLabel(turn.index),
                         fontSize = 12.sp,
                         fontWeight = FontWeight.Medium,
                         color = T.Text3,
@@ -439,11 +565,11 @@ private fun TrajectoryToolbar(
         Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Seg(actualDuration, "时长") { onActualDurationChange(!actualDuration) }
+        Seg(actualDuration, TrajL.toolbarDuration) { onActualDurationChange(!actualDuration) }
         Spacer(Modifier.width(6.dp))
-        ToolbarChip(turnsCollapsed, "轮次", onToggleTurns)
+        ToolbarChip(turnsCollapsed, TrajL.toolbarTurns, onToggleTurns)
         Spacer(Modifier.width(6.dp))
-        ToolbarChip(callsCollapsed, "调用", onToggleCalls)
+        ToolbarChip(callsCollapsed, TrajL.toolbarCalls, onToggleCalls)
         Spacer(Modifier.width(8.dp))
         Row(
             Modifier.weight(1f).height(32.dp)
@@ -452,11 +578,11 @@ private fun TrajectoryToolbar(
                 .padding(horizontal = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Icon(Icons.Outlined.Search, contentDescription = "搜索轨迹", tint = T.Caption, modifier = Modifier.size(14.dp))
+            Icon(Icons.Outlined.Search, contentDescription = TrajL.toolbarSearch, tint = T.Caption, modifier = Modifier.size(14.dp))
             Spacer(Modifier.width(4.dp))
             Box(Modifier.weight(1f)) {
                 if (searchQuery.isEmpty()) {
-                    Text("搜索", fontSize = 12.sp, color = T.Caption)
+                    Text(TrajL.toolbarSearchPlaceholder, fontSize = 12.sp, color = T.Caption)
                 }
                 BasicTextField(
                     value = searchQuery,
@@ -517,7 +643,7 @@ private fun SwimlaneChart(
             verticalArrangement = Arrangement.SpaceEvenly,
             horizontalAlignment = Alignment.End,
         ) {
-            listOf("输入", "模型", "工具").forEach { label ->
+            listOf(TrajL.columnInput, TrajL.columnModel, TrajL.columnTools).forEach { label ->
                 Text(label, fontSize = 10.sp, color = T.Caption, lineHeight = 10.sp)
             }
         }
@@ -605,6 +731,16 @@ private fun spanColor(kind: String, isError: Boolean): Color {
 
 @Composable
 private fun TrajRowView(row: TrajRow, hl: Boolean, onClick: () -> Unit) {
+    val statusGlyph = when {
+        row.running -> "◌"
+        row.isError -> "✗"
+        else -> "✓"
+    }
+    val statusColor = when {
+        row.running -> T.Accent
+        row.isError -> T.Err
+        else -> T.Ok
+    }
     Row(
         Modifier.fillMaxWidth()
             .background(if (hl) T.Tint.copy(alpha = 0.45f) else Color.Transparent)
@@ -613,16 +749,31 @@ private fun TrajRowView(row: TrajRow, hl: Boolean, onClick: () -> Unit) {
             .padding(start = (12 + row.depth * 14).dp, end = 12.dp, top = 7.dp, bottom = 7.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Text(if (row.running) "◌" else "✓", fontSize = 12.sp, color = if (row.running) T.Accent else T.Ok, modifier = Modifier.width(14.dp))
+        Text(statusGlyph, fontSize = 12.sp, color = statusColor, modifier = Modifier.width(14.dp))
         KindBadge(row.kind)
         Spacer(Modifier.width(6.dp))
-        Text(
-            row.title,
-            style = T.Mono.copy(fontSize = 13.sp, color = T.Ink),
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.weight(1f),
-        )
+        Row(Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                if (row.toolCallOnly) TrajL.recordToolCallOnly else row.title,
+                style = T.Mono.copy(
+                    fontSize = 13.sp,
+                    color = if (row.toolCallOnly) T.Caption else T.Ink,
+                ),
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f, fill = false),
+            )
+            row.resultPreview?.let { preview ->
+                Text(" → ", style = T.Mono.copy(fontSize = 12.sp, color = T.Caption))
+                Text(
+                    preview,
+                    style = T.Mono.copy(fontSize = 12.sp, color = if (row.isError) T.Err else T.Text2),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f, fill = false),
+                )
+            }
+        }
         Text(row.input, style = monoCap(), modifier = Modifier.width(44.dp), maxLines = 1, overflow = TextOverflow.Ellipsis)
         Text(row.output, style = monoCap(), modifier = Modifier.width(40.dp), maxLines = 1, overflow = TextOverflow.Ellipsis)
         Text(row.think, style = monoCap(), modifier = Modifier.width(40.dp), maxLines = 1, overflow = TextOverflow.Ellipsis)
@@ -640,12 +791,14 @@ private fun Modifier.drawSelectedBar(): Modifier = this.then(
 
 @Composable
 private fun KindBadge(kind: String) {
+    // Desktop TrajectoryTable.module.css kind tag tokens (Tokyo Night-adapted solids).
     val (fg, bg) = when (kind) {
-        "用户" -> T.Accent to T.Tint
-        "上下文" -> Color(0xFF3D8B55) to Color(0xFFE8F6EC)
-        "助手" -> Color(0xFF7C3AED) to Color(0xFFF3E8FF)
-        "工具" -> T.WarnText to T.WarnTint
-        "系统" -> T.Text2 to T.Fill
+        TrajL.kindUser -> T.Accent to T.Tint
+        TrajL.kindContext -> Color(0xFF3D8B55) to Color(0xFFE8F6EC)
+        TrajL.kindAssistant -> Color(0xFF7C3AED) to Color(0xFFF3E8FF)
+        TrajL.kindTool -> T.WarnText to T.WarnTint
+        TrajL.kindSubtool -> Color(0xFF9A7B2F) to Color(0xFFF7F0DE)
+        TrajL.kindSystem, TrajL.kindCompacted -> T.Text2 to T.Fill
         else -> T.Text3 to T.Fill
     }
     Text(
