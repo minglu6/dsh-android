@@ -141,7 +141,7 @@ fun ConnectionsScreen(pairLink: PairingLink?, onPairLinkConsumed: () -> Unit, ca
                     Box(Modifier.size(40.dp).clip(CircleShape).background(T.Fill2), contentAlignment = Alignment.Center) { Icon(Icons.Outlined.Devices, null, tint = T.Text3, modifier = Modifier.size(20.dp)) }
                     Spacer(Modifier.width(14.dp))
                     Column {
-                        Text("连接到桌面端 DeepSeek Harness", fontSize = 16.sp, color = T.Ink)
+                        Text("连接到桌面端 dsh", fontSize = 16.sp, color = T.Ink)
                         Text("在电脑上运行 dsh-pocket pair 获取配对码", fontSize = 13.sp, color = T.Text3, modifier = Modifier.padding(top = 2.dp))
                     }
                 }

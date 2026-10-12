@@ -121,8 +121,6 @@ private fun TopBar(title: String?, inChat: Boolean, dot: Dot?, running: Boolean,
                 // Icon-only on phones: the session title must never be squeezed to "…".
                 GrayLink(D.users, "智能体团队", onTeam)
                 GrayLink(D.agentPreset, presetLabel(preset), onPreset)
-            } else {
-                Text("DeepSeek Harness", style = MaterialTheme.typography.titleMedium, color = T.Ink, maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
         }
         StatusDot(dot, Modifier.padding(horizontal = 6.dp))
@@ -161,18 +159,15 @@ private fun Tabs(sel: Int, onSel: (Int) -> Unit) {
 
 @Composable
 private fun Hero() {
-    // deepseek-harness EmptyHero / HeroShell.module.css: 34px fish, 10px gap, 26px/500 headline, 7px to the badge.
-    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-        Text("DeepSeek Harness", fontSize = 14.sp, color = T.Text3, modifier = Modifier.padding(bottom = 14.dp))
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Icon(D.fish, null, tint = T.Ink, modifier = Modifier.width(34.dp).height(25.dp))
-            Spacer(Modifier.width(10.dp))
-            Text("探索未至之境", fontSize = 26.sp, lineHeight = 32.sp, fontWeight = FontWeight.Medium, color = T.Ink)
-            Spacer(Modifier.width(7.dp))
-            Text("预览版", fontSize = 12.sp, lineHeight = 18.sp, fontWeight = FontWeight.Medium, fontFamily = FontFamily.Monospace, color = T.Bluish,
-                modifier = Modifier.align(Alignment.Top).padding(top = 2.dp).clip(RoundedCornerShape(50)).background(T.Tint)
-                    .border(0.5.dp, T.HoverBg, RoundedCornerShape(50)).padding(start = 7.dp, end = 7.dp, top = 1.dp))
-        }
+    // Match desktop EmptyHero: fish + headline + preview badge only — no brand title above.
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Icon(D.fish, null, tint = T.Ink, modifier = Modifier.width(34.dp).height(25.dp))
+        Spacer(Modifier.width(10.dp))
+        Text("探索未至之境", fontSize = 26.sp, lineHeight = 32.sp, fontWeight = FontWeight.Medium, color = T.Ink)
+        Spacer(Modifier.width(7.dp))
+        Text("预览版", fontSize = 12.sp, lineHeight = 18.sp, fontWeight = FontWeight.Medium, fontFamily = FontFamily.Monospace, color = T.Bluish,
+            modifier = Modifier.align(Alignment.Top).padding(top = 2.dp).clip(RoundedCornerShape(50)).background(T.Tint)
+                .border(0.5.dp, T.HoverBg, RoundedCornerShape(50)).padding(start = 7.dp, end = 7.dp, top = 1.dp))
     }
 }
 
