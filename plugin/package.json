@@ -8,11 +8,12 @@
   "type": "module",
   "main": "index.js",
   "exports": { ".": "./index.js", "./package.json": "./package.json" },
-  "files": ["index.js", "src", "cordis.patch.yml", "README.md"],
+  "bin": { "dsh-pocket": "bin/pocket.js" },
+  "files": ["index.js", "src", "bin", "cordis.patch.yml", "README.md"],
   "engines": { "node": "^22.19.0 || >=24.0.0" },
   "scripts": {
     "lint": "eslint .",
-    "test": "node --test test/*.test.js",
+    "test": "node --test --test-timeout=20000 test/*.test.js",
     "test:integration": "node --test test/integration/*.test.js"
   },
   "dsh": { "bundle": { "patch": "./cordis.patch.yml" } },
