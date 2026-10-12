@@ -16,5 +16,7 @@ tasks.test {
     environment("DSH_POCKET_URL", System.getenv("DSH_POCKET_URL") ?: "")
     environment("DSH_POCKET_TOKEN", System.getenv("DSH_POCKET_TOKEN") ?: "")
     environment("E2E_FRAMES", System.getenv("E2E_FRAMES") ?: "")
+    environment("DSH_E2E_PROMPT", System.getenv("DSH_E2E_PROMPT") ?: "")
+    environment("E2E_FRAMES_OUT", System.getenv("E2E_FRAMES_OUT") ?: "")
     testLogging { events("passed", "skipped", "failed"); showStandardStreams = true }
 }

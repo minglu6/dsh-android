@@ -6,7 +6,8 @@ import kotlinx.serialization.json.JsonObject
 /** One rendered row of a conversation. */
 sealed interface Item {
     val key: String
-    data class User(override val key: String, val text: String, val images: Int = 0) : Item
+    /** [pending]: echoed locally or still in dsh's inbox (dsh writes user/message only when the step starts). */
+    data class User(override val key: String, val text: String, val images: Int = 0, val pending: Boolean = false) : Item
     data class Reasoning(override val key: String, val text: String, val durationMs: Long?, val live: Boolean) : Item
     data class Text(override val key: String, val text: String, val live: Boolean) : Item
     data class Tool(
@@ -31,6 +32,8 @@ class TranscriptReducer {
     private val committed = ArrayList<Item>()
     private val toolIndex = HashMap<String, Int>()
     private val approvalCall = HashMap<String, String>()
+    private val userByRpc = HashMap<String, Int>()
+    private val localEchoes = ArrayList<Pair<Int, String>>()
     private var live: LiveAttempt? = null
     var cursor: Long = -1; private set
     var title: String? = null; private set
@@ -48,7 +51,8 @@ class TranscriptReducer {
     /** Apply one follow frame; returns true when visible state changed. */
     fun apply(frame: JsonElement?): Boolean {
         when (frame["type"].str()) {
-            "snapshot" -> { reset(); records(frame["records"]); readProjections(frame["projections"]); cursor = frame["cursor"].long() ?: cursor; baseline(frame["assistantStream"]) }
+            "snapshot" -> { val keep = localEchoes.map { it.second }; reset(); records(frame["records"])
+                keep.filter { t -> committed.none { it is Item.User && it.text == t } }.forEach(::echo); readProjections(frame["projections"]); cursor = frame["cursor"].long() ?: cursor; baseline(frame["assistantStream"]) }
             "resume" -> { records(frame["records"]); readProjections(frame["projections"]); cursor = maxOf(cursor, frame["cursor"].long() ?: cursor); baseline(frame["assistantStream"]) }
             "event" -> event(frame["event"])
             "assistant-stream" -> stream(frame["frame"])
@@ -58,7 +62,7 @@ class TranscriptReducer {
     }
 
     private fun reset() {
-        committed.clear(); toolIndex.clear(); approvalCall.clear(); live = null; cursor = -1
+        committed.clear(); toolIndex.clear(); approvalCall.clear(); userByRpc.clear(); localEchoes.clear(); live = null; cursor = -1
         turns = 0; steps = 0; inputTokens = 0; cacheRead = 0; outputTokens = 0; running = false
     }
 
@@ -93,12 +97,11 @@ class TranscriptReducer {
             "turn/end" -> { running = false; live = null }
             "user/message" -> {
                 val msg = if (data["content"] != null) data else data["message"]
-                // Runtime-context / time snapshots are user-role messages injected by dsh, not typed by the user.
-                val kind = msg["source"]["kind"].str()
-                if (kind != null && kind != "user") return
-                val blocks = msg["content"].arr().orEmpty()
-                committed += Item.User("u$seq", blocks.filter { it["type"].str() == "text" }.joinToString("\n") { it["text"].str().orEmpty() }, blocks.count { it["type"].str() == "image" })
+                if (!isTyped(msg)) return
+                upsertUser(msg, "u$seq", pending = false)
             }
+            // A prompt enters the agent inbox (seq ~3) long before its user/message (written at step start).
+            "agent/inbox/spliced" -> data["inserted"].arr().orEmpty().forEach { m -> if (isTyped(m)) upsertUser(m, "q$seq.${m["source"]["rpcId"].str()}", pending = true) }
             "assistant/message" -> {
                 steps++
                 live = null
@@ -140,6 +143,37 @@ class TranscriptReducer {
             }
             "llm/retry" -> committed += Item.Notice("n$seq", "请求重试中")
         }
+    }
+
+    /** Only what a person typed: dsh also injects user-role context (runtime-context, time, skills, memory plugins). */
+    private fun isTyped(msg: JsonElement?): Boolean {
+        val kind = msg["source"]["kind"].str()
+        if (kind != null) return kind == "user"
+        val text = msg["content"].arr()?.firstOrNull { it["type"].str() == "text" }?.get("text").str().orEmpty()
+        return msg["source"] == null && !text.trimStart().startsWith("<")
+    }
+
+    private fun upsertUser(msg: JsonElement?, key: String, pending: Boolean) {
+        val blocks = msg["content"].arr().orEmpty()
+        val text = blocks.filter { it["type"].str() == "text" }.joinToString("\n") { it["text"].str().orEmpty() }
+        val images = blocks.count { it["type"].str() == "image" }
+        val rpc = msg["source"]["rpcId"].str()
+        val at = rpc?.let { userByRpc[it] }
+            ?: localEchoes.indexOfFirst { it.second == text }.takeIf { it >= 0 }?.let { localEchoes.removeAt(it).first }
+        if (at != null) {
+            val old = committed[at] as Item.User
+            committed[at] = old.copy(text = text, images = images, pending = pending && old.pending)
+            if (rpc != null) userByRpc[rpc] = at
+        } else {
+            if (rpc != null) userByRpc[rpc] = committed.size
+            committed += Item.User(key, text, images, pending)
+        }
+    }
+
+    /** Optimistic echo of a message the user just sent; reconciled with the server copy by text. */
+    fun echo(text: String) {
+        localEchoes += committed.size to text
+        committed += Item.User("local-${committed.size}-${text.hashCode()}", text, pending = true)
     }
 
     private fun upsertTool(id: String, name: String, args: String, time: Long?) {

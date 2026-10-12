@@ -64,7 +64,7 @@ class ConnectionService : Service() {
     private fun openApp() = PendingIntent.getActivity(this, 0, Intent(this, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP), PendingIntent.FLAG_IMMUTABLE)
 
     private fun fgNotification(text: String) = NotificationCompat.Builder(this, CH_CONN)
-        .setSmallIcon(android.R.drawable.stat_notify_sync_noanim).setContentTitle("dsh").setContentText(text)
+        .setSmallIcon(R.drawable.ic_stat_dsh).setContentTitle("dsh").setContentText(text)
         .setOngoing(true).setContentIntent(openApp()).build()
 
     private fun approvalNotification(a: dev.dsh.pocket.protocol.Approval): Notification {
@@ -72,7 +72,7 @@ class ConnectionService : Service() {
             Intent(this, ApprovalReceiver::class.java).putExtra("approvalId", a.approvalId).putExtra("outcome", outcome), PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
         val cmd = approvalCommand(a)
         return NotificationCompat.Builder(this, CH_APPROVAL)
-            .setSmallIcon(android.R.drawable.stat_sys_warning)
+            .setSmallIcon(R.drawable.ic_stat_dsh)
             .setContentTitle("工具 ${a.toolName} 请求越权执行")
             .setContentText(cmd ?: a.reason ?: "等待审批")
             .setStyle(NotificationCompat.BigTextStyle().bigText(listOfNotNull(cmd, a.reason).joinToString("\n")))
