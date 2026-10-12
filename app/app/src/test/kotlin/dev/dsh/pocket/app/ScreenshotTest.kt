@@ -97,5 +97,20 @@ class ScreenshotTest {
     @Test fun s09_general() = show("09-general-settings") { GeneralSettingsScreen {} }
     @Test fun s10_modelSheet() = showWithDialogs("10-model-sheet") { ModelSheet(catalog, ModelChoice("deepseek", "deepseek-v4.1-flash", "DeepSeek-V4.1-Flash", "high"), {}) {} }
     @Test fun s11_permissionSheet() = showWithDialogs("11-permission-sheet") { PermissionSheet("workspace-write", {}) {} }
-    @Test fun s12_plusSheet() = showWithDialogs("12-plus-sheet") { PlusSheet({}, {}, {}) }
+    @Test fun s12_plusSheet() = showWithDialogs("12-plus-sheet") {
+        PlusSheet({}, {}, {}, {}, {}, {}, {}, {}, {})
+    }
+    @Test fun s14_trajectory() {
+        Pocket.chat.value = chatState()
+        show("14-trajectory") {
+            TrajectoryView(chatState()) {}
+        }
+    }
+    @Test fun s15_generalWired() = show("15-general-settings") { GeneralSettingsScreen {} }
+    @Test fun s16_panelWithTerminal() {
+        Pocket.ops.value = setOf("files.list", "terminal.create", "jobs.list")
+        showWithDialogs("16-panel-terminal") {
+            PanelSheet("/tmp/ws", {}, {}, {}, {})
+        }
+    }
 }

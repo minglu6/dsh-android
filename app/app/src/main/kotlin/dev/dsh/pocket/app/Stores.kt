@@ -56,6 +56,24 @@ data class Profile(val id: String, val name: String, val host: String, val port:
 
 enum class BusySend(val label: String, val mode: String) { Queue("排队发送", "queue"), Steer("立即引导", "steer") }
 
+/** Matches Host `ui-theme.preference`. */
+enum class Appearance(val label: String) { Light("浅色"), Dark("深色"), System("跟随系统") }
+
+/** Matches Host `ui-chat.transcriptView`. */
+enum class TranscriptView(val label: String) {
+    Compact("简洁"), Standard("标准"), Detailed("详细"), Verbose("完全展开")
+}
+
+/** Client-only on desktop too (`settings.collapse.*`). */
+enum class CollapseTiming(val label: String) {
+    Completion("回答结束后"), NextInput("下次有新消息时")
+}
+
+/** Matches Host `ui-chat.performanceUsage`. */
+enum class PerformanceUsage(val label: String) { Compact("简洁"), Detailed("详细") }
+
+enum class AppLanguage(val label: String) { Zh("中文"), En("English") }
+
 class AppPrefs(ctx: Context) {
     private val p = ctx.getSharedPreferences("app", Context.MODE_PRIVATE)
     private val json = Json { ignoreUnknownKeys = true }
@@ -74,4 +92,22 @@ class AppPrefs(ctx: Context) {
     var approvalNotify: Boolean
         get() = p.getBoolean("approvalNotify", true)
         set(v) = p.edit().putBoolean("approvalNotify", v).apply()
+    var language: AppLanguage
+        get() = runCatching { AppLanguage.valueOf(p.getString("language", null) ?: "Zh") }.getOrDefault(AppLanguage.Zh)
+        set(v) = p.edit().putString("language", v.name).apply()
+    var appearance: Appearance
+        get() = runCatching { Appearance.valueOf(p.getString("appearance", null) ?: "Light") }.getOrDefault(Appearance.Light)
+        set(v) = p.edit().putString("appearance", v.name).apply()
+    var fontSize: Int
+        get() = p.getInt("fontSize", 14).coerceIn(12, 22)
+        set(v) = p.edit().putInt("fontSize", v.coerceIn(12, 22)).apply()
+    var transcriptView: TranscriptView
+        get() = runCatching { TranscriptView.valueOf(p.getString("transcriptView", null) ?: "Detailed") }.getOrDefault(TranscriptView.Detailed)
+        set(v) = p.edit().putString("transcriptView", v.name).apply()
+    var collapseTiming: CollapseTiming
+        get() = runCatching { CollapseTiming.valueOf(p.getString("collapseTiming", null) ?: "Completion") }.getOrDefault(CollapseTiming.Completion)
+        set(v) = p.edit().putString("collapseTiming", v.name).apply()
+    var performanceUsage: PerformanceUsage
+        get() = runCatching { PerformanceUsage.valueOf(p.getString("performanceUsage", null) ?: "Detailed") }.getOrDefault(PerformanceUsage.Detailed)
+        set(v) = p.edit().putString("performanceUsage", v.name).apply()
 }

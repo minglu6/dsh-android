@@ -97,9 +97,43 @@ class PocketClient(
     suspend fun listSessions(): List<SessionSummary> = call("sessions.list")["items"].arr().orEmpty().mapNotNull(SessionSummary::parse)
     suspend fun createSession(cwd: String? = null, agentPreset: String? = null): String =
         call("sessions.create", jsonOf("cwd" to cwd, "agentPreset" to agentPreset))["sessionId"].str() ?: throw PocketError("bad-reply", "no sessionId")
-    suspend fun prompt(sessionId: String, text: String, mode: String) =
-        call("prompt", jsonOf("sessionId" to sessionId, "text" to text, "mode" to mode))
+    suspend fun prompt(sessionId: String, text: String, mode: String, images: List<PromptImage> = emptyList()) =
+        call("prompt", buildJsonObject {
+            put("sessionId", sessionId); put("text", text); put("mode", mode)
+            if (images.isNotEmpty()) putJsonArray("images") {
+                images.forEach { img ->
+                    add(buildJsonObject {
+                        put("mediaType", img.mediaType); put("data", img.data)
+                        img.name?.let { put("name", it) }
+                    })
+                }
+            }
+        })
     suspend fun cancel(sessionId: String) = call("cancel", jsonOf("sessionId" to sessionId))
+    suspend fun executeCommand(sessionId: String, line: String): JsonElement =
+        call("commands.execute", jsonOf("sessionId" to sessionId, "line" to line))
+    suspend fun exportSession(sessionId: String, includeDescendants: Boolean = true): JsonElement =
+        call("session.export", jsonOf("sessionId" to sessionId, "includeDescendants" to includeDescendants), timeoutMs = 180_000)
+    suspend fun listFiles(sessionId: String, path: String = "."): JsonElement =
+        call("files.list", jsonOf("sessionId" to sessionId, "path" to path))
+    suspend fun readFile(sessionId: String, path: String): JsonElement =
+        call("files.read", jsonOf("sessionId" to sessionId, "path" to path))
+    suspend fun listJobs(sessionId: String): JsonElement =
+        call("jobs.list", jsonOf("sessionId" to sessionId))
+    suspend fun killJob(sessionId: String, jobId: String): JsonElement =
+        call("jobs.kill", jsonOf("sessionId" to sessionId, "jobId" to jobId))
+    suspend fun listTerminals(sessionId: String): JsonElement =
+        call("terminal.list", jsonOf("sessionId" to sessionId))
+    suspend fun createTerminal(sessionId: String, cols: Int = 80, rows: Int = 24, id: String? = null): JsonElement =
+        call("terminal.create", jsonOf("sessionId" to sessionId, "cols" to cols, "rows" to rows, "id" to id))
+    suspend fun followTerminal(sessionId: String, id: String, attachmentId: String? = null): JsonElement =
+        call("terminal.follow", jsonOf("sessionId" to sessionId, "id" to id, "attachmentId" to attachmentId))
+    suspend fun writeTerminal(sessionId: String, id: String, attachmentId: String, data: String): JsonElement =
+        call("terminal.write", jsonOf("sessionId" to sessionId, "id" to id, "attachmentId" to attachmentId, "data" to data))
+    suspend fun resizeTerminal(sessionId: String, id: String, attachmentId: String, cols: Int, rows: Int): JsonElement =
+        call("terminal.resize", jsonOf("sessionId" to sessionId, "id" to id, "attachmentId" to attachmentId, "cols" to cols, "rows" to rows))
+    suspend fun closeTerminal(sessionId: String, id: String): JsonElement =
+        call("terminal.close", jsonOf("sessionId" to sessionId, "id" to id))
     suspend fun modelCatalog(): ModelCatalog = ModelCatalog.parse(call("models.catalog"))
     suspend fun selectModel(sessionId: String, provider: String, model: String, effort: String?) =
         call("models.select", jsonOf("sessionId" to sessionId, "provider" to provider, "model" to model, "reasoningEffort" to effort))

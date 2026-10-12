@@ -82,8 +82,6 @@ fun SessionDrawer(onPick: (String) -> Unit, onNew: () -> Unit, onSettings: () ->
                 Icon(D.newChat, null, Modifier.size(16.dp), tint = T.Ink); Spacer(Modifier.width(6.dp)); Text("新会话", fontSize = 15.sp)
             }
             Spacer(Modifier.height(6.dp))
-            DrawerItem(D.plugin, "插件", enabled = false)
-            DrawerItem(D.clock, "自动化任务", enabled = false)
             Text("工作区", fontSize = 13.sp, color = T.Text3, modifier = Modifier.padding(start = 22.dp, top = 16.dp, bottom = 6.dp))
             Column(Modifier.weight(1f).verticalScroll(rememberScrollState())) {
                 val top = sessions.filter { it.parentSessionId == null && !it.blank }
@@ -254,7 +252,6 @@ fun parseHostPort(s: String): Pair<String, Int>? {
 
 @Composable
 fun SettingsScreen(onBack: () -> Unit, onGeneral: () -> Unit, onConnections: () -> Unit) {
-    val catalog by Pocket.catalog.collectAsState()
     val profile = Pocket.activeProfile
     var notify by remember { mutableStateOf(Pocket.prefs.approvalNotify) }
     var sheet by remember { mutableStateOf(false) }
@@ -262,11 +259,8 @@ fun SettingsScreen(onBack: () -> Unit, onGeneral: () -> Unit, onConnections: () 
         Header("设置", onBack)
         Card {
             Row2("通用设置", icon = D.settings, onClick = onGeneral)
-            Row2("模型", icon = D.database, value = catalog?.groups?.firstOrNull()?.name, enabled = false, onClick = {})
-            Row2("内置插件", icon = D.plugin, enabled = false, onClick = {})
             Row2("Agent 预设", icon = D.agentPreset, value = "标准模式", divider = false, onClick = { sheet = true })
         }
-        Card { Row2("打开配置文件", icon = D.plan, enabled = false, divider = false, onClick = {}) }
         Text("dsh-android", fontSize = 13.sp, color = T.Text3, modifier = Modifier.padding(start = 22.dp, top = 12.dp, bottom = 2.dp))
         Card {
             Row2("连接", icon = D.rightUp, value = profile?.name ?: "未连接", onClick = onConnections)
@@ -284,22 +278,28 @@ fun SettingsScreen(onBack: () -> Unit, onGeneral: () -> Unit, onConnections: () 
 fun GeneralSettingsScreen(onBack: () -> Unit) {
     var perm by remember { mutableStateOf(Pocket.prefs.defaultPermission) }
     var busy by remember { mutableStateOf(Pocket.prefs.busySend) }
+    var lang by remember { mutableStateOf(Pocket.prefs.language) }
+    var appearance by remember { mutableStateOf(Pocket.prefs.appearance) }
+    var fontSize by remember { mutableIntStateOf(Pocket.prefs.fontSize) }
+    var transcript by remember { mutableStateOf(Pocket.prefs.transcriptView) }
+    var collapse by remember { mutableStateOf(Pocket.prefs.collapseTiming) }
+    var perf by remember { mutableStateOf(Pocket.prefs.performanceUsage) }
     var sheet by remember { mutableStateOf<String?>(null) }
     Column(Modifier.fillMaxSize().background(Color.White).systemBarsPadding().verticalScroll(rememberScrollState())) {
         Header("通用设置", onBack)
         Card {
             Row2("权限", "选择新会话的默认权限模式", value = permissionLabel(perm), onClick = { sheet = "perm" }, trailing = { DownArrow() })
-            Row2("语言", value = "中文", enabled = false, onClick = {}, trailing = { DownArrow() })
-            Row2("外观", value = "浅色", enabled = false, onClick = {}, trailing = { DownArrow() })
-            Row2("字号大小", "仅影响会话内容的字号", value = "14 px", enabled = false, divider = false, onClick = {}, trailing = {})
+            Row2("语言", value = lang.label, onClick = { sheet = "lang" }, trailing = { DownArrow() })
+            Row2("外观", value = appearance.label, onClick = { sheet = "appearance" }, trailing = { DownArrow() })
+            Row2("字号大小", "仅影响会话内容的字号", value = "$fontSize px", onClick = { sheet = "font" }, divider = false, trailing = { DownArrow() })
         }
         Card {
-            Row2("工作步骤展示", "选择希望看到多少工具调用细节", value = "详细", enabled = false, onClick = {}, trailing = { DownArrow() })
-            Row2("工作步骤收起时机", "选择何时自动收起工作步骤", value = "回答结束后", enabled = false, divider = false, onClick = {}, trailing = { DownArrow() })
+            Row2("工作步骤展示", "选择希望看到多少工具调用细节", value = transcript.label, onClick = { sheet = "transcript" }, trailing = { DownArrow() })
+            Row2("工作步骤收起时机", "选择何时自动收起工作步骤", value = collapse.label, onClick = { sheet = "collapse" }, divider = false, trailing = { DownArrow() })
         }
         Card {
             Row2("繁忙时的发送行为", "智能体运行时发送按钮的行为", value = busy.label, onClick = { sheet = "busy" }, trailing = { DownArrow() })
-            Row2("性能与用量", "选择性能与用量信息展示的详细程度", value = "详细", enabled = false, divider = false, onClick = {}, trailing = { DownArrow() })
+            Row2("性能与用量", "选择性能与用量信息展示的详细程度", value = perf.label, onClick = { sheet = "perf" }, divider = false, trailing = { DownArrow() })
         }
         Text("当前版本：${BuildConfig.VERSION_NAME}", fontSize = 12.sp, color = T.Caption, textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth().padding(16.dp))
     }
@@ -308,10 +308,36 @@ fun GeneralSettingsScreen(onBack: () -> Unit) {
             SheetTitle("默认权限")
             PERMISSION_LABEL.forEach { (id, l) -> OptionRow(l.first, l.second, selected = perm == id) { perm = id; Pocket.prefs.defaultPermission = id; sheet = null } }
         }
+        "lang" -> PocketSheet({ sheet = null }) {
+            SheetTitle("语言")
+            AppLanguage.entries.forEach { o -> OptionRow(o.label, selected = lang == o) { lang = o; Pocket.prefs.language = o; sheet = null } }
+        }
+        "appearance" -> PocketSheet({ sheet = null }) {
+            SheetTitle("外观")
+            Appearance.entries.forEach { o -> OptionRow(o.label, selected = appearance == o) { appearance = o; Pocket.prefs.appearance = o; sheet = null } }
+        }
+        "font" -> PocketSheet({ sheet = null }) {
+            SheetTitle("字号大小")
+            listOf(12, 14, 16, 18, 20).forEach { n ->
+                OptionRow("$n px", selected = fontSize == n) { fontSize = n; Pocket.prefs.fontSize = n; sheet = null }
+            }
+        }
+        "transcript" -> PocketSheet({ sheet = null }) {
+            SheetTitle("工作步骤展示")
+            TranscriptView.entries.forEach { o -> OptionRow(o.label, selected = transcript == o) { transcript = o; Pocket.prefs.transcriptView = o; sheet = null } }
+        }
+        "collapse" -> PocketSheet({ sheet = null }) {
+            SheetTitle("工作步骤收起时机")
+            CollapseTiming.entries.forEach { o -> OptionRow(o.label, selected = collapse == o) { collapse = o; Pocket.prefs.collapseTiming = o; sheet = null } }
+        }
         "busy" -> PocketSheet({ sheet = null }) {
             SheetTitle("繁忙时的发送行为")
             OptionRow(BusySend.Queue.label, "本轮结束后再发送", selected = busy == BusySend.Queue) { busy = BusySend.Queue; Pocket.prefs.busySend = busy; sheet = null }
             OptionRow(BusySend.Steer.label, "插入当前轮次，引导智能体", selected = busy == BusySend.Steer) { busy = BusySend.Steer; Pocket.prefs.busySend = busy; sheet = null }
+        }
+        "perf" -> PocketSheet({ sheet = null }) {
+            SheetTitle("性能与用量")
+            PerformanceUsage.entries.forEach { o -> OptionRow(o.label, selected = perf == o) { perf = o; Pocket.prefs.performanceUsage = o; sheet = null } }
         }
     }
 }

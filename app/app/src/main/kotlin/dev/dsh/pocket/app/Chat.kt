@@ -17,6 +17,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.rotate
 import androidx.compose.foundation.layout.offset
@@ -35,7 +36,7 @@ import dev.dsh.pocket.protocol.Item
 import dev.dsh.pocket.protocol.ToolStatus
 import kotlinx.coroutines.delay
 
-enum class Sheet { None, Model, Permission, FullAccess, Preset, Plus, More, Panel, Team, Workspace }
+enum class Sheet { None, Model, Permission, FullAccess, Preset, Plus, More, Panel, Team, Workspace, Goal, Feedback, Files, Jobs, Terminal }
 
 @Composable
 fun ChatRoot(onMenu: () -> Unit) {
@@ -47,6 +48,7 @@ fun ChatRoot(onMenu: () -> Unit) {
     val sessions by Pocket.sessions.collectAsState()
     val active by Pocket.active.collectAsState()
     val status by Pocket.status.collectAsState()
+    val ops by Pocket.ops.collectAsState()
     var sheet by remember { mutableStateOf(Sheet.None) }
     var tool by remember { mutableStateOf<Item.Tool?>(null) }
     // New-chat drafts (applied when the session gets created).
@@ -54,6 +56,37 @@ fun ChatRoot(onMenu: () -> Unit) {
     var draftPerm by remember { mutableStateOf(Pocket.prefs.defaultPermission) }
     var draftModel by remember { mutableStateOf<ModelChoice?>(null) }
     var draftCwd by remember { mutableStateOf<String?>(null) }
+    val ctx = androidx.compose.ui.platform.LocalContext.current
+    val pickFiles = androidx.activity.compose.rememberLauncherForActivityResult(
+        androidx.activity.result.contract.ActivityResultContracts.GetMultipleContents(),
+    ) { uris ->
+        if (Pocket.chat.value == null || uris.isEmpty()) return@rememberLauncherForActivityResult
+        val images = uris.mapNotNull { uri ->
+            runCatching {
+                val mime = ctx.contentResolver.getType(uri) ?: "image/jpeg"
+                if (!mime.startsWith("image/")) return@runCatching null
+                val bytes = ctx.contentResolver.openInputStream(uri)?.use { it.readBytes() } ?: return@runCatching null
+                val name = uri.lastPathSegment
+                dev.dsh.pocket.protocol.PromptImage(mime, android.util.Base64.encodeToString(bytes, android.util.Base64.NO_WRAP), name)
+            }.getOrNull()
+        }
+        if (images.isNotEmpty()) Pocket.sendImages("", images)
+    }
+    fun doExport() {
+        Pocket.exportSession { name, bytes ->
+            runCatching {
+                val out = java.io.File(ctx.cacheDir, name)
+                out.writeBytes(bytes)
+                val uri = androidx.core.content.FileProvider.getUriForFile(ctx, "${ctx.packageName}.files", out)
+                val intent = android.content.Intent(android.content.Intent.ACTION_SEND).apply {
+                    type = "application/zip"
+                    putExtra(android.content.Intent.EXTRA_STREAM, uri)
+                    addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                }
+                ctx.startActivity(android.content.Intent.createChooser(intent, name))
+            }.onFailure { Pocket.errors.tryEmit(it.message ?: "导出失败") }
+        }
+    }
 
     val sid = chat?.sessionId
     val defaultModel = catalog?.let { c -> c.find(c.defaultProvider, c.defaultModel) ?: c.groups.firstOrNull()?.models?.firstOrNull() }
@@ -63,9 +96,11 @@ fun ChatRoot(onMenu: () -> Unit) {
     val summary = sessions.firstOrNull { it.sessionId == sid }
     val dot = status[active]
     val workspaces = sessions.mapNotNull { it.cwd }.distinct()
+    val showPanel = "files.list" in ops || "jobs.list" in ops || "terminal.create" in ops
 
     Column(Modifier.fillMaxSize().background(Color.White).systemBarsPadding().imePadding()) {
-        TopBar(summary?.title ?: chat?.title, sid != null, dot, chat?.running == true, onMenu, onMore = { sheet = Sheet.More }, onPanel = { sheet = Sheet.Panel },
+        TopBar(summary?.title ?: chat?.title, sid != null, dot, chat?.running == true, onMenu, onMore = { sheet = Sheet.More },
+            onPanel = if (showPanel) ({ sheet = Sheet.Panel }) else null,
             onTeam = { sheet = Sheet.Team }, onPreset = { sheet = Sheet.Preset }, preset = "standard", onNew = { Pocket.closeChat() })
         if (chat == null) {
             Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) { Hero() }
@@ -82,7 +117,7 @@ fun ChatRoot(onMenu: () -> Unit) {
             var tab by remember(st.sessionId) { mutableIntStateOf(0) }
             Tabs(tab) { tab = it }
             Box(Modifier.weight(1f).fillMaxWidth()) {
-                if (tab == 0) Transcript(st, onTool = { tool = it }) else EmptyState(D.inspect, "暂无轨迹", "轨迹视图将在后续版本提供")
+                if (tab == 0) Transcript(st, onTool = { tool = it }) else TrajectoryView(st, onTool = { tool = it })
             }
             approvals.firstOrNull { it.sessionId == null || it.sessionId == st.sessionId }?.let { ApprovalCard(it) }
             Composer("发消息或创建任务, / 调用指令, @ 文件或对话", st.running, curPerm, curModel, enabled = dot == Dot.Online,
@@ -100,17 +135,35 @@ fun ChatRoot(onMenu: () -> Unit) {
         }
         Sheet.FullAccess -> FullAccessSheet(onDismiss = { sheet = Sheet.None }) { if (sid == null) draftPerm = "danger-full-access" else Pocket.setPermission(sid, "danger-full-access"); sheet = Sheet.None }
         Sheet.Preset -> PresetSheet(if (sid == null) draftPreset else "standard", editable = sid == null, onDismiss = { sheet = Sheet.None }) { draftPreset = it }
-        Sheet.Plus -> PlusSheet(onDismiss = { sheet = Sheet.None }, onPerm = { sheet = Sheet.Permission }, onModel = { sheet = Sheet.Model })
-        Sheet.More -> MoreSheet(chat, onDismiss = { sheet = Sheet.None })
-        Sheet.Panel -> PanelSheet(summary?.cwd, onDismiss = { sheet = Sheet.None })
+        Sheet.Plus -> PlusSheet(
+            onDismiss = { sheet = Sheet.None },
+            onPerm = { sheet = Sheet.Permission },
+            onModel = { sheet = Sheet.Model },
+            onFile = { pickFiles.launch("image/*") },
+            onGoal = { sheet = Sheet.Goal },
+            onPlan = { Pocket.executeCommand("/plan") },
+            onFeedback = { sheet = Sheet.Feedback },
+            onCompact = { Pocket.executeCommand("/compact") },
+            onExport = { doExport() },
+        )
+        Sheet.More -> MoreSheet(chat, onDismiss = { sheet = Sheet.None }, onFeedback = { sheet = Sheet.Feedback }, onExport = { doExport() })
+        Sheet.Panel -> PanelSheet(
+            summary?.cwd, onDismiss = { sheet = Sheet.None },
+            onFiles = { sheet = Sheet.Files }, onTerminal = { sheet = Sheet.Terminal }, onJobs = { sheet = Sheet.Jobs },
+        )
         Sheet.Team -> TeamSheet(onDismiss = { sheet = Sheet.None })
         Sheet.Workspace -> WorkspaceSheet(workspaces, draftCwd ?: workspaces.firstOrNull(), onDismiss = { sheet = Sheet.None }) { draftCwd = it }
+        Sheet.Goal -> GoalSheet(onDismiss = { sheet = Sheet.None })
+        Sheet.Feedback -> FeedbackSheet(onDismiss = { sheet = Sheet.None })
+        Sheet.Files -> sid?.let { FilesSheet(it, onDismiss = { sheet = Sheet.None }) } ?: run { sheet = Sheet.None }
+        Sheet.Jobs -> sid?.let { JobsSheet(it, onDismiss = { sheet = Sheet.None }) } ?: run { sheet = Sheet.None }
+        Sheet.Terminal -> sid?.let { TerminalSheet(it, onDismiss = { sheet = Sheet.None }) } ?: run { sheet = Sheet.None }
         Sheet.None -> {}
     }
 }
 
 @Composable
-private fun TopBar(title: String?, inChat: Boolean, dot: Dot?, running: Boolean, onMenu: () -> Unit, onMore: () -> Unit, onPanel: () -> Unit, onTeam: () -> Unit, onPreset: () -> Unit, preset: String, onNew: () -> Unit = {}) {
+private fun TopBar(title: String?, inChat: Boolean, dot: Dot?, running: Boolean, onMenu: () -> Unit, onMore: () -> Unit, onPanel: (() -> Unit)?, onTeam: () -> Unit, onPreset: () -> Unit, preset: String, onNew: () -> Unit = {}) {
     Row(Modifier.fillMaxWidth().height(56.dp).padding(horizontal = 6.dp), verticalAlignment = Alignment.CenterVertically) {
         IconButton(onMenu) { Icon(Icons.Rounded.Menu, "菜单", tint = T.Ink) }
         // One weighted region: the title takes what the gray links leave (no competing spacer).
@@ -126,7 +179,7 @@ private fun TopBar(title: String?, inChat: Boolean, dot: Dot?, running: Boolean,
         StatusDot(dot, Modifier.padding(horizontal = 6.dp))
         IconButton(onMore, Modifier.size(40.dp)) { Icon(D.ellipsis, "更多", tint = T.Ink) }
         if (!inChat) IconButton(onNew, Modifier.size(40.dp)) { Icon(D.newChat, "新会话", tint = T.Ink) }
-        IconButton(onPanel, Modifier.size(40.dp)) { Icon(D.panelRight, "右侧面板", tint = T.Ink, modifier = Modifier.size(20.dp)) }
+        if (onPanel != null) IconButton(onPanel, Modifier.size(40.dp)) { Icon(D.panelRight, "右侧面板", tint = T.Ink, modifier = Modifier.size(20.dp)) }
     }
     HorizontalDivider(color = T.Fill)
 }
@@ -215,12 +268,13 @@ private fun Transcript(st: ChatState, onTool: (Item.Tool) -> Unit) {
 
 @Composable
 private fun ReasoningRow(r: Item.Reasoning) {
-    var open by remember { mutableStateOf(false) }
+    val verbose = Pocket.prefs.transcriptView == TranscriptView.Verbose
+    var open by remember(r.key, verbose) { mutableStateOf(verbose) }
     Row(Modifier.height(IntrinsicSize.Min)) {
         Box(Modifier.width(2.dp).fillMaxHeight().background(T.Fill))
         Column(Modifier.padding(start = 12.dp).clickable { open = !open }) {
             Text(if (r.live) "深度思考中…" else "已深度思考${r.durationMs?.let { " ${seconds(it)} 秒" } ?: ""} ${if (open) "⌄" else "›"}", fontSize = 14.sp, color = T.Text3)
-            if (open || r.live) Text(r.text, fontSize = 14.sp, lineHeight = 22.sp, color = T.Text3, modifier = Modifier.padding(top = 6.dp))
+            if (open || r.live) Text(r.text, fontSize = Pocket.prefs.fontSize.sp, lineHeight = (Pocket.prefs.fontSize + 8).sp, color = T.Text3, modifier = Modifier.padding(top = 6.dp))
         }
     }
 }
@@ -228,6 +282,9 @@ private fun ReasoningRow(r: Item.Reasoning) {
 @Composable
 private fun ToolCard(t: Item.Tool, onClick: () -> Unit) {
     val warn = t.status == ToolStatus.AwaitingApproval
+    val view = Pocket.prefs.transcriptView
+    if (view == TranscriptView.Compact && t.status == ToolStatus.Ok) return
+    val showArg = view != TranscriptView.Compact
     Row(Modifier.fillMaxWidth().clip(T.R12).border(1.dp, if (warn) T.WarnBorder else T.Border, T.R12).clickable(onClick = onClick).padding(horizontal = 14.dp, vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically) {
         when (t.status) {
@@ -238,7 +295,8 @@ private fun ToolCard(t: Item.Tool, onClick: () -> Unit) {
         }
         Spacer(Modifier.width(10.dp))
         Text(t.name, fontSize = 15.sp, color = T.Ink); Spacer(Modifier.width(10.dp))
-        Text(primaryArg(t.name, t.arguments).orEmpty(), style = T.Mono.copy(color = T.Text3), maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+        if (showArg) Text(primaryArg(t.name, t.arguments).orEmpty(), style = T.Mono.copy(color = T.Text3), maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+        else Spacer(Modifier.weight(1f))
         Icon(D.chevronRight, null, tint = T.Caption, modifier = Modifier.size(18.dp))
     }
 }
@@ -246,13 +304,14 @@ private fun ToolCard(t: Item.Tool, onClick: () -> Unit) {
 /** Minimal markdown: ``` fences as code blocks, `inline` code, **bold**. */
 @Composable
 private fun Markdownish(text: String) {
+    val body = Pocket.prefs.fontSize.sp
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         text.split("```").forEachIndexed { i, part ->
             if (i % 2 == 1) {
                 val code = part.substringAfter('\n', part).trimEnd()
                 Text(code, style = T.Mono.copy(lineHeight = 21.sp), modifier = Modifier.fillMaxWidth().clip(T.R12).background(T.Fill2).horizontalScroll(rememberScrollState()).padding(14.dp))
             } else if (part.isNotBlank()) {
-                Text(inline(part.trim()), style = MaterialTheme.typography.bodyLarge)
+                Text(inline(part.trim()), style = MaterialTheme.typography.bodyLarge.copy(fontSize = body, lineHeight = (Pocket.prefs.fontSize + 10).sp))
             }
         }
     }
@@ -332,14 +391,26 @@ private fun Composer(placeholder: String, running: Boolean, perm: String, model:
                 }
             }
             Spacer(Modifier.width(8.dp))
+            // Desktop InputBar `.primary`: 34px circle, button-info-fill (#4176E6 / #7AAAFF),
+            // white 16px glyph; stop uses the same fill (not brand-primary/ink). Disabled = 0.4 opacity.
             val canSend = enabled && text.isNotBlank()
+            val primaryFill = MaterialTheme.colorScheme.primary
             if (running && text.isBlank()) {
-                Box(Modifier.size(38.dp).clip(CircleShape).background(T.Ink).clickable(onClick = onStop), contentAlignment = Alignment.Center) {
-                    Box(Modifier.size(11.dp).clip(T.R4).background(Color.White))
+                Box(Modifier.size(34.dp).clip(CircleShape).background(primaryFill).clickable(onClick = onStop), contentAlignment = Alignment.Center) {
+                    // svg rect x=3 y=3 w=10 h=10 rx=3 in 16×16 viewBox
+                    Box(Modifier.size(10.dp).clip(RoundedCornerShape(3.dp)).background(Color.White))
                 }
             } else {
-                Box(Modifier.size(38.dp).clip(CircleShape).background(if (canSend) T.Accent else T.SendDisabled).clickable(enabled = canSend) { onSend(text.trim()); text = "" }, contentAlignment = Alignment.Center) {
-                    Icon(Icons.Rounded.ArrowUpward, "发送", tint = Color.White, modifier = Modifier.size(18.dp))
+                Box(
+                    Modifier
+                        .size(34.dp)
+                        .clip(CircleShape)
+                        .background(primaryFill)
+                        .alpha(if (canSend) 1f else 0.4f)
+                        .clickable(enabled = canSend) { onSend(text.trim()); text = "" },
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(Icons.Rounded.ArrowUpward, "发送", tint = Color.White, modifier = Modifier.size(16.dp))
                 }
             }
         }
@@ -349,8 +420,9 @@ private fun Composer(placeholder: String, running: Boolean, perm: String, model:
 @Composable
 private fun Footer(st: ChatState) {
     val u = st.usage
+    val detailed = Pocket.prefs.performanceUsage == PerformanceUsage.Detailed
     Row(Modifier.fillMaxWidth().padding(vertical = 8.dp), horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically) {
         Text("${u.turns} 轮 ${u.steps} 步", fontSize = 12.sp, color = T.Text3)
-        u.cacheHitPercent?.let { Spacer(Modifier.width(14.dp)); Text("缓存命中 $it%", fontSize = 12.sp, color = T.Text3) }
+        if (detailed) u.cacheHitPercent?.let { Spacer(Modifier.width(14.dp)); Text("缓存命中 $it%", fontSize = 12.sp, color = T.Text3) }
     }
 }
