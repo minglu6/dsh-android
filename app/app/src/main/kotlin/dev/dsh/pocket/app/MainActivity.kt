@@ -21,13 +21,14 @@ import kotlinx.coroutines.launch
 enum class Screen { Chat, Connections, Settings, General }
 
 class MainActivity : ComponentActivity() {
+    /** Asked only once a desktop is connected (approval notifications need it). */
+    val notifPermission = registerForActivityResult(ActivityResultContracts.RequestPermission()) {}
     private val deepLink = MutableStateFlow<PairingLink?>(null)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         handle(intent)
-        if (Build.VERSION.SDK_INT >= 33) registerForActivityResult(ActivityResultContracts.RequestPermission()) {}.launch(Manifest.permission.POST_NOTIFICATIONS)
         setContent { PocketTheme { Root(deepLink) } }
     }
 
@@ -46,7 +47,12 @@ private fun Root(deepLink: MutableStateFlow<PairingLink?>) {
     val scope = rememberCoroutineScope()
     val snack = remember { SnackbarHostState() }
 
-    LaunchedEffect(active) { if (active != null) ConnectionService.start(ctx) }
+    LaunchedEffect(active) {
+        if (active == null) return@LaunchedEffect
+        if (Build.VERSION.SDK_INT >= 33 && ctx.checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != android.content.pm.PackageManager.PERMISSION_GRANTED)
+            (ctx as? MainActivity)?.notifPermission?.launch(Manifest.permission.POST_NOTIFICATIONS)
+        ConnectionService.start(ctx)
+    }
     LaunchedEffect(Unit) { Pocket.errors.collect { snack.showSnackbar(it) } }
     LaunchedEffect(link) { if (link != null) screen = Screen.Connections }
 
