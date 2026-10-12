@@ -44,12 +44,15 @@ class PocketClient(
     /** Live route from the active transport (Tailscale / LAN / local). */
     val route: Route? get() = transport?.route
 
+    /** Negotiated WS extensions from the active transport (OkHttp ↔ permessage-deflate). */
+    @Volatile var negotiatedExtensions: String? = null; private set
+
     /** Connect over loopback WebSocket (dev/tests only). */
-    suspend fun connect(url: String, auth: Auth, timeoutMs: Long = 10_000): HelloResult =
+    suspend fun connect(url: String, auth: Auth, timeoutMs: Long = 120_000): HelloResult =
         connect(listOf(WsTransport.factory(url)), auth, timeoutMs)
 
     /** Connect using an ordered list of transports (host:port WebSocket). */
-    suspend fun connect(factories: List<TransportFactory>, auth: Auth, timeoutMs: Long = 10_000): HelloResult =
+    suspend fun connect(factories: List<TransportFactory>, auth: Auth, timeoutMs: Long = 120_000): HelloResult =
         withTimeout(timeoutMs) {
             close()
             _state.value = State.Connecting
@@ -64,11 +67,12 @@ class PocketClient(
             HelloResult(result.obj() ?: JsonObject(emptyMap()), t.route)
         }
 
-    suspend fun connect(factory: TransportFactory, auth: Auth, timeoutMs: Long = 10_000): HelloResult =
+    suspend fun connect(factory: TransportFactory, auth: Auth, timeoutMs: Long = 120_000): HelloResult =
         connect(listOf(factory), auth, timeoutMs)
 
     private fun attach(t: FrameTransport) {
         transport = t
+        negotiatedExtensions = (t as? WsTransport)?.negotiatedExtensions
         pump = scope.launch {
             try {
                 t.incoming.collect { onFrame(it) }
@@ -273,11 +277,16 @@ class PocketClient(
     }
 
     companion object {
-        /** Loopback WS must bypass system HTTP proxies that break local upgrades. */
+        /**
+         * Loopback WS must bypass system HTTP proxies that break local upgrades.
+         * OkHttp negotiates permessage-deflate by default; keep the 1 KiB threshold
+         * in sync with the pocket server (adapted from saya-ch/dsh-mobile).
+         */
         fun defaultHttp(): OkHttpClient = OkHttpClient.Builder()
             .proxy(java.net.Proxy.NO_PROXY)
-            .connectTimeout(8, TimeUnit.SECONDS)
+            .connectTimeout(120, TimeUnit.SECONDS)
             .readTimeout(0, TimeUnit.MILLISECONDS)
+            .minWebSocketMessageToCompress(WsTransport.MIN_MESSAGE_TO_COMPRESS)
             .build()
     }
 }

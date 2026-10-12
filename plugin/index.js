@@ -7,6 +7,8 @@ import { createUserQuestionHook } from './src/user-question-hook.js'
 import { createDeviceStore } from './src/devices.js'
 import { createPairing } from './src/pairing.js'
 import { createPocketServer } from './src/server.js'
+import { TaskEventHub, watchTaskCompletions } from './src/task-events.js'
+import { TaskFallbackTracker } from './src/task-fallback.js'
 import { loadOrCreateToken } from './src/token.js'
 import { zipSync, strToU8 } from 'fflate'
 import { permissionOps, presetOps, commandOps, filesOps, jobsOps, exportOps, terminalOps } from './src/extra-ops.js'
@@ -48,10 +50,33 @@ export function apply(ctx, config = {}) {
   const port = config.port ?? 7690
   const advertiseHost = pickAdvertiseHost(config.host)
   const bindHost = pickBindHost(config.host)
+  const taskHub = new TaskEventHub()
+  /** @type {TaskFallbackTracker | null} */
+  let taskFallback = null
   const server = createPocketServer({
     sessionController: ctx.sessionController, token, host: bindHost, port, devices, pairing,
     info: { plugin: PKG.name, version: PKG.version },
     onSessionEvent: (fn) => { listeners.add(fn); return () => listeners.delete(fn) },
+    onSessionLifecycle: (kind, args) => {
+      if (!taskFallback) return
+      if (kind === 'status') taskFallback.onStatus(args[0], Boolean(args[1]))
+      else if (kind === 'activity') taskFallback.markActivity(args[0], typeof args[1] === 'number' ? args[1] : undefined)
+      else if (kind === 'removed') taskFallback.forget(args[0])
+    },
+  })
+  taskHub.add({ broadcastTaskEvent: (event) => server.broadcastTaskEvent(event) })
+  taskFallback = new TaskFallbackTracker({
+    onTaskCompleted: (event) => taskHub.broadcast(event),
+    isRootSession: (sessionId) => server.isRootSession(sessionId),
+    hasPendingQuestion: (sessionId) => server.hasPendingUserQuestionForSession(sessionId),
+  })
+  // Adapted from saya-ch/dsh-mobile (Apache-2.0): exact root turn/end completions.
+  const disposeTaskEvents = watchTaskCompletions(ctx, {
+    onTaskCompleted: (event) => {
+      taskFallback?.markAnnounced(event.sessionId)
+      taskHub.broadcast(event)
+    },
+    log: (event, fields) => log(`task ${event}`, fields),
   })
   for (const kind of SESSION_EVENTS) {
     ctx.on(`api-session/${kind}`, (...args) => { for (const fn of listeners) fn(kind, args) })
@@ -165,6 +190,8 @@ export function apply(ctx, config = {}) {
     }
     start().catch((error) => console.error('[pocket] start failed:', error))
     return () => {
+      disposeTaskEvents()
+      taskFallback?.dispose()
       void iroh?.close()
       void server.close()
     }

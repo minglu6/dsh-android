@@ -5,10 +5,12 @@ import android.os.Build
 import android.util.Base64
 import dev.dsh.pocket.protocol.*
 import kotlinx.coroutines.*
+import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.flow.*
 import kotlinx.serialization.json.JsonObject
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicLong
 
 enum class Dot { Online, Connecting, Offline, Unauthorized }
 
@@ -30,6 +32,33 @@ data class ChatState(
 )
 
 data class ModelChoice(val provider: String, val model: String, val name: String, val effort: String?)
+
+/** Minimal host task event; Android builds notification text locally. */
+data class TaskEvent(
+    val kind: Kind,
+    val sessionId: String,
+    val turn: Long = 0,
+    val questionId: String? = null,
+) {
+    enum class Kind { Done, Question }
+
+    companion object {
+        fun parse(m: JsonObject): TaskEvent? {
+            val sessionId = m["sessionId"].str() ?: return null
+            val kind = when (m["kind"].str()) {
+                "done" -> Kind.Done
+                "question" -> Kind.Question
+                else -> return null
+            }
+            return TaskEvent(
+                kind = kind,
+                sessionId = sessionId,
+                turn = m["turn"].long() ?: 0L,
+                questionId = m["questionId"].str(),
+            )
+        }
+    }
+}
 
 /** Process-wide connection + session state. All mutation happens on [main]. */
 @OptIn(ExperimentalCoroutinesApi::class)
@@ -86,6 +115,16 @@ object Pocket {
     private const val MAX_FOLLOW_ATTEMPTS = 3
     private const val FOLLOW_MAX_MESSAGES = 50
     private const val HISTORY_PAGE_SIZE = 100
+    /** Slow-link hello / dial budget (ref dsh-mobile SLOW_CONNECTIONS ~120s init wait). */
+    private const val CONNECT_TIMEOUT_MS = 120_000L
+    /** Current reconnect backoff; reset to 1s on Online or network restore. */
+    private val backoffMs = AtomicLong(1_000L)
+    /** Wakes a pending reconnect delay when the network becomes available. */
+    private val reconnectWake = MutableSharedFlow<Unit>(extraBufferCapacity = 1, onBufferOverflow = BufferOverflow.DROP_OLDEST)
+    /** Collapses NetworkCallback bursts (adapted from dsh-mobile RestoreAttemptGate). */
+    private val restoreGate = RestoreAttemptGate()
+    /** Minimal task events from the host for local notification text. */
+    val taskEvents = MutableSharedFlow<TaskEvent>(extraBufferCapacity = 16, onBufferOverflow = BufferOverflow.DROP_OLDEST)
 
     fun init(ctx: Context) {
         if (::prefs.isInitialized) return
@@ -118,7 +157,7 @@ object Pocket {
     }
 
     private suspend fun runConnection(profileId: String) {
-        var backoff = 1000L
+        backoffMs.set(1_000L)
         while (currentCoroutineContext().isActive) {
             val p = profiles.value.firstOrNull { it.id == profileId } ?: return
             if (p.needsRepair) {
@@ -135,10 +174,10 @@ object Pocket {
                     errors.tryEmit("地址无效，请重新配对（需要 host:port）")
                     return
                 }
-                val hello = c.connect(factories, Auth.Token(token))
+                val hello = c.connect(factories, Auth.Token(token), CONNECT_TIMEOUT_MS)
                 client = c; ops.value = hello.ops
                 setRoute(p.id, c.route ?: hello.route)
-                setDot(p.id, Dot.Online); backoff = 1000L
+                setDot(p.id, Dot.Online); backoffMs.set(1_000L)
                 coroutineScope {
                     launch {
                         while (isActive) {
@@ -163,7 +202,27 @@ object Pocket {
                 chat.value = chat.value?.copy(loaded = true)
             }
             setDot(p.id, Dot.Offline)
-            delay(backoff); backoff = (backoff * 2).coerceAtMost(30_000)
+            val wait = backoffMs.get()
+            backoffMs.updateAndGet { (it * 2).coerceAtMost(30_000) }
+            // NetworkCallback may wake this early after resetting backoff.
+            withTimeoutOrNull(wait) { reconnectWake.first() }
+        }
+    }
+
+    /**
+     * ConnectivityManager.NetworkCallback path: reset backoff and reconnect immediately
+     * when the network becomes available (adapted from dsh-mobile restore policy/gate).
+     */
+    fun onNetworkRestored() {
+        val id = active.value ?: return
+        val dot = status.value[id]
+        if (!ConnectionRestorePolicy.shouldReconnect(dot)) return
+        val generation = restoreGate.begin()
+        backoffMs.set(1_000L)
+        reconnectWake.tryEmit(Unit)
+        // Stuck Connecting: drop the half-open client so the loop retries at once.
+        if (dot == Dot.Connecting && restoreGate.isCurrent(generation)) {
+            client?.close()
         }
     }
 
@@ -226,6 +285,7 @@ object Pocket {
                 val id = m["questionId"].str()
                 userQuestions.value = userQuestions.value.filter { it.questionId != id }
             }
+            "task" -> TaskEvent.parse(m)?.let { taskEvents.tryEmit(it) }
             "terminal" -> if (m["subId"].str() == terminalSubId) applyTerminalFrame(m["frame"])
             "terminal.end", "terminal.error" -> if (m["subId"].str() == terminalSubId) {
                 m["error"]["message"].str()?.let { errors.tryEmit(it) }
