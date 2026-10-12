@@ -28,10 +28,16 @@ test('built client bundle is ModuleLoader lazy-CJS with static inject', () => {
   assert.doesNotMatch(src, /shell\.overlay/)
   assert.match(src, /手机连接/)
   assert.match(src, /Phone connection/)
+  assert.match(src, /连接器状态/)
+  assert.match(src, /Connector status/)
+  assert.doesNotMatch(src, /桥接状态/)
+  assert.doesNotMatch(src, /Bridge status/)
   assert.match(src, /撤销设备/)
   assert.match(src, /Revoke device/)
   assert.doesNotMatch(src, /确认撤销/)
   assert.doesNotMatch(src, /revokeConfirm/)
+  assert.match(src, /data-pocket-icon/)
+  assert.match(src, /installPocketNavIcon|pocket:nav-icon/)
 
   // Evaluate factory in a stub ModuleLoader to assert inject is a static array.
   const requires = {

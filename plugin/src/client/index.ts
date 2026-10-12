@@ -4,6 +4,11 @@
  * Entry: `settings.section` — Settings nav「手机连接」(official additive page slot).
  * Panel: embedded in that section (status / pairing / devices).
  *
+ * Nav icon: settings-general hardcodes glyphs by section id and defaults unknown
+ * ids to the gear; `settings.section` has no `icon` option and primitives has no
+ * phone glyph. `installPocketNavIcon` swaps our Medium-outline smartphone onto
+ * the pocket nav cell (same size/stroke as shipped icons).
+ *
  * Intentionally NOT registered:
  * - `sidebar.footer.action` — wrong surface for this product entry.
  * - Account/user menu row between 设置 and 意见反馈 — **no official list slot**
@@ -17,6 +22,7 @@
 import type { Context as ClientContext } from '@deepseek-ai/cordis'
 import { createPocketApi } from './api.ts'
 import { zh, en } from './locales.ts'
+import { installPocketNavIcon } from './nav-icon.ts'
 import { PocketSettings } from './PocketSettings.tsx'
 
 /** Must be a static array — cordis rejects function-form inject. */
@@ -26,6 +32,7 @@ const NS = 'pocket'
 
 export function apply(ctx: ClientContext): void {
   ctx.effect(() => ctx.locale.register(NS, { zh, en }), 'pocket:locale')
+  ctx.effect(() => installPocketNavIcon(), 'pocket:nav-icon')
   const t = ctx.locale.bind(NS)
   const api = createPocketApi()
 

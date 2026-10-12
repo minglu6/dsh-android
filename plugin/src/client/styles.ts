@@ -147,6 +147,21 @@ export const styles = {
       ? 'var(--dsw-alias-state-success-primary)'
       : 'var(--dsw-alias-border-l2)',
   }),
+  /** Connector running → green; stopped / failed → red. */
+  statusDot: (ok: boolean) => ({
+    flex: 'none',
+    width: 8,
+    height: 8,
+    borderRadius: '50%',
+    background: ok
+      ? 'var(--dsw-alias-state-success-primary)'
+      : 'var(--dsw-alias-state-error-primary)',
+  }),
+  statusLine: {
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: 8,
+  },
   input: {
     flex: 1,
     minWidth: 0,
