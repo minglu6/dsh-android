@@ -99,12 +99,10 @@ function DeviceItem({
 }
 
 export function ManagePanel({
-  t, api, onClose, embedded = false,
+  t, api,
 }: {
   t: TFn
   api: PocketApi
-  onClose?: () => void
-  embedded?: boolean
 }): JSX.Element {
   const [status, setStatus] = useState<PocketStatus | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -171,8 +169,8 @@ export function ManagePanel({
   // tick forces countdown re-render while open
   void tick
 
-  const body = (
-    <div style={embedded ? styles.settingsRoot : styles.body}>
+return (
+    <div style={styles.settingsRoot}>
       {loading && !status ? <div style={styles.muted}>{t('loading')}</div> : null}
       {error ? <div style={{ ...styles.muted, color: 'var(--dsw-alias-state-error-primary)' }}>{t('loadFailed')}: {error}</div> : null}
 
@@ -245,20 +243,6 @@ export function ManagePanel({
           ))
         )}
       </section>
-    </div>
-  )
-
-  if (embedded) return body
-
-  return (
-    <div style={styles.panel} role="dialog" aria-label={t('title')}>
-      <div style={styles.header}>
-        <h2 style={styles.title}>{t('title')}</h2>
-        {onClose ? (
-          <button type="button" style={styles.ghostBtn} onClick={onClose}>{t('close')}</button>
-        ) : null}
-      </div>
-      {body}
     </div>
   )
 }

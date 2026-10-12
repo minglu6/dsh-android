@@ -149,48 +149,6 @@ const en = {
 };
 
 //#endregion
-//#region src/client/panel-store.ts
-/** Tiny shared open-state for the overlay, shared by the footer trigger and overlay cell. */
-function createPanelStore(initial = false) {
-	let open = initial;
-	const listeners = /* @__PURE__ */ new Set();
-	const emit = () => {
-		for (const l of listeners) l();
-	};
-	return {
-		getSnapshot: () => open,
-		subscribe: (l) => {
-			listeners.add(l);
-			return () => {
-				listeners.delete(l);
-			};
-		},
-		open: () => {
-			if (!open) {
-				open = true;
-				emit();
-			}
-		},
-		close: () => {
-			if (open) {
-				open = false;
-				emit();
-			}
-		},
-		toggle: () => {
-			open = !open;
-			emit();
-		},
-		useOpen: () => (0, react.useSyncExternalStore)((l) => {
-			listeners.add(l);
-			return () => {
-				listeners.delete(l);
-			};
-		}, () => open, () => open)
-	};
-}
-
-//#endregion
 //#region node_modules/uqr/dist/index.mjs
 var QrCodeDataType = /* @__PURE__ */ ((QrCodeDataType2) => {
 	QrCodeDataType2[QrCodeDataType2["Border"] = -1] = "Border";
@@ -1083,76 +1041,13 @@ function qrSvg(text, size = 180) {
 
 //#endregion
 //#region src/client/styles.ts
-/** Inline styles using only `--dsw-alias-*` / elevation tokens (no literal theme colors). */
+/** Inline styles using only `--dsw-alias-*` tokens (no literal theme colors). */
 const styles = {
-	trigger: {
-		display: "flex",
-		alignItems: "center",
-		gap: 10,
-		width: "100%",
-		height: 40,
-		padding: "0 12px",
-		border: "none",
-		borderRadius: 8,
-		background: "transparent",
-		color: "var(--dsw-alias-label-primary)",
-		cursor: "pointer",
-		font: "inherit",
-		textAlign: "left"
-	},
-	triggerRail: {
-		display: "flex",
-		alignItems: "center",
-		justifyContent: "center",
-		width: 40,
-		height: 40,
-		margin: "0 auto",
-		border: "none",
-		borderRadius: 8,
-		background: "transparent",
-		color: "var(--dsw-alias-label-primary)",
-		cursor: "pointer"
-	},
-	mask: {
-		position: "fixed",
-		inset: 0,
-		zIndex: 80,
-		display: "flex",
-		alignItems: "center",
-		justifyContent: "center",
-		pointerEvents: "auto",
-		background: "rgba(0,0,0,0.45)"
-	},
-	panel: {
-		width: "min(440px, calc(100vw - 32px))",
-		maxHeight: "min(720px, calc(100vh - 48px))",
-		overflow: "auto",
-		borderRadius: 12,
-		border: "1px solid var(--dsw-alias-border-l2)",
-		background: "var(--dsw-alias-bg-base)",
-		color: "var(--dsw-alias-label-primary)",
-		boxShadow: "var(--dsw-elevation-overlay, 0 12px 40px rgba(0,0,0,0.25))",
-		display: "flex",
-		flexDirection: "column"
-	},
-	header: {
-		display: "flex",
-		alignItems: "center",
-		justifyContent: "space-between",
-		gap: 12,
-		padding: "16px 18px 12px",
-		borderBottom: "1px solid var(--dsw-alias-border-l3)"
-	},
-	title: {
-		margin: 0,
-		fontSize: 16,
-		fontWeight: 600
-	},
-	body: {
-		padding: "14px 18px 18px",
+	settingsRoot: {
 		display: "flex",
 		flexDirection: "column",
-		gap: 16
+		gap: 16,
+		padding: "4px 0 24px"
 	},
 	sectionLabel: {
 		fontSize: 12,
@@ -1248,12 +1143,6 @@ const styles = {
 		color: "var(--dsw-alias-label-primary)",
 		font: "inherit",
 		fontSize: 13
-	},
-	settingsRoot: {
-		display: "flex",
-		flexDirection: "column",
-		gap: 16,
-		padding: "4px 0 24px"
 	}
 };
 
@@ -1382,7 +1271,7 @@ function DeviceItem({ device, t, api, onChanged }) {
 		]
 	});
 }
-function ManagePanel({ t, api, onClose, embedded = false }) {
+function ManagePanel({ t, api }) {
 	const [status, setStatus] = (0, react.useState)(null);
 	const [error, setError] = (0, react.useState)(null);
 	const [loading, setLoading] = (0, react.useState)(true);
@@ -1439,8 +1328,8 @@ function ManagePanel({ t, api, onClose, embedded = false }) {
 	};
 	const pairing = status?.pairing;
 	const expires = pairing?.open ? Math.max(0, pairing.expiresInSec ?? 0) : 0;
-	const body = /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
-		style: embedded ? styles.settingsRoot : styles.body,
+	return /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
+		style: styles.settingsRoot,
 		children: [
 			loading && !status ? /* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
 				style: styles.muted,
@@ -1583,42 +1472,6 @@ function ManagePanel({ t, api, onClose, embedded = false }) {
 			}, d.id))] })
 		]
 	});
-	if (embedded) return body;
-	return /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
-		style: styles.panel,
-		role: "dialog",
-		"aria-label": t("title"),
-		children: [/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
-			style: styles.header,
-			children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)("h2", {
-				style: styles.title,
-				children: t("title")
-			}), onClose ? /* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
-				type: "button",
-				style: styles.ghostBtn,
-				onClick: onClose,
-				children: t("close")
-			}) : null]
-		}), body]
-	});
-}
-
-//#endregion
-//#region src/client/PocketOverlay.tsx
-function PocketOverlay({ t, api, panel }) {
-	if (!panel.useOpen()) return null;
-	return /* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
-		style: styles.mask,
-		onClick: (e) => {
-			if (e.target === e.currentTarget) panel.close();
-		},
-		role: "presentation",
-		children: /* @__PURE__ */ (0, react_jsx_runtime.jsx)(ManagePanel, {
-			t,
-			api,
-			onClose: () => panel.close()
-		})
-	});
 }
 
 //#endregion
@@ -1626,51 +1479,7 @@ function PocketOverlay({ t, api, panel }) {
 function PocketSettings({ t, api }) {
 	return /* @__PURE__ */ (0, react_jsx_runtime.jsx)(ManagePanel, {
 		t,
-		api,
-		embedded: true
-	});
-}
-
-//#endregion
-//#region src/client/PhoneIcon.tsx
-function PhoneIcon({ size = 18 }) {
-	return /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("svg", {
-		width: size,
-		height: size,
-		viewBox: "0 0 24 24",
-		fill: "none",
-		stroke: "currentColor",
-		strokeWidth: "1.8",
-		strokeLinecap: "round",
-		strokeLinejoin: "round",
-		"aria-hidden": "true",
-		children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)("rect", {
-			x: "7",
-			y: "2",
-			width: "10",
-			height: "20",
-			rx: "2"
-		}), /* @__PURE__ */ (0, react_jsx_runtime.jsx)("path", { d: "M11 18h2" })]
-	});
-}
-
-//#endregion
-//#region src/client/PocketTrigger.tsx
-function PocketTrigger({ wide, t, open }) {
-	if (!wide) return /* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
-		type: "button",
-		"aria-label": t("entry"),
-		title: t("entry"),
-		onClick: open,
-		style: styles.triggerRail,
-		children: /* @__PURE__ */ (0, react_jsx_runtime.jsx)(PhoneIcon, {})
-	});
-	return /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("button", {
-		type: "button",
-		"aria-label": t("entry"),
-		onClick: open,
-		style: styles.trigger,
-		children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)(PhoneIcon, {}), /* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", { children: t("entry") })]
+		api
 	});
 }
 
@@ -1686,24 +1495,6 @@ function apply(ctx) {
 	}), "pocket:locale");
 	const t = ctx.locale.bind(NS);
 	const api = createPocketApi();
-	const panel = createPanelStore(false);
-	ctx.slots.inject("sidebar.footer.action", () => ctx.slots.register({
-		name: "sidebar.footer.action",
-		id: "pocket",
-		order: 40,
-		locale: NS,
-		inject: () => ({ open: () => panel.open() })
-	}, PocketTrigger));
-	ctx.slots.inject("shell.overlay", () => ctx.slots.register({
-		name: "shell.overlay",
-		id: "pocket-manage",
-		order: 40,
-		locale: NS,
-		inject: () => ({
-			api,
-			panel
-		})
-	}, PocketOverlay));
 	ctx.slots.inject("settings.section", () => ctx.slots.register({
 		name: "settings.section",
 		id: "pocket",
