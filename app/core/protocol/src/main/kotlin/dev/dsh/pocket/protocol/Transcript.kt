@@ -16,13 +16,23 @@ sealed interface Item {
         val text: String,
         val images: Int = 0,
         val pending: Boolean = false,
-        /** Session-event time (ms), for trajectory swimlane. */
+        /** Session-event time (ms), for trajectory swimlane / message clock. */
         val at: Long? = null,
         /** Desktop `messageSource` JSON for the Trajectory 来源 tab. */
         val messageSourceJson: String? = null,
+        /** Durable event seq (for `sessions.fork` atSeq). */
+        val seq: Long? = null,
     ) : Item
     data class Reasoning(override val key: String, val text: String, val durationMs: Long?, val live: Boolean) : Item
-    data class Text(override val key: String, val text: String, val live: Boolean) : Item
+    data class Text(
+        override val key: String,
+        val text: String,
+        val live: Boolean,
+        /** Session-event time (ms), for message clock. */
+        val at: Long? = null,
+        /** Durable event seq (for `sessions.fork` atSeq). */
+        val seq: Long? = null,
+    ) : Item
     data class Tool(
         override val key: String, val callId: String, val name: String, val arguments: String,
         val status: ToolStatus, val result: String? = null, val error: String? = null,
@@ -86,6 +96,9 @@ sealed interface Item {
 
 /** Desktop compaction request status. */
 enum class CompactionStatus { Running, Ok, Error }
+
+/** One entry of the agent todo list (`todo/write` / projections.todos). */
+data class TodoItem(val content: String, val status: String)
 
 enum class ToolStatus { Running, AwaitingApproval, Ok, Error }
 
@@ -280,10 +293,13 @@ class TranscriptReducer {
     private var inputTokens = 0L
     private var cacheRead = 0L
     private var outputTokens = 0L
+    /** Latest whole-list todo snapshot (`todo/write` / projections.values.todos). */
+    private var todos: List<TodoItem> = emptyList()
 
     val usage get() = Usage(turns, steps, inputTokens, cacheRead, outputTokens)
     fun stepRecords(): List<StepRecord> = settledSteps.toList()
     fun requestHeaders(): List<RequestHeaderFact> = headerFacts.toList()
+    fun todos(): List<TodoItem> = todos
 
     fun items(): List<Item> = committed + (live?.items() ?: emptyList())
 
@@ -385,6 +401,7 @@ class TranscriptReducer {
         cursor = -1; firstSeq = -1; hasMore = false
         turns = 0; steps = 0; openTurn = null; openStep = null
         inputTokens = 0; cacheRead = 0; outputTokens = 0; running = false
+        todos = emptyList()
     }
 
     private fun readProjections(p: JsonElement?) {
@@ -395,6 +412,13 @@ class TranscriptReducer {
             val uncached = usage["uncachedInputTokens"].long() ?: 0
             val cr = usage["cacheReadTokens"].long() ?: 0
             cacheRead = cr; inputTokens = uncached + cr; outputTokens = usage["outputTokens"].long() ?: 0
+        }
+        values["todos"].arr()?.let { arr ->
+            todos = arr.mapNotNull { row ->
+                val content = row["content"].str()?.trim().orEmpty()
+                val status = row["status"].str() ?: return@mapNotNull null
+                if (content.isEmpty()) null else TodoItem(content, status)
+            }
         }
     }
 
@@ -415,7 +439,39 @@ class TranscriptReducer {
         val data = e["data"]
         when (e["type"].str()) {
             "turn/start" -> { turns++; running = true }
-            "turn/end" -> { running = false; live = null }
+            "turn/end" -> {
+                running = false; live = null
+                val reason = data["reason"]
+                when (reason["kind"].str()) {
+                    "error" -> {
+                        val err = reason["error"]
+                        val code = err["code"].str()
+                        val msg = when (code) {
+                            "AUTH_ERROR", "INVALID_API_KEY" -> "API 密钥无效"
+                            "QUOTA_EXCEEDED", "RATE_LIMIT" -> "当前请求的额度已用尽"
+                            else -> err["message"].str()?.takeIf { it.isNotBlank() } ?: "本轮运行失败"
+                        }
+                        committed += Item.Notice("te$seq", msg)
+                    }
+                    "aborted" -> {
+                        val hook = reason["reason"]
+                        if (hook["kind"].str() == "hook" && hook["reason"].str() == "deepseek-account/signed-out") {
+                            committed += Item.Notice("te$seq", "任务已因退出 DeepSeek 登录而停止。")
+                        }
+                    }
+                    "max-tokens", "max_tokens" -> {
+                        committed += Item.Notice("mt$seq", "已达到输出 token 上限")
+                        committed += Item.Notice("mth$seq", "回答被截断，已有输出保留在对话中。发送“继续”可让模型接着输出。")
+                    }
+                }
+            }
+            "todo/write" -> {
+                todos = data["todos"].arr().orEmpty().mapNotNull { row ->
+                    val content = row["content"].str()?.trim().orEmpty()
+                    val status = row["status"].str() ?: return@mapNotNull null
+                    if (content.isEmpty()) null else TodoItem(content, status)
+                }
+            }
             "step/start" -> {
                 val turn = data["turn"].long()?.toInt() ?: turns
                 val step = data["step"].long()?.toInt() ?: (steps + 1)
@@ -427,17 +483,30 @@ class TranscriptReducer {
             // Desktop ui-trajectory: index EpochHeader.tools + config for Request inspector.
             "request/header" -> indexRequestHeader(e, data, seq)
             "llm/retry" -> {
+                // Trajectory Request inspector: keep retry facts on the open step.
                 openRetry = data["retry"].long()?.toInt() ?: ((openRetry ?: 0) + 1)
-                openMaxRetries = data["maxRetries"].long()?.toInt() ?: openMaxRetries
+                openMaxRetries = data["maxRetries"].long()?.toInt()
+                    ?: data["maximum"].long()?.toInt()
+                    ?: openMaxRetries
                 openRetryDelayMs = data["delayMs"].long() ?: data["retryDelayMs"].long() ?: openRetryDelayMs
                 openLastAttemptError = data["error"]["message"].str()
                     ?: data["error"]["reason"].str()
                     ?: data["error"].str()
                     ?: openLastAttemptError
+                // Chat notice (desktop message.retry.*).
+                val retry = openRetry
+                val maximum = openMaxRetries
+                val seconds = openRetryDelayMs?.let { (it / 1000).coerceAtLeast(0) }
+                    ?: data["delaySeconds"].long()
+                val label = "等待重试模型请求"
+                val text = if (retry != null && maximum != null && seconds != null) {
+                    "$label（$retry/$maximum） · ${seconds}s"
+                } else label
+                committed += Item.Notice("n$seq", text)
             }
             "user/message" -> {
                 val msg = if (data["content"] != null) data else data["message"]
-                if (isTyped(msg)) upsertUser(msg, "u$seq", pending = false, at = e["time"].long())
+                if (isTyped(msg)) upsertUser(msg, "u$seq", pending = false, at = e["time"].long(), seq = seq)
                 else upsertContext(msg, "x$seq", at = e["time"].long())
             }
             "developer/message" -> {
@@ -447,7 +516,7 @@ class TranscriptReducer {
             "system/message" -> upsertSystemPrompt(e, data, seq)
             // A prompt enters the agent inbox (seq ~3) long before its user/message (written at step start).
             "agent/inbox/spliced" -> data["inserted"].arr().orEmpty().forEach { m ->
-                if (isTyped(m)) upsertUser(m, "q$seq.${m["source"]["rpcId"].str()}", pending = true, at = e["time"].long())
+                if (isTyped(m)) upsertUser(m, "q$seq.${m["source"]["rpcId"].str()}", pending = true, at = e["time"].long(), seq = seq)
             }
             "assistant/message" -> {
                 steps++
@@ -472,7 +541,7 @@ class TranscriptReducer {
                         }
                         "text" -> b["text"].str()?.takeIf { it.isNotBlank() }?.let {
                             replyParts += it
-                            committed += Item.Text("t$seq.$i", it, live = false)
+                            committed += Item.Text("t$seq.$i", it, live = false, at = messageTime, seq = seq)
                         }
                         "tool-call" -> {
                             val id = b["id"].str() ?: "c$seq.$i"
@@ -520,7 +589,9 @@ class TranscriptReducer {
                     lastAttemptError = openLastAttemptError,
                 )
                 openRetry = null; openMaxRetries = null; openRetryDelayMs = null; openLastAttemptError = null
-                // Desktop: interrupted assistant is `message` with isError — no invented 系统 Notice.
+                // Chat locale message.stopped = 已停止. Trajectory marks interrupted on StepRecord
+                // (assistant cell isError) — do not invent a 系统 Context/System row here.
+                if (interrupted) committed += Item.Notice("i$seq", "已停止")
             }
             "tool/call" -> upsertTool(
                 data["callId"].str() ?: "c$seq",
@@ -558,7 +629,7 @@ class TranscriptReducer {
                     committed[i] = if (outcome == "allowed-once") t.copy(status = ToolStatus.Running) else t.copy(status = ToolStatus.Error, error = outcome)
                 }
             }
-            // Desktop trajectory has no ledger row for llm/retry — do not invent a 系统 Notice.
+            "llm/retry-started" -> committed += Item.Notice("ns$seq", "正在重试模型请求")
         }
     }
 
@@ -610,7 +681,7 @@ class TranscriptReducer {
         )
     }
 
-    private fun upsertUser(msg: JsonElement?, key: String, pending: Boolean, at: Long? = null) {
+    private fun upsertUser(msg: JsonElement?, key: String, pending: Boolean, at: Long? = null, seq: Long? = null) {
         val blocks = msg["content"].arr().orEmpty()
         val text = blocks.filter { it["type"].str() == "text" }.joinToString("\n") { it["text"].str().orEmpty() }
         val images = blocks.count { it["type"].str() == "image" }
@@ -624,11 +695,12 @@ class TranscriptReducer {
                 text = text, images = images, pending = pending && old.pending,
                 at = at ?: old.at,
                 messageSourceJson = sourceJson ?: old.messageSourceJson,
+                seq = seq ?: old.seq,
             )
             if (rpc != null) userByRpc[rpc] = idx
         } else {
             if (rpc != null) userByRpc[rpc] = committed.size
-            committed += Item.User(key, text, images, pending, at = at, messageSourceJson = sourceJson)
+            committed += Item.User(key, text, images, pending, at = at, messageSourceJson = sourceJson, seq = seq)
         }
     }
 

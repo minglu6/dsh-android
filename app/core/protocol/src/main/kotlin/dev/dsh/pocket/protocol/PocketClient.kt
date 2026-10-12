@@ -164,6 +164,15 @@ class PocketClient(
     suspend fun modelCatalog(): ModelCatalog = ModelCatalog.parse(call("models.catalog"))
     suspend fun selectModel(sessionId: String, provider: String, model: String, effort: String?) =
         call("models.select", jsonOf("sessionId" to sessionId, "provider" to provider, "model" to model, "reasoningEffort" to effort))
+    suspend fun forkSession(sessionId: String, atSeq: Long? = null, allowMigration: Boolean = true): JsonElement =
+        call(
+            "sessions.fork",
+            jsonOf(
+                "sessionId" to sessionId,
+                "atSeq" to atSeq,
+                "allowMigration" to if (allowMigration) null else false,
+            ),
+        )
     suspend fun follow(sessionId: String, afterSeq: Long? = null, maxMessages: Int? = 50): String =
         call("follow", jsonOf("sessionId" to sessionId, "afterSeq" to afterSeq, "maxMessages" to maxMessages))["subId"].str() ?: ""
     /** Load older turns above the current snapshot window (desktop history.page). */

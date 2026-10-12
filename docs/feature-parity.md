@@ -11,11 +11,15 @@ Plugin surface: `dsh-plugin-pocket` WebSocket ops (+ optional Cordis injects).
 | Feature | Desktop behavior (0.2.1-alpha.2) | Decision | Status | Notes |
 |---|---|---|---|---|
 | 轨迹 tab | Session header Chat/Trajectory; swimlane + ledger + tabbed inspector (概述/参数/结果/Schema/计时) | implement | done | Source-driven port of `@deepseek-ai/dsh-client-ui-trajectory@0.2.1-alpha.2` (`d743267`): all 7 cell kinds, desktop locales, detail tabs, swimlane; see `docs/trajectory-parity.md`. |
-| Right-panel toggle | Opens right sidebar launcher | implement (partial) | done | Shown when `files.*` / `terminal.*` / `jobs.*` ops are present. |
+| Right-panel toggle | Opens right sidebar launcher | implement (partial) | done | Shown when `files.*` / `terminal.*` / `jobs.*` ops are present, or todos exist. |
 | → 工作区文件 | `workspaceFiles.list/read/stat/changes` | implement | done | Plugin `files.list` / `files.read`; `FilesSheet`. |
 | → 终端 | Host `terminalController` PTY create/follow/write/resize | implement | done | Plugin `terminal.*` + `TerminalSheet` (VT100 grid, Meslo Nerd Font, Tokyo Night; remote shell on the desktop). |
 | → 浏览器 | Client iframe / Electron webview only (no Host browse API) | hide | done | Local browser chrome — not a Host remote surface. |
 | → 后台任务 | `job-controller` list/observe/kill | implement | done | Plugin `jobs.list` / `jobs.kill`; `JobsSheet`. |
+| → 任务 (清单) | conversation TodoPanel (`todo/write` / projections.todos) | implement | done | `TodoSheet`; official `todo.*` strings. |
+| Message copy / clock / branch | IconActions + `sessions.fork` | implement | done | Desktop locale; plugin `sessions.fork`. |
+| Turn error / max-tokens / stopped | chat notices | implement | done | Official `message.*` failure/stopped/retry copy. |
+| Full inventory | — | — | see [desktop-parity.md](desktop-parity.md) | Gap matrix: feasible / needs-plugin / hide. |
 | Top-bar 智能体团队 | Experimental agent-team UI + subagent lineage via `parentSessionId` | implement | done | List parent + children from `sessions.list`; switch session. |
 | Top-bar Agent 预设 | Create-time preset; mid-session view | keep | done | Editable on new chat; view-only in session. |
 | Top-bar ⋯ 重命名 | `sessions.rename` | keep | done | |

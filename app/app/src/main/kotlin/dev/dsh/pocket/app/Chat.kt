@@ -35,7 +35,7 @@ import dev.dsh.pocket.protocol.Item
 import dev.dsh.pocket.protocol.ToolStatus
 import kotlinx.coroutines.delay
 
-enum class Sheet { None, Model, Permission, FullAccess, Preset, Plus, More, Panel, Team, Workspace, Goal, Feedback, Files, Jobs, Terminal }
+enum class Sheet { None, Model, Permission, FullAccess, Preset, Plus, More, Panel, Team, Workspace, Goal, Feedback, Files, Jobs, Terminal, Todo }
 
 @Composable
 fun ChatRoot(onMenu: () -> Unit) {
@@ -95,7 +95,7 @@ fun ChatRoot(onMenu: () -> Unit) {
     val summary = sessions.firstOrNull { it.sessionId == sid }
     val dot = status[active]
     val workspaces = sessions.mapNotNull { it.cwd }.distinct()
-    val showPanel = "files.list" in ops || "jobs.list" in ops || "terminal.create" in ops
+    val showPanel = "files.list" in ops || "jobs.list" in ops || "terminal.create" in ops || (chat?.todos?.isNotEmpty() == true)
 
     Column(Modifier.fillMaxSize().background(Color.White).systemBarsPadding().imePadding()) {
         TopBar(summary?.title ?: chat?.title, sid != null, dot, onMenu, onMore = { sheet = Sheet.More },
@@ -116,7 +116,12 @@ fun ChatRoot(onMenu: () -> Unit) {
             var tab by remember(st.sessionId) { mutableIntStateOf(0) }
             Tabs(tab) { tab = it }
             Box(Modifier.weight(1f).fillMaxWidth()) {
-                if (tab == 0) Transcript(st, onTool = { tool = it }) else TrajectoryView(st)
+                if (tab == 0) Transcript(
+                    st,
+                    onTool = { tool = it },
+                    canFork = "sessions.fork" in ops && !st.running,
+                    onFork = { seq -> Pocket.forkSession(seq) },
+                ) else TrajectoryView(st)
             }
             approvals.firstOrNull { it.sessionId == null || it.sessionId == st.sessionId }?.let { ApprovalCard(it) }
             Composer("发消息或创建任务, / 调用指令, @ 文件或对话", st.running, curPerm, curModel, enabled = dot == Dot.Online,
@@ -147,8 +152,13 @@ fun ChatRoot(onMenu: () -> Unit) {
         )
         Sheet.More -> MoreSheet(chat, onDismiss = { sheet = Sheet.None }, onFeedback = { sheet = Sheet.Feedback }, onExport = { doExport() })
         Sheet.Panel -> PanelSheet(
-            summary?.cwd, onDismiss = { sheet = Sheet.None },
-            onFiles = { sheet = Sheet.Files }, onTerminal = { sheet = Sheet.Terminal }, onJobs = { sheet = Sheet.Jobs },
+            summary?.cwd,
+            todos = chat?.todos.orEmpty(),
+            onDismiss = { sheet = Sheet.None },
+            onFiles = { sheet = Sheet.Files },
+            onTerminal = { sheet = Sheet.Terminal },
+            onJobs = { sheet = Sheet.Jobs },
+            onTodo = { sheet = Sheet.Todo },
         )
         Sheet.Team -> TeamSheet(onDismiss = { sheet = Sheet.None })
         Sheet.Workspace -> WorkspaceSheet(workspaces, draftCwd ?: workspaces.firstOrNull(), onDismiss = { sheet = Sheet.None }) { draftCwd = it }
@@ -157,6 +167,7 @@ fun ChatRoot(onMenu: () -> Unit) {
         Sheet.Files -> sid?.let { FilesSheet(it, onDismiss = { sheet = Sheet.None }) } ?: run { sheet = Sheet.None }
         Sheet.Jobs -> sid?.let { JobsSheet(it, onDismiss = { sheet = Sheet.None }) } ?: run { sheet = Sheet.None }
         Sheet.Terminal -> sid?.let { TerminalSheet(it, onDismiss = { sheet = Sheet.None }) } ?: run { sheet = Sheet.None }
+        Sheet.Todo -> TodoSheet(chat?.todos.orEmpty(), onDismiss = { sheet = Sheet.None })
         Sheet.None -> {}
     }
 }
@@ -247,7 +258,12 @@ fun EmptyState(icon: androidx.compose.ui.graphics.vector.ImageVector, title: Str
 }
 
 @Composable
-private fun Transcript(st: ChatState, onTool: (Item.Tool) -> Unit) {
+private fun Transcript(
+    st: ChatState,
+    onTool: (Item.Tool) -> Unit,
+    canFork: Boolean = false,
+    onFork: (Long?) -> Unit = {},
+) {
     val list = rememberLazyListState()
     // Prefs are SharedPreferences-backed; read each composition for mode switches.
     val livePolicy = presentationPolicyFor(Pocket.prefs.transcriptView, Pocket.prefs.collapseTiming)
@@ -256,6 +272,8 @@ private fun Transcript(st: ChatState, onTool: (Item.Tool) -> Unit) {
     }
     val n = rows.size
     val lastLen = (st.items.lastOrNull() as? Item.Text)?.text?.length ?: 0
+    // Desktop: branch only on the last message of a completed turn.
+    val branchKey = rows.lastOrNull { it is ChatRow.User || it is ChatRow.Answer }?.key
     LaunchedEffect(n, lastLen, st.running) { if (n > 0 && !st.loadingOlder) list.animateScrollToItem((n - 1).coerceAtLeast(0)) }
     // Scroll-to-top loads older history (no extra chrome — same LazyColumn).
     var historyArmed by remember(st.sessionId) { mutableStateOf(false) }
@@ -275,10 +293,39 @@ private fun Transcript(st: ChatState, onTool: (Item.Tool) -> Unit) {
     LazyColumn(state = list, modifier = Modifier.fillMaxSize(), contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         items(rows, key = { it.key }) { row ->
             when (row) {
-                is ChatRow.User -> Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-                    Text(row.item.text, style = MaterialTheme.typography.bodyLarge, color = T.Ink.copy(alpha = if (row.item.pending) 0.6f else 1f), modifier = Modifier.padding(start = 56.dp).clip(T.R20).background(T.Fill).padding(horizontal = 16.dp, vertical = 10.dp))
+                is ChatRow.User -> {
+                    val branchHere = canFork && row.key == branchKey
+                    Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.End) {
+                        Text(
+                            row.item.text,
+                            style = MaterialTheme.typography.bodyLarge,
+                            color = T.Ink.copy(alpha = if (row.item.pending) 0.6f else 1f),
+                            modifier = Modifier.padding(start = 56.dp).clip(T.R20).background(T.Fill).padding(horizontal = 16.dp, vertical = 10.dp),
+                        )
+                        MessageActions(
+                            text = row.item.text,
+                            timeMs = row.item.at,
+                            clock = MessageClock.Start,
+                            branchEnabled = branchHere,
+                            branchUnavailable = canFork && !branchHere,
+                            onBranch = if (canFork) ({ onFork(row.item.seq) }) else null,
+                        )
+                    }
                 }
-                is ChatRow.Answer -> MarkdownView(row.item.text, streaming = row.item.live)
+                is ChatRow.Answer -> {
+                    val branchHere = canFork && row.key == branchKey && !row.item.live
+                    Column(Modifier.fillMaxWidth()) {
+                        MarkdownView(row.item.text, streaming = row.item.live)
+                        if (!row.item.live) MessageActions(
+                            text = row.item.text,
+                            timeMs = row.item.at,
+                            clock = MessageClock.End,
+                            branchEnabled = branchHere,
+                            branchUnavailable = canFork && !branchHere,
+                            onBranch = if (canFork) ({ onFork(row.item.seq) }) else null,
+                        )
+                    }
+                }
                 is ChatRow.Notice -> Text(row.item.text, fontSize = 13.sp, color = T.Text3)
                 is ChatRow.Tool -> ToolCard(row.item) { onTool(row.item) }
                 is ChatRow.Reasoning -> ReasoningRow(row.item)
@@ -286,6 +333,76 @@ private fun Transcript(st: ChatState, onTool: (Item.Tool) -> Unit) {
             }
         }
         if (st.running) item(key = "status") { RunningLine(st.runStartedAt) }
+    }
+}
+
+private enum class MessageClock { Start, End }
+
+/** Desktop MessageIconActions: clock + copy + optional branch. */
+@Composable
+private fun MessageActions(
+    text: String,
+    timeMs: Long?,
+    clock: MessageClock,
+    branchEnabled: Boolean,
+    branchUnavailable: Boolean,
+    onBranch: (() -> Unit)?,
+) {
+    val clip = androidx.compose.ui.platform.LocalClipboardManager.current
+    var copied by remember { mutableStateOf(false) }
+    LaunchedEffect(copied) {
+        if (copied) {
+            kotlinx.coroutines.delay(1000)
+            copied = false
+        }
+    }
+    Row(
+        Modifier.padding(top = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = if (clock == MessageClock.Start) Arrangement.End else Arrangement.Start,
+    ) {
+        if (clock == MessageClock.Start && timeMs != null) {
+            Text(formatMessageClock(timeMs), fontSize = 12.sp, color = T.Caption)
+            Spacer(Modifier.width(8.dp))
+        }
+        Text(
+            if (copied) "复制成功" else "复制",
+            fontSize = 12.sp,
+            color = T.Text3,
+            modifier = Modifier
+                .clip(T.R8)
+                .clickable(enabled = !copied) {
+                    clip.setText(androidx.compose.ui.text.AnnotatedString(text))
+                    copied = true
+                }
+                .padding(horizontal = 8.dp, vertical = 4.dp)
+                .testTag("messageCopy"),
+        )
+        if (onBranch != null) {
+            Spacer(Modifier.width(4.dp))
+            val label = when {
+                branchUnavailable -> "仅可从已完成轮次的最后一条消息分支"
+                else -> "在新对话中分支"
+            }
+            Text(
+                "在新对话中分支",
+                fontSize = 12.sp,
+                color = if (branchEnabled) T.Text3 else T.Caption,
+                modifier = Modifier
+                    .clip(T.R8)
+                    .then(
+                        if (branchEnabled) Modifier.clickable(onClick = onBranch)
+                        else Modifier,
+                    )
+                    .padding(horizontal = 8.dp, vertical = 4.dp)
+                    .semantics { contentDescription = label }
+                    .testTag("messageBranch"),
+            )
+        }
+        if (clock == MessageClock.End && timeMs != null) {
+            Spacer(Modifier.width(8.dp))
+            Text(formatMessageClock(timeMs), fontSize = 12.sp, color = T.Caption)
+        }
     }
 }
 

@@ -236,6 +236,18 @@ fun MoreSheet(chat: ChatState?, onDismiss: () -> Unit, onFeedback: () -> Unit, o
         // feedback when that path is available. Need a session → disable (never hide into an empty sheet).
         OptionRow("下载 Session 日志", icon = D.download, enabled = export && inChat) { onExport(); onDismiss() }
         if (cmds) OptionRow("反馈", icon = D.send, enabled = inChat) { onFeedback() }
+        val fork = "sessions.fork" in Pocket.ops.value
+        if (fork && chat != null) {
+            OptionRow(
+                "在新对话中分支",
+                "从当前会话前缀创建分支",
+                D.newChat,
+                enabled = !chat.running,
+            ) {
+                Pocket.forkSession(null)
+                onDismiss()
+            }
+        }
     }
 }
 
@@ -275,10 +287,19 @@ fun FeedbackSheet(onDismiss: () -> Unit) {
 @Composable private fun Stat(k: String, v: String) = Column { Text(v, fontSize = 17.sp, fontWeight = FontWeight.Medium); Text(k, fontSize = 12.sp, color = T.Text3) }
 
 @Composable
-fun PanelSheet(cwd: String?, onDismiss: () -> Unit, onFiles: () -> Unit, onTerminal: () -> Unit, onJobs: () -> Unit) {
+fun PanelSheet(
+    cwd: String?,
+    todos: List<dev.dsh.pocket.protocol.TodoItem> = emptyList(),
+    onDismiss: () -> Unit,
+    onFiles: () -> Unit,
+    onTerminal: () -> Unit,
+    onJobs: () -> Unit,
+    onTodo: () -> Unit = {},
+) {
     val files = "files.list" in Pocket.ops.value
     val terminal = "terminal.create" in Pocket.ops.value
     val jobs = "jobs.list" in Pocket.ops.value
+    val hasTodo = todos.isNotEmpty()
     PocketSheet(onDismiss) {
         SheetTitle("右侧边栏")
         cwd?.let { Text(it, style = T.Mono.copy(color = T.Text3), modifier = Modifier.padding(horizontal = 22.dp, vertical = 4.dp)) }
@@ -287,7 +308,57 @@ fun PanelSheet(cwd: String?, onDismiss: () -> Unit, onFiles: () -> Unit, onTermi
         if (files) OptionRow("工作区文件", "浏览会话工作区的文件", D.folderOpen) { onFiles() }
         if (terminal) OptionRow("终端", "在会话工作区运行命令", D.code) { onTerminal() }
         if (jobs) OptionRow("后台任务", "查看后台任务", D.clock) { onJobs() }
-        if (!files && !terminal && !jobs) Text("当前连接未提供面板", fontSize = 13.sp, color = T.Caption, modifier = Modifier.padding(horizontal = 22.dp, vertical = 10.dp))
+        // Desktop conversation.todo.title = 任务
+        if (hasTodo) {
+            val done = todos.count { it.status == "completed" }
+            OptionRow("任务", "$done/${todos.size} 已完成", D.plan) { onTodo() }
+        }
+        if (!files && !terminal && !jobs && !hasTodo) {
+            Text("当前连接未提供面板", fontSize = 13.sp, color = T.Caption, modifier = Modifier.padding(horizontal = 22.dp, vertical = 10.dp))
+        }
+    }
+}
+
+/** Desktop TodoPanel — locale `todo.title` / status / progress. */
+@Composable
+fun TodoSheet(todos: List<dev.dsh.pocket.protocol.TodoItem>, onDismiss: () -> Unit) {
+    PocketSheet(onDismiss) {
+        SheetTitle("任务")
+        if (todos.isEmpty()) {
+            Text("任务清单为空", fontSize = 14.sp, color = T.Text3, modifier = Modifier.padding(22.dp))
+            return@PocketSheet
+        }
+        val done = todos.count { it.status == "completed" }
+        val active = todos.count { it.status == "in_progress" }
+        val pending = todos.size - done - active
+        val progress = buildList {
+            if (done > 0) add("$done 已完成")
+            if (active > 0) add("$active 进行中")
+            if (pending > 0) add("$pending 待处理")
+        }.joinToString(" · ")
+        Text(progress, fontSize = 13.sp, color = T.Text3, modifier = Modifier.padding(horizontal = 22.dp, vertical = 4.dp))
+        todos.forEach { item ->
+            Row(
+                Modifier.padding(horizontal = 22.dp, vertical = 10.dp).fillMaxWidth(),
+                verticalAlignment = Alignment.Top,
+            ) {
+                val mark = when (item.status) {
+                    "completed" -> "✓"
+                    "in_progress" -> "●"
+                    else -> "○"
+                }
+                val color = when (item.status) {
+                    "completed" -> T.Ok
+                    "in_progress" -> T.Accent
+                    else -> T.Caption
+                }
+                Text(mark, color = color, fontSize = 14.sp, modifier = Modifier.padding(top = 2.dp, end = 10.dp))
+                Column(Modifier.weight(1f)) {
+                    Text(item.content, fontSize = 15.sp, color = T.Ink, lineHeight = 22.sp)
+                    Text(todoStatusLabel(item.status), fontSize = 12.sp, color = T.Text3, modifier = Modifier.padding(top = 2.dp))
+                }
+            }
+        }
     }
 }
 

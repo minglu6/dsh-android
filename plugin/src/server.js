@@ -179,6 +179,20 @@ export function createOps(sc, { timeZone } = {}) {
       need(str(a.sessionId) && str(a.title), 'sessionId and title required')
       return sc.rename({ sessionId: a.sessionId, title: a.title })
     },
+    /** Fork at an exact event boundary (omit atSeq → latest completed-turn prefix). */
+    'sessions.fork': (a) => {
+      need(str(a.sessionId), 'sessionId required')
+      const atSeq = a.atSeq
+      need(
+        atSeq === undefined || atSeq === null || Number.isSafeInteger(atSeq),
+        'atSeq must be a safe integer when provided',
+      )
+      return sc.fork({
+        sessionId: a.sessionId,
+        ...(Number.isSafeInteger(atSeq) ? { atSeq } : {}),
+        ...(a.allowMigration === false ? { allowMigration: false } : {}),
+      })
+    },
     prompt: (a, signal) => {
       need(str(a.sessionId), 'sessionId required')
       need(a.mode === 'queue' || a.mode === 'steer', 'mode must be queue or steer')
