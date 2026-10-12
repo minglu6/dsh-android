@@ -283,6 +283,8 @@ private fun Transcript(st: ChatState, onTool: (Item.Tool) -> Unit) {
                 is Item.Text -> Markdownish(item.text)
                 is Item.Tool -> ToolCard(item) { onTool(item) }
                 is Item.Notice -> Text(item.text, fontSize = 13.sp, color = T.Text3)
+                // Trajectory-only ledger kinds (desktop 系统 / 上下文); keep chat transcript clean.
+                is Item.Context, is Item.System -> Unit
             }
         }
         if (st.running) item(key = "status") { RunningLine(st.runStartedAt) }
