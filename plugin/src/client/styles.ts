@@ -68,8 +68,8 @@ export const styles = {
 
   /**
    * Mirror of primitives StateDot solid appearance:
-   * 10px layout slot, 6px currentColor core via inset 20% (soft visual weight),
-   * plus a quiet halo ring (same trick ConnectionIndicator / Tag use with color-mix).
+   * 10px layout slot, 6px currentColor core via inset 20% (soft visual weight).
+   * No extra halo — official StateDot relies on the smaller core alone.
    */
   stateDotSlot: (state: 'done' | 'error' | 'idle') => ({
     position: 'relative' as const,
@@ -78,14 +78,6 @@ export const styles = {
     alignSelf: 'center',
     width: 10,
     height: 10,
-    borderRadius: '50%',
-    boxShadow: `0 0 0 3px color-mix(in srgb, ${
-      state === 'done'
-        ? 'var(--dsw-alias-state-success-primary)'
-        : state === 'error'
-          ? 'var(--dsw-alias-state-error-primary)'
-          : 'var(--dsw-alias-state-idle-primary, var(--dsw-alias-label-tertiary))'
-    } 14%, transparent)`,
     color:
       state === 'done'
         ? 'var(--dsw-alias-state-success-primary)'
