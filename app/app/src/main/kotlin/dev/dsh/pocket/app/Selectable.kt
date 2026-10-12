@@ -27,3 +27,32 @@ fun NonSelectable(content: @Composable () -> Unit) {
         content()
     }
 }
+
+/**
+ * Phone soft-wrap helper: insert zero-width spaces so long paths / URLs / tokens
+ * can break mid-string. Prefer removing [horizontalScroll] so Text gets a finite
+ * max width — horizontalScroll alone is what forced single-line overflow.
+ */
+fun String.breakAnywhere(every: Int = 10): String = buildString(length + length / every + 8) {
+    var run = 0
+    for (c in this@breakAnywhere) {
+        append(c)
+        when {
+            c.isWhitespace() || c == '\u200B' -> run = 0
+            c == '/' || c == '\\' || c == '_' || c == '-' || c == '.' ||
+                c == ',' || c == ';' || c == ':' || c == '?' || c == '&' ||
+                c == '=' || c == '#' || c == '@' || c == '%' || c == '+' ||
+                c == '(' || c == ')' || c == '[' || c == ']' || c == '{' || c == '}' -> {
+                append('\u200B')
+                run = 0
+            }
+            else -> {
+                run++
+                if (run >= every) {
+                    append('\u200B')
+                    run = 0
+                }
+            }
+        }
+    }
+}

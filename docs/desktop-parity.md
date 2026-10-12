@@ -373,3 +373,22 @@ Every **output** text surface supports Compose `SelectionContainer` (helper `Sel
 | Terminal (Canvas grid) | Long-press → selectable plain-text overlay (`AnsiTerminal.plainText()`); tap exits |
 
 Composer input, buttons, and icon action chrome stay non-output (no forced selection).
+
+---
+
+## 14. Phone soft-wrap (intentional desktop deviation)
+
+Desktop often keeps mono payloads on one horizontally scrolling line. On phone, **soft-wrap is the default** so paths / URLs / long tokens stay readable without sideways scrolling.
+
+| Surface | Behaviour |
+|---|---|
+| Trajectory detail tabs (概述/参数/结果/Schema/计时/…) | `TrajPayload` / code / schema: no `horizontalScroll`; `breakAnywhere()` + `softWrap` |
+| Request inspector options JSON | same |
+| Chat fenced code | wrap **ON** by default; toolbar toggle still enables horizontal scroll |
+| Tool / file `CodeBox` | soft-wrap |
+| Thinking / notices / approval command lines | soft-wrap |
+| Markdown GFM tables | keep horizontal scroll (multi-column layout) |
+| Terminal VT grid | **unchanged** — wrapping would break cursor apps; long-press selectable overlay remains |
+| Detail sheet tab row | `ScrollableTabRow(edgePadding = 22.dp)` so first/last labels are not clipped |
+
+`String.breakAnywhere()` inserts zero-width spaces after path separators and every N unbroken characters so Compose can wrap mid-token while selection stays available.
