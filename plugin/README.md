@@ -63,6 +63,10 @@ dsh 发起 `approval/request` 时，如果有已登录的设备在线，插件�
 | `models.select` | 切换模型 |
 | `follow` | 订阅会话，返回 `subId` |
 | `unfollow` | 取消订阅 |
+| `permissions.catalog` / `permissions.get` / `permissions.set` | 访问模式（`read-only` / `workspace-write` / `danger-full-access`），走 dsh 的 `permissionPresets` 服务 |
+| `presets.list` | Agent 预设列表（standard / ptc / minimal / cordis） |
+
+`permissions.*` 和 `presets.list` 依赖可选服务，服务不在时不出现在 hello 的 `ops` 里。
 
 - 服务端推送：
 

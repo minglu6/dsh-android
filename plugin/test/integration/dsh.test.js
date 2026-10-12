@@ -53,3 +53,22 @@ test('real dsh: hello, list, create, rename, follow, models, select, cancel', { 
   assert.ok(events.some((e) => e.ev === 'session' && e.kind === 'added'), 'session added event')
   ws.close()
 })
+
+test('real dsh: permissions + presets ops', { skip: !hasDsh, timeout: 240_000 }, async (t) => {
+  const { bootDsh, pocketClient, PLUGIN_DIR } = await import('./helpers.js')
+  const port = 19000 + Math.floor(Math.random() * 500)
+  await bootDsh(t, { plugins: [PLUGIN_DIR], patch: `- id: dsh-pocket\n  config:\n    port: ${port}\n    token: ${TOKEN}\n` })
+  const c = await pocketClient(`ws://127.0.0.1:${port}`)
+  const h = await c.ok('hello', { token: TOKEN })
+  assert.ok(h.ops.includes('permissions.set') && h.ops.includes('presets.list'), h.ops.join())
+  const cat = await c.ok('permissions.catalog')
+  assert.ok(cat.options.length > 0)
+  const { sessionId } = await c.ok('sessions.create', {})
+  const other = cat.options.map((o) => o.value ?? o.name ?? o.id).find((v) => v && v !== cat.defaultPreset) ?? cat.defaultPreset
+  const set = await c.ok('permissions.set', { sessionId, name: other })
+  assert.equal(set.current, other)
+  assert.equal((await c.ok('permissions.get', { sessionId })).current, other)
+  const roster = await c.ok('presets.list')
+  assert.ok(roster, JSON.stringify(roster))
+  c.close()
+})
