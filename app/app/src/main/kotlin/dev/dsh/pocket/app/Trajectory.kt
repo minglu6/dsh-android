@@ -13,8 +13,6 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.outlined.Search
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -688,7 +686,7 @@ private fun TrajectoryToolbar(
                 .padding(horizontal = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Icon(Icons.Outlined.Search, contentDescription = TrajL.toolbarSearch, tint = T.Caption, modifier = Modifier.size(14.dp))
+            Icon(D.search, contentDescription = TrajL.toolbarSearch, tint = T.Caption, modifier = Modifier.size(14.dp))
             Spacer(Modifier.width(4.dp))
             Box(Modifier.weight(1f)) {
                 if (searchQuery.isEmpty()) {
@@ -884,32 +882,41 @@ private fun TrajRowView(
         }
         KindBadge(row.kind)
         Spacer(Modifier.width(6.dp))
-        Row(Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically) {
-            Text(
-                if (row.toolCallOnly) TrajL.recordToolCallOnly else row.title,
-                style = T.Mono.copy(
-                    fontSize = 13.sp,
-                    color = if (row.toolCallOnly) T.Caption else T.Ink,
-                ),
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.weight(1f, fill = false),
-            )
-            row.resultPreview?.let { preview ->
-                Text(" → ", style = T.Mono.copy(fontSize = 12.sp, color = T.Caption))
-                Text(
-                    preview,
-                    style = T.Mono.copy(fontSize = 12.sp, color = if (row.isError) T.Err else T.Text2),
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.weight(1f, fill = false),
-                )
+        // Long-press selects title/preview/metrics; short tap still opens the detail sheet.
+        Box(Modifier.weight(1f)) {
+            SelectableOutput {
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        if (row.toolCallOnly) TrajL.recordToolCallOnly else row.title,
+                        style = T.Mono.copy(
+                            fontSize = 13.sp,
+                            color = if (row.toolCallOnly) T.Caption else T.Ink,
+                        ),
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f, fill = false),
+                    )
+                    row.resultPreview?.let { preview ->
+                        Text(" → ", style = T.Mono.copy(fontSize = 12.sp, color = T.Caption))
+                        Text(
+                            preview,
+                            style = T.Mono.copy(fontSize = 12.sp, color = if (row.isError) T.Err else T.Text2),
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(1f, fill = false),
+                        )
+                    }
+                }
             }
         }
-        Text(row.input, style = monoCap(), modifier = Modifier.width(44.dp), maxLines = 1, overflow = TextOverflow.Ellipsis)
-        Text(row.output, style = monoCap(), modifier = Modifier.width(40.dp), maxLines = 1, overflow = TextOverflow.Ellipsis)
-        Text(row.think, style = monoCap(), modifier = Modifier.width(40.dp), maxLines = 1, overflow = TextOverflow.Ellipsis)
-        Text(row.time, style = monoCap(), modifier = Modifier.width(40.dp), maxLines = 1, overflow = TextOverflow.Ellipsis)
+        SelectableOutput {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(row.input, style = monoCap(), modifier = Modifier.width(44.dp), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text(row.output, style = monoCap(), modifier = Modifier.width(40.dp), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text(row.think, style = monoCap(), modifier = Modifier.width(40.dp), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text(row.time, style = monoCap(), modifier = Modifier.width(40.dp), maxLines = 1, overflow = TextOverflow.Ellipsis)
+            }
+        }
     }
     HorizontalDivider(color = T.Fill.copy(alpha = 0.8f))
 }

@@ -32,6 +32,15 @@ object L {
     fun subagents() = if (en) "Subagents" else "子智能体"
     fun conversations() = if (en) "Conversations" else "对话"
 
+    // Common / message actions (desktop locale)
+    fun copy() = if (en) "Copy" else "复制"
+    fun copied() = if (en) "Copied" else "复制成功"
+    fun branch() = if (en) "Branch into a new conversation" else "在新对话中分支"
+    fun branchUnavailable() = if (en) "Available only on the last message of a completed turn" else "仅可从已完成轮次的最后一条消息分支"
+    fun wrapLines() = if (en) "Wrap lines" else "自动换行"
+    fun unwrapLines() = if (en) "Do not wrap lines" else "取消自动换行"
+    fun menu() = if (en) "Menu" else "菜单"
+
     // Feedback
     fun like() = if (en) "Good response" else "好的回答"
     fun undoRating() = if (en) "Remove rating" else "取消标记"

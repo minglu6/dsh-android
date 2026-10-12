@@ -205,17 +205,21 @@ private fun RequestOverview(
 @Composable
 private fun RequestOptions(configJson: String?) {
     if (configJson.isNullOrBlank()) {
-        Text(TrajL.optionsNotRecorded, fontSize = 14.sp, color = T.Text3, modifier = Modifier.padding(horizontal = 22.dp, vertical = 8.dp))
+        SelectableOutput {
+            Text(TrajL.optionsNotRecorded, fontSize = 14.sp, color = T.Text3, modifier = Modifier.padding(horizontal = 22.dp, vertical = 8.dp))
+        }
         return
     }
-    Column(Modifier.padding(horizontal = 22.dp)) {
-        Text(TrajL.optionsJson, fontSize = 12.sp, color = T.Text3, modifier = Modifier.padding(bottom = 6.dp))
-        Text(
-            prettyJson(configJson),
-            style = T.Mono.copy(lineHeight = 20.sp),
-            modifier = Modifier.fillMaxWidth().clip(T.R12).background(T.Fill2)
-                .horizontalScroll(rememberScrollState()).padding(14.dp),
-        )
+    SelectableOutput {
+        Column(Modifier.padding(horizontal = 22.dp)) {
+            Text(TrajL.optionsJson, fontSize = 12.sp, color = T.Text3, modifier = Modifier.padding(bottom = 6.dp))
+            Text(
+                prettyJson(configJson),
+                style = T.Mono.copy(lineHeight = 20.sp),
+                modifier = Modifier.fillMaxWidth().clip(T.R12).background(T.Fill2)
+                    .horizontalScroll(rememberScrollState()).padding(14.dp),
+            )
+        }
     }
 }
 
@@ -300,14 +304,16 @@ private fun OverviewLine(
     compact: Boolean = false,
     onClick: (() -> Unit)? = null,
 ) {
-    Row(
-        Modifier
-            .fillMaxWidth()
-            .padding(vertical = if (compact) 2.dp else 4.dp)
-            .then(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier),
-        horizontalArrangement = Arrangement.SpaceBetween,
-    ) {
-        Text(label, fontSize = 13.sp, color = T.Text3, modifier = Modifier.padding(end = 12.dp))
-        Text(value, fontSize = 13.sp, color = valueColor, modifier = Modifier.weight(1f, fill = false))
+    SelectableOutput {
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .padding(vertical = if (compact) 2.dp else 4.dp)
+                .then(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier),
+            horizontalArrangement = Arrangement.SpaceBetween,
+        ) {
+            Text(label, fontSize = 13.sp, color = T.Text3, modifier = Modifier.padding(end = 12.dp))
+            Text(value, fontSize = 13.sp, color = valueColor, modifier = Modifier.weight(1f, fill = false))
+        }
     }
 }

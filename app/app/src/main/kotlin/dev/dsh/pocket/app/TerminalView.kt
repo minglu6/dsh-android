@@ -3,6 +3,7 @@ package dev.dsh.pocket.app
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
@@ -10,14 +11,18 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
@@ -27,6 +32,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.drawscope.DrawScope
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalFontFamilyResolver
@@ -79,6 +85,8 @@ fun TerminalView(
     val focus = remember { FocusRequester() }
     var ime by remember { mutableStateOf("") }
     var size by remember { mutableStateOf(IntSize.Zero) }
+    // Canvas cannot select; long-press opens a Selectable plain-text overlay.
+    var selecting by remember { mutableStateOf(false) }
 
     val cellW = remember(measurer, resolver) {
         measurer.measure("M", TermStyle, density = density, fontFamilyResolver = resolver).size.width.toFloat().coerceAtLeast(1f)
@@ -103,8 +111,14 @@ fun TerminalView(
             .clip(T.R12)
             .background(TokyoNight.Bg)
             .onSizeChanged { size = it }
-            .clickable(indication = null, interactionSource = remember { MutableInteractionSource() }) {
-                focus.requestFocus()
+            .pointerInput(selecting) {
+                detectTapGestures(
+                    onTap = {
+                        if (selecting) selecting = false
+                        else focus.requestFocus()
+                    },
+                    onLongPress = { selecting = true },
+                )
             },
     ) {
         // Hidden IME capture — never shown; PTY provides echo.
@@ -134,9 +148,26 @@ fun TerminalView(
             ),
         )
 
-        Canvas(Modifier.fillMaxSize().padding(12.dp)) {
+        if (selecting) {
             @Suppress("UNUSED_EXPRESSION") revision
-            drawTerminal(terminal, measurer, cellW, cellH)
+            SelectableOutput(Modifier.fillMaxSize().padding(12.dp).verticalScroll(rememberScrollState())) {
+                Text(
+                    terminal.plainText().ifBlank { " " },
+                    style = TermStyle,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
+            Text(
+                "轻触退出选择",
+                color = TokyoNight.Ansi[8],
+                fontSize = 11.sp,
+                modifier = Modifier.align(Alignment.BottomEnd).padding(8.dp),
+            )
+        } else {
+            Canvas(Modifier.fillMaxSize().padding(12.dp)) {
+                @Suppress("UNUSED_EXPRESSION") revision
+                drawTerminal(terminal, measurer, cellW, cellH)
+            }
         }
     }
 }

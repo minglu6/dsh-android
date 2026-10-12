@@ -111,9 +111,11 @@ Phone: Plus sheet + live `/` CommandPopupSheet + `@` MentionPopupSheet (`referen
 
 Retry is **display** of Host `llm/retry` chains (`message.retry.*`), not a user button.
 
+**Icon chrome (desktop MessageIconActions / MessageFeedbackActions):** Android uses the same ui-primitives Regular SVG paths as vector drawables (`dsh_copy` / `dsh_check` / `dsh_like` / `dsh_like_fill` / `dsh_dislike` / `dsh_dislike_fill` / `dsh_branch`). Locale strings are **contentDescription + long-press tooltip only** — no visible text buttons. Order: copy → like/dislike (assistant) → branch; user clock `start`, assistant clock `end`; 28dp hit targets, 8dp gap, tertiary caption tint (`T.Caption`). Timestamp `maxLines=1` / `softWrap=false` so it never wraps.
+
 ### 1.9 Timestamps
 
-IconActions clock beside copy/branch (`formatMessageClock` + `clock.*`). Shown on hover/focus on desktop; on phone show on long-press / always-on action row.
+IconActions clock beside copy/branch (`formatMessageClock` + `clock.*`). Shown on hover/focus on desktop; on phone always-on action row (no hover).
 
 ### 1.10 Error & abort states
 
@@ -269,10 +271,10 @@ Appearance values from `ui-theme` locales. Performance: `settings.performance.{c
 | Non-image file attach | **done** (`attachments.upload` + `prompt` files) | was needs-plugin; folders still hide |
 | `/` command popup | **done** (CommandPopupSheet when composer starts with `/`) | was feasible |
 | `@` file/session mentions | **done** (`references.files` / `references.sessions`) | was needs-plugin |
-| Copy on messages | **done** (this PR) | feasible |
-| Branch / fork from message | **done** (`sessions.fork` + actions) | was needs-plugin |
-| Like / dislike | **done** (`feedback.get` / `feedback.set` + category sheet) | was needs-plugin |
-| Message clock | **done** (this PR) | feasible |
+| Copy on messages | **done** (icon-only; was text) | feasible |
+| Branch / fork from message | **done** (icon-only + `sessions.fork`) | was needs-plugin |
+| Like / dislike | **done** (icon-only + feedback sheet) | was needs-plugin |
+| Message clock | **done** (nowrap beside icons) | feasible |
 | Retry / turn-error / maxTokens rows | **done** (this PR) | feasible |
 | Stopped / interrupted copy | **done** (`message.stopped` 已停止) | feasible |
 | Deliverable / changed-file cards | **done** (parse `deliverables/presented` / `workspace/changes`) | Changes count enrichment still Host-summary limited |
@@ -326,3 +328,48 @@ Appearance values from `ui-theme` locales. Performance: `settings.performance.{c
 Full zh/en dictionaries were extracted from harness @ `d743267` into agent workspace `/tmp/dsh-locales-all.json` (≈50 namespaces, ≈2276 keys). Primary namespaces for phone work: `chat`, `conversation`, `ui_workspace`, `ui_commands`, `ui_message_feedback`, `ui_sidebar_*`, `job`, `deliverables`, `ui_approval`, `ui_user_questions`, `ui_model_selection`, `ui_permission_presets`, `ui_theme`, `ui_settings_general`, common `locale`.
 
 When adding UI copy on Android, **paste the zh (and en) string from those dictionaries** — do not invent synonyms.
+
+---
+
+## 12. Icon-vs-text audit (desktop icons → Android)
+
+Source: harness `d743267` / `0.2.1-alpha.2` `@deepseek-ai/dsh-client-ui-primitives` icons + owning ui-* packages. Rule: where desktop renders an SVG with Tooltip, Android must use the **same path** as a vector drawable + contentDescription/tooltip — not Material substitutes, emoji, or visible text labels.
+
+| Surface | Desktop | Was (phone) | Fix / decision |
+|---|---|---|---|
+| Message action row | IconCopy / Like / Dislike / Branch + clock | Text「复制 / 在新对话中分支 / 好的回答 / 有问题的回答」; time wrapped | **Fixed** — icon-only row, desktop order/spacing, nowrap clock |
+| User message actions | Same chrome, clock start, right-aligned | Row present but text labels | **Fixed** — same ActionIconButton chrome |
+| Code block header | CodeToolbar: WrapFill/NowrapFill + Copy/Check icons | Language only; no wrap/copy | **Fixed** — wrap + copy icons with locale tooltips |
+| Composer permission | Shield + 「工作区内修改」 + chevron | Shield-only when narrow | **Fixed** — always shield + label like desktop |
+| Composer send | IconSendOutline | Material `ArrowUpward` | **Fixed** → `D.send` |
+| Top bar menu | PanelLeft (sidebar) | Material `Menu` hamburger | **Fixed** → `D.panelLeft` |
+| Trajectory search | IconSearchOutline | Material `Search` | **Fixed** → `D.search` |
+| Top bar ⋯ / new / panel / team / preset | Desktop SVGs already | Already `D.*` icons | OK |
+| Composer + / model / chevrons | Desktop SVGs + text where desktop shows text | Already icon+label | OK (model name is text on desktop too) |
+| Sidebar / sheet OptionRows | Icon + text label (menus) | Icon + text | OK — menus keep text; not IconActions chrome |
+| Tool sheet 「复制结果 / 复制参数」 | Desktop inspector uses code-card copy icons in-place | Full-width outlined text buttons | **Keep** — phone sheet primary actions stay labeled buttons (touch); not an IconActions row |
+| Connections Devices glyph | N/A (phone-only) | Material `Devices` | **Keep** — no matching ui-primitives glyph; phone-only surface |
+| Turn usage pill | Icon + usage text | Not on phone action row | **hide** / later — optional endInfo slot |
+| Request chip / todo / trajectory detail tabs | Mostly text chrome or already icon+label | Aligned | OK |
+
+**Drawables added this pass:** `dsh_branch`, `dsh_like`, `dsh_like_fill`, `dsh_dislike`, `dsh_dislike_fill`, `dsh_wrap`, `dsh_nowrap`, `dsh_wrap_lines` (JsonTree/optional). Wired on `D` in `DshIcons.kt`.
+
+---
+
+## 13. Long-press text selection
+
+Every **output** text surface supports Compose `SelectionContainer` (helper `SelectableOutput` / `NonSelectable`) so users can long-press → select → copy:
+
+| Surface | Approach |
+|---|---|
+| Assistant Markdown (paragraphs / lists / tables / fences) | `MarkdownView` wraps once; code toolbar icons use `NonSelectable` |
+| User bubbles | `SelectableOutput` around bubble `Text` |
+| Thinking / reasoning body | Fold header stays clickable; body in `SelectableOutput` |
+| Notices / errors / approvals / questions / deliverables / changes | `SelectableOutput` on content |
+| Tool / file preview `CodeBox` | `SelectableOutput` |
+| Todo sheet items | `SelectableOutput` |
+| Trajectory ledger title / preview / metrics | `SelectableOutput` (tap still opens detail) |
+| Trajectory + Request detail tabs / payloads | `SelectableOutput` on payloads & KV values |
+| Terminal (Canvas grid) | Long-press → selectable plain-text overlay (`AnsiTerminal.plainText()`); tap exits |
+
+Composer input, buttons, and icon action chrome stay non-output (no forced selection).
