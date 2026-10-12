@@ -285,55 +285,40 @@ fun PanelSheet(cwd: String?, onDismiss: () -> Unit, onFiles: () -> Unit, onTermi
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun TerminalSheet(sessionId: String, onDismiss: () -> Unit) {
-    val screen by Pocket.terminalScreen.collectAsState()
+    val revision by Pocket.terminalRevision.collectAsState()
     val meta by Pocket.terminalMeta.collectAsState()
-    var input by remember { mutableStateOf("") }
-    val list = rememberScrollState()
-    LaunchedEffect(sessionId) { Pocket.openTerminal(sessionId) }
-    LaunchedEffect(screen) { list.animateScrollTo(list.maxValue) }
-    PocketSheet({
+    val dismiss = {
         Pocket.closeTerminalFollow()
         onDismiss()
-    }) {
-        Row(Modifier.padding(horizontal = 22.dp), verticalAlignment = Alignment.CenterVertically) {
-            SheetTitle(meta?.title ?: "终端")
-            Spacer(Modifier.weight(1f))
-            Text(meta?.state ?: "…", fontSize = 12.sp, color = T.Text3)
-        }
-        Text(
-            screen.ifBlank { "连接主机 shell…" },
-            style = T.Mono.copy(lineHeight = 18.sp, fontSize = 12.sp),
-            modifier = Modifier
-                .padding(horizontal = 22.dp)
-                .fillMaxWidth()
-                .heightIn(min = 180.dp, max = 360.dp)
-                .clip(T.R12)
-                .background(T.Fill2)
-                .verticalScroll(list)
-                .padding(12.dp),
-        )
-        Row(
-            Modifier.padding(horizontal = 22.dp, vertical = 12.dp).fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            OutlinedTextField(
-                input, { input = it },
-                singleLine = true,
-                placeholder = { Text("输入命令") },
-                shape = T.R12,
-                modifier = Modifier.weight(1f),
+    }
+    LaunchedEffect(sessionId) { Pocket.openTerminal(sessionId) }
+    // Same themed sheet chrome as PocketSheet, but no outer verticalScroll — the grid is fixed.
+    ModalBottomSheet(
+        onDismissRequest = dismiss,
+        sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
+        shape = T.Sheet,
+        containerColor = Color.White,
+        scrimColor = T.Scrim,
+        tonalElevation = 0.dp,
+        properties = ModalBottomSheetProperties(securePolicy = SecureFlagPolicy.SecureOff),
+        dragHandle = { Box(Modifier.padding(top = 10.dp, bottom = 14.dp).size(40.dp, 4.dp).clip(CircleShape).background(T.Border)) },
+    ) {
+        Column(Modifier.fillMaxWidth().padding(bottom = 24.dp)) {
+            Row(Modifier.padding(horizontal = 22.dp), verticalAlignment = Alignment.CenterVertically) {
+                Text(meta?.title ?: "终端", fontSize = 18.sp, fontWeight = FontWeight.SemiBold, color = T.Ink)
+                Spacer(Modifier.weight(1f))
+                meta?.state?.let { Text(it, fontSize = 12.sp, color = T.Text3) }
+            }
+            TerminalView(
+                terminal = Pocket.terminal,
+                revision = revision,
+                modifier = Modifier.padding(horizontal = 22.dp, vertical = 10.dp),
+                onResize = { cols, rows -> Pocket.resizeTerminal(cols, rows) },
+                onInput = { Pocket.writeTerminal(it) },
             )
-            Button({
-                val line = input
-                if (line.isNotEmpty()) {
-                    Pocket.writeTerminal("$line\r")
-                    input = ""
-                }
-            }, enabled = meta != null && input.isNotBlank(), shape = T.R12, colors = PrimaryColors(),
-                modifier = Modifier.height(52.dp)) { Text("发送") }
         }
     }
 }

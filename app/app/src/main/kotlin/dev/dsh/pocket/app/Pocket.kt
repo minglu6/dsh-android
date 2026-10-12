@@ -48,8 +48,10 @@ object Pocket {
     val permission = MutableStateFlow<Map<String, String>>(emptyMap())
     val model = MutableStateFlow<Map<String, ModelChoice>>(emptyMap())
     val errors = MutableSharedFlow<String>(extraBufferCapacity = 8)
-    /** Live host PTY screen text for the open terminal sheet (ANSI stripped). */
-    val terminalScreen = MutableStateFlow("")
+    /** Live host PTY emulator for the open terminal sheet. */
+    val terminal = AnsiTerminal(80, 24)
+    /** Bumps whenever [terminal] mutates so Compose can redraw. */
+    val terminalRevision = MutableStateFlow(0L)
     val terminalMeta = MutableStateFlow<TerminalMeta?>(null)
 
     private var client: PocketClient? = null
@@ -57,6 +59,9 @@ object Pocket {
     private var reducer = TranscriptReducer()
     private var subId: String? = null
     private var terminalSubId: String? = null
+    /** Last panel grid size from [TerminalView]; used when creating / attaching a PTY. */
+    private var wantCols = 80
+    private var wantRows = 24
     private val stray = HashMap<String, MutableList<JsonObject>>()
     /** Per-session follow attempts across reconnects; capped to stop spin loops. */
     private val followAttempts = HashMap<String, Int>()
@@ -195,7 +200,8 @@ object Pocket {
     private fun applyTerminalFrame(frame: kotlinx.serialization.json.JsonElement?) {
         when (frame["type"].str()) {
             "snapshot" -> {
-                terminalScreen.value = stripAnsi(frame["screen"].str().orEmpty())
+                terminal.applySnapshot(frame["screen"].str().orEmpty())
+                terminalRevision.value = terminal.revision
                 frame["info"]?.let { info ->
                     terminalMeta.value = terminalMeta.value?.copy(
                         title = info["title"].str() ?: terminalMeta.value?.title,
@@ -203,7 +209,10 @@ object Pocket {
                     )
                 }
             }
-            "output" -> terminalScreen.value = (terminalScreen.value + stripAnsi(frame["data"].str().orEmpty())).takeLast(80_000)
+            "output" -> {
+                terminal.write(frame["data"].str().orEmpty())
+                terminalRevision.value = terminal.revision
+            }
             "state" -> frame["info"]?.let { info ->
                 terminalMeta.value = terminalMeta.value?.copy(
                     title = info["title"].str() ?: terminalMeta.value?.title,
@@ -397,18 +406,30 @@ object Pocket {
         if (!hasOp("terminal.create") || !hasOp("terminal.follow")) {
             errors.tryEmit("桌面端未提供终端"); return@launch
         }
+        val cols = wantCols
+        val rows = wantRows
         runCatching {
             terminalSubId?.let { old -> runCatching { c.unfollow(old) } }
             terminalSubId = null
-            terminalScreen.value = ""
+            terminal.resize(cols, rows)
+            terminal.clear()
+            terminalRevision.value = terminal.revision
             val existing = c.listTerminals(sessionId)["terminals"].arr().orEmpty()
                 .firstOrNull { it["state"].str() == "running" }
-            val info = existing ?: c.createTerminal(sessionId)["terminal"]
+            val info = existing ?: c.createTerminal(sessionId, cols = cols, rows = rows)["terminal"]
             val id = info["id"].str() ?: error("no terminal id")
             val follow = c.followTerminal(sessionId, id)
             val attachmentId = follow["attachmentId"].str() ?: error("no attachmentId")
             terminalSubId = follow["subId"].str()
             terminalMeta.value = TerminalMeta(sessionId, id, attachmentId, info["title"].str(), info["state"].str())
+            // Align PTY to the latest panel grid (view may have measured while we were attaching).
+            val cCols = wantCols
+            val cRows = wantRows
+            if (cCols != cols || cRows != rows || existing != null) {
+                terminal.resize(cCols, cRows)
+                terminalRevision.value = terminal.revision
+                runCatching { c.resizeTerminal(sessionId, id, attachmentId, cCols, cRows) }
+            }
         }.onFailure { errors.tryEmit(it.message ?: "打开终端失败") }
     }
 
@@ -417,6 +438,19 @@ object Pocket {
         val meta = terminalMeta.value ?: return@launch
         runCatching { c.writeTerminal(meta.sessionId, meta.id, meta.attachmentId, data) }
             .onFailure { errors.tryEmit(it.message ?: "终端输入失败") }
+    }
+
+    fun resizeTerminal(cols: Int, rows: Int) = main.launch {
+        wantCols = cols.coerceAtLeast(2)
+        wantRows = rows.coerceAtLeast(1)
+        if (wantCols != terminal.cols || wantRows != terminal.rows) {
+            terminal.resize(wantCols, wantRows)
+            terminalRevision.value = terminal.revision
+        }
+        val c = client ?: return@launch
+        val meta = terminalMeta.value ?: return@launch
+        runCatching { c.resizeTerminal(meta.sessionId, meta.id, meta.attachmentId, wantCols, wantRows) }
+            .onFailure { errors.tryEmit(it.message ?: "终端调整失败") }
     }
 
     fun closeTerminalFollow() = main.launch {
@@ -503,11 +537,3 @@ object Pocket {
 }
 
 data class TerminalMeta(val sessionId: String, val id: String, val attachmentId: String, val title: String? = null, val state: String? = null)
-
-/** Strip CSI / OSC sequences so a host PTY is readable without a full emulator. */
-internal fun stripAnsi(s: String): String =
-    s.replace(Regex("\\u001B\\][^\\u0007]*\\u0007"), "")
-        .replace(Regex("\\u001B\\[[0-9;?]*[ -/]*[@-~]"), "")
-        .replace(Regex("\\u001B."), "")
-        .replace("\r\n", "\n")
-        .replace('\r', '\n')

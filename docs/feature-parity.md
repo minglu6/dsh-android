@@ -13,7 +13,7 @@ Plugin surface: `dsh-plugin-pocket` WebSocket ops (+ optional Cordis injects).
 | 轨迹 tab | Session header Chat/Trajectory; turn/step tree with input/output/think/time; detail sheet | implement | done | Client fold of chat `Item`s (`buildTrajectory` / `TrajectoryView`). |
 | Right-panel toggle | Opens right sidebar launcher | implement (partial) | done | Shown when `files.*` / `terminal.*` / `jobs.*` ops are present. |
 | → 工作区文件 | `workspaceFiles.list/read/stat/changes` | implement | done | Plugin `files.list` / `files.read`; `FilesSheet`. |
-| → 终端 | Host `terminalController` PTY create/follow/write/resize | implement | done | Plugin `terminal.*` + `TerminalSheet` (ANSI stripped; remote shell on the desktop). |
+| → 终端 | Host `terminalController` PTY create/follow/write/resize | implement | done | Plugin `terminal.*` + `TerminalSheet` (VT100 grid, Meslo Nerd Font, Tokyo Night; remote shell on the desktop). |
 | → 浏览器 | Client iframe / Electron webview only (no Host browse API) | hide | done | Local browser chrome — not a Host remote surface. |
 | → 后台任务 | `job-controller` list/observe/kill | implement | done | Plugin `jobs.list` / `jobs.kill`; `JobsSheet`. |
 | Top-bar 智能体团队 | Experimental agent-team UI + subagent lineage via `parentSessionId` | implement | done | List parent + children from `sessions.list`; switch session. |

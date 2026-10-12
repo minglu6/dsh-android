@@ -140,4 +140,23 @@ class ScreenshotTest {
         rule.waitForIdle()
         captureScreenRoboImage(out("18-profile-rename"))
     }
+    @Test fun s19_terminalSheet() {
+        Pocket.ops.value = setOf("terminal.create", "terminal.follow")
+        Pocket.terminalMeta.value = TerminalMeta("s1", "t1", "a1", title = "zsh", state = "running")
+        Pocket.terminal.resize(48, 16)
+        Pocket.terminal.clear()
+        // Powerlevel10k-ish prompt: Nerd Font icons (PUA) + ANSI colors.
+        Pocket.terminal.write(
+            "\u001B[2J\u001B[H" +
+                "\u001B[1;34m\uE0B6\u001B[0m\u001B[1;44;37m felix \u001B[0m\u001B[1;34m\uE0B0\u001B[0m " +
+                "\u001B[36m~\u001B[0m \u001B[1;32m\uE0A0\u001B[0m \u001B[33m22:55\u001B[0m\r\n" +
+                "\u001B[1;34m❯\u001B[0m pwd\r\n" +
+                "/Users/felix/Documents\r\n" +
+                "\u001B[1;34m❯\u001B[0m ",
+        )
+        Pocket.terminalRevision.value = Pocket.terminal.revision
+        showWithDialogs("19-terminal-sheet") {
+            TerminalSheet("s1") {}
+        }
+    }
 }
