@@ -4,6 +4,8 @@ Desktop sidecar + Android JNI client for dsh-plugin-pocket over iroh (ALPN `dsh-
 
 Modeled on [dsh-tether](https://github.com/zexadev/dsh-tether): N0 discovery/relays, 8s path upgrade (`direct` if IP, else `relay`). Pairing string is `nodeId#code` (QR: `dshpocket://pair?n=&c=`). The sidecar is a dumb pipe of pocket JSON frames — same `hello` / `pair` token auth as before.
 
+**Line limit:** `MAX_LINE` / `MAX_UNPAIRED_LINE` are **1 MiB** in `pocket-iroh` (shared by `pocket-host` and Android `pocket-ffi`). The plugin also slims `sessions.list` to the fields Android `SessionSummary` needs so a large desktop session roster stays well under the cap.
+
 ## Crates
 
 | Crate | Role |
