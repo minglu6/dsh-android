@@ -4,6 +4,16 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class FormatTest {
+    @Test fun busySendSteerLabelIsSteerNotImmediate() {
+        assertEquals("排队发送", BusySend.Queue.label)
+        assertEquals("插话发送", BusySend.Steer.label)
+        assertEquals("queue", BusySend.Queue.mode)
+        assertEquals("steer", BusySend.Steer.mode)
+        assertEquals("发送消息", composerSendLabel(running = false, BusySend.Queue))
+        assertEquals("排队发送", composerSendLabel(running = true, BusySend.Queue))
+        assertEquals("插话发送", composerSendLabel(running = true, BusySend.Steer))
+    }
+
     @Test fun primaryArgPicksMeaningfulKey() {
         assertEquals("ls -la", primaryArg("bash", """{"command":"ls -la","timeout":5}"""))
         assertEquals("bridge/a.mjs", primaryArg("read", """{"path":"bridge/a.mjs"}"""))

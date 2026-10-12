@@ -2,11 +2,13 @@ package dev.dsh.pocket.app
 
 import android.content.Context
 import android.os.Build
+import android.util.Base64
 import dev.dsh.pocket.protocol.*
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
 import kotlinx.serialization.json.JsonObject
 import java.util.UUID
+import java.util.concurrent.ConcurrentHashMap
 
 enum class Dot { Online, Connecting, Offline, Unauthorized }
 
@@ -43,6 +45,11 @@ object Pocket {
     val active = MutableStateFlow<String?>(null)
     val sessions = MutableStateFlow<List<SessionSummary>>(emptyList())
     val approvals = MutableStateFlow<List<Approval>>(emptyList())
+    val userQuestions = MutableStateFlow<List<UserQuestion>>(emptyList())
+    val archivedIds = MutableStateFlow<Set<String>>(emptySet())
+    val pinnedIds = MutableStateFlow<Set<String>>(emptySet())
+    /** messageId → feedback for the open session. */
+    val feedback = MutableStateFlow<Map<String, MessageFeedback>>(emptyMap())
     val catalog = MutableStateFlow<ModelCatalog?>(null)
     val presets = MutableStateFlow<List<String>>(emptyList())
     val ops = MutableStateFlow<Set<String>>(emptySet())
@@ -50,11 +57,18 @@ object Pocket {
     val permission = MutableStateFlow<Map<String, String>>(emptyMap())
     val model = MutableStateFlow<Map<String, ModelChoice>>(emptyMap())
     val errors = MutableSharedFlow<String>(extraBufferCapacity = 8)
+    /** Transient toast-style notices (archive undo, feedback thanks, …). */
+    val notices = MutableSharedFlow<String>(extraBufferCapacity = 8)
     /** Live host PTY emulator for the open terminal sheet. */
     val terminal = AnsiTerminal(80, 24)
     /** Bumps whenever [terminal] mutates so Compose can redraw. */
     val terminalRevision = MutableStateFlow(0L)
     val terminalMeta = MutableStateFlow<TerminalMeta?>(null)
+    /** attachmentId → decoded bytes cache for transcript image bubbles. */
+    private val attachmentCache = ConcurrentHashMap<String, ByteArray>()
+    /** Last archived session for snackbar 撤销. */
+    @Volatile var lastArchivedId: String? = null
+        private set
 
     private var client: PocketClient? = null
     private var connJob: Job? = null
@@ -90,6 +104,8 @@ object Pocket {
         connJob?.cancel(); client?.close(); client = null
         active.value = profileId; prefs.activeProfile = profileId
         sessions.value = emptyList(); chat.value = null; approvals.value = emptyList()
+        userQuestions.value = emptyList(); archivedIds.value = emptySet(); pinnedIds.value = emptySet()
+        feedback.value = emptyMap(); attachmentCache.clear()
         setRoute(profileId, null)
         connJob = main.launch { runConnection(profileId) }
     }
@@ -154,7 +170,17 @@ object Pocket {
         runCatching { approvals.value = c.call("approval.pending")["approvals"].arr().orEmpty().mapNotNull { (it as? JsonObject)?.let(Approval::parse) } }
         runCatching { catalog.value = c.modelCatalog() }
         if ("presets.list" in ops.value) runCatching { presets.value = c.presets() }
-        chat.value?.let { refollow(c, it.sessionId, reducer.cursor.takeIf { s -> s >= 0 }) }
+        if ("workspace.state" in ops.value) runCatching { refreshWorkspaceState(c) }
+        chat.value?.let { st ->
+            refollow(c, st.sessionId, reducer.cursor.takeIf { s -> s >= 0 })
+            if ("feedback.get" in ops.value) runCatching { loadFeedback(st.sessionId) }
+        }
+    }
+
+    private suspend fun refreshWorkspaceState(c: PocketClient) {
+        val state = c.workspaceState()
+        archivedIds.value = state["archivedSessionIds"].arr().orEmpty().mapNotNull { it.str() }.toSet()
+        pinnedIds.value = state["pinnedSessionIds"].arr().orEmpty().mapNotNull { it.str() }.toSet()
     }
 
     private fun onPush(m: JsonObject) {
@@ -191,6 +217,13 @@ object Pocket {
             }
             "approval" -> { val a = Approval.parse(m); approvals.value = approvals.value.filter { it.approvalId != a.approvalId } + a }
             "approval.closed" -> approvals.value = approvals.value.filter { it.approvalId != m["approvalId"].str() }
+            "user-question" -> UserQuestion.parse(m)?.let { q ->
+                userQuestions.value = userQuestions.value.filter { it.questionId != q.questionId } + q
+            }
+            "user-question.closed" -> {
+                val id = m["questionId"].str()
+                userQuestions.value = userQuestions.value.filter { it.questionId != id }
+            }
             "terminal" -> if (m["subId"].str() == terminalSubId) applyTerminalFrame(m["frame"])
             "terminal.end", "terminal.error" -> if (m["subId"].str() == terminalSubId) {
                 m["error"]["message"].str()?.let { errors.tryEmit(it) }
@@ -262,6 +295,7 @@ object Pocket {
     fun openSession(sessionId: String) = main.launch {
         followAttempts.remove(sessionId)
         reducer = TranscriptReducer()
+        feedback.value = emptyMap()
         chat.value = ChatState(sessionId, title = sessions.value.firstOrNull { it.sessionId == sessionId }?.title)
         val c = client ?: return@launch
         runCatching { refollow(c, sessionId, null) }
@@ -270,6 +304,7 @@ object Pocket {
                 chat.value = chat.value?.copy(loaded = true)
             }
         if ("permissions.get" in ops.value) runCatching { c.permission(sessionId)?.let { permission.value = permission.value + (sessionId to it) } }
+        if ("feedback.get" in ops.value) runCatching { loadFeedback(sessionId) }
     }
 
     /**
@@ -407,6 +442,140 @@ object Pocket {
         val mode = if (st.running) prefs.busySend.mode else "queue"
         if (text.isNotBlank()) echo(text)
         runCatching { c.prompt(st.sessionId, text, mode, images) }.onFailure { errors.tryEmit(it.message ?: "发送失败") }
+    }
+
+    fun sendWithFiles(text: String, images: List<PromptImage>, files: List<PromptFile>) = main.launch {
+        val c = client ?: return@launch; val st = chat.value ?: return@launch
+        val mode = if (st.running) prefs.busySend.mode else "queue"
+        if (text.isNotBlank()) echo(text)
+        runCatching { c.prompt(st.sessionId, text, mode, images, files) }
+            .onFailure { errors.tryEmit(it.message ?: "发送失败") }
+    }
+
+    /** Upload a non-image file; returns receiptId or null on failure. */
+    suspend fun uploadFile(sessionId: String, bytes: ByteArray, name: String?): UploadReceipt? {
+        val c = client ?: return null
+        if (!hasOp("attachments.upload")) return null
+        return runCatching {
+            UploadReceipt.parse(
+                c.uploadAttachment(sessionId, Base64.encodeToString(bytes, Base64.NO_WRAP), name),
+            )
+        }.onFailure { errors.tryEmit(it.message ?: L.uploadFailed()) }.getOrNull()
+    }
+
+    /** Load attachment bytes (base64) for transcript image bubbles; cached. */
+    suspend fun loadAttachmentBytes(sessionId: String, attachmentId: String): ByteArray? {
+        attachmentCache[attachmentId]?.let { return it }
+        val c = client ?: return null
+        if (!hasOp("session.attachment")) return null
+        return runCatching {
+            val r = c.sessionAttachment(sessionId, attachmentId)
+            val b64 = r["data"].str() ?: return null
+            Base64.decode(b64, Base64.DEFAULT).also { attachmentCache[attachmentId] = it }
+        }.getOrNull()
+    }
+
+    fun searchSessions(query: String, onResult: (List<SessionSummary>) -> Unit) = main.launch {
+        val c = client ?: run { onResult(emptyList()); return@launch }
+        if (!hasOp("sessions.search") || query.isBlank()) {
+            onResult(emptyList()); return@launch
+        }
+        runCatching {
+            val r = c.searchSessions(query)
+            val items = r["items"].arr().orEmpty().mapNotNull(SessionSummary::parse)
+            onResult(items)
+        }.onFailure {
+            errors.tryEmit(it.message ?: "搜索失败")
+            onResult(emptyList())
+        }
+    }
+
+    fun archiveSession(sessionId: String, stopActivity: Boolean = true) = main.launch {
+        val c = client ?: return@launch
+        if (!hasOp("workspace.archiveSession")) { errors.tryEmit("桌面端未提供归档"); return@launch }
+        runCatching {
+            c.archiveSession(sessionId, stopActivity = stopActivity)
+            lastArchivedId = sessionId
+            refreshWorkspaceState(c)
+            notices.tryEmit(L.archivedToast())
+        }.onFailure { errors.tryEmit(it.message ?: "归档失败") }
+    }
+
+    fun unarchiveSession(sessionId: String) = main.launch {
+        val c = client ?: return@launch
+        if (!hasOp("workspace.unarchiveSession")) return@launch
+        runCatching {
+            c.unarchiveSession(sessionId)
+            refreshWorkspaceState(c)
+        }.onFailure { errors.tryEmit(it.message ?: "取消归档失败") }
+    }
+
+    fun pinSession(sessionId: String) = main.launch {
+        val c = client ?: return@launch
+        if (!hasOp("workspace.pinSession")) { errors.tryEmit("桌面端未提供置顶"); return@launch }
+        runCatching { c.pinSession(sessionId); refreshWorkspaceState(c) }
+            .onFailure { errors.tryEmit(it.message ?: "置顶失败") }
+    }
+
+    fun unpinSession(sessionId: String) = main.launch {
+        val c = client ?: return@launch
+        if (!hasOp("workspace.unpinSession")) return@launch
+        runCatching { c.unpinSession(sessionId); refreshWorkspaceState(c) }
+            .onFailure { errors.tryEmit(it.message ?: "取消置顶失败") }
+    }
+
+    private suspend fun loadFeedback(sessionId: String) {
+        val c = client ?: return
+        val r = c.getFeedback(sessionId)
+        val items = r["items"].arr().orEmpty().mapNotNull(MessageFeedback::parse)
+        feedback.value = items.associateBy { it.messageId }
+    }
+
+    fun setMessageFeedback(
+        messageId: String,
+        rating: String?,
+        category: String? = null,
+        note: String? = null,
+    ) = main.launch {
+        val c = client ?: return@launch
+        val st = chat.value ?: return@launch
+        if (!hasOp("feedback.set")) { errors.tryEmit("桌面端未提供反馈"); return@launch }
+        val prev = feedback.value[messageId]
+        runCatching {
+            val r = c.setFeedback(
+                st.sessionId, messageId, rating, category, note, prev?.version,
+            )
+            val next = MessageFeedback.parse(r) ?: MessageFeedback(messageId, rating, category = category, note = note)
+            feedback.value = if (rating == null) feedback.value - messageId else feedback.value + (messageId to next)
+            if (rating != null) notices.tryEmit(L.thanksFeedback())
+        }.onFailure { errors.tryEmit(it.message ?: "反馈保存失败") }
+    }
+
+    fun lookupFileRefs(query: String, onResult: (List<FileReference>) -> Unit) = main.launch {
+        val c = client ?: run { onResult(emptyList()); return@launch }
+        val st = chat.value ?: run { onResult(emptyList()); return@launch }
+        if (!hasOp("references.files")) { onResult(emptyList()); return@launch }
+        runCatching {
+            onResult(c.referenceFiles(st.sessionId, query)["items"].arr().orEmpty().mapNotNull(FileReference::parse))
+        }.onFailure { onResult(emptyList()) }
+    }
+
+    fun lookupSessionRefs(query: String, onResult: (List<SessionReference>) -> Unit) = main.launch {
+        val c = client ?: run { onResult(emptyList()); return@launch }
+        val st = chat.value ?: run { onResult(emptyList()); return@launch }
+        if (!hasOp("references.sessions")) { onResult(emptyList()); return@launch }
+        runCatching {
+            onResult(c.referenceSessions(st.sessionId, query)["items"].arr().orEmpty().mapNotNull(SessionReference::parse))
+        }.onFailure { onResult(emptyList()) }
+    }
+
+    fun answerUserQuestion(callId: String, answers: List<JsonObject>) = main.launch {
+        val c = client ?: return@launch
+        val st = chat.value ?: return@launch
+        if (!hasOp("userQuestions.answer")) { errors.tryEmit("桌面端未提供提问"); return@launch }
+        userQuestions.value = userQuestions.value.filter { it.callId != callId && it.questionId != callId }
+        runCatching { c.answerUserQuestion(st.sessionId, callId, answers) }
+            .onFailure { errors.tryEmit(it.message ?: "回答失败") }
     }
 
     suspend fun listFiles(sessionId: String, path: String) = client?.listFiles(sessionId, path)

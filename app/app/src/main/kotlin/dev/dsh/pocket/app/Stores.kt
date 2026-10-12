@@ -93,7 +93,7 @@ data class Profile(
     }
 }
 
-enum class BusySend(val label: String, val mode: String) { Queue("排队发送", "queue"), Steer("立即引导", "steer") }
+enum class BusySend(val label: String, val mode: String) { Queue("排队发送", "queue"), Steer("插话发送", "steer") }
 
 /** Matches Host `ui-theme.preference`. */
 enum class Appearance(val label: String) { Light("浅色"), Dark("深色"), System("跟随系统") }

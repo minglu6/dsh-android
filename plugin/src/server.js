@@ -202,7 +202,12 @@ export function createOps(sc, { timeZone } = {}) {
         need(str(img?.mediaType) && str(img?.data), 'image needs mediaType and data')
         content.push({ type: 'image', mediaType: img.mediaType, data: img.data, ...(str(img.name) ? { name: img.name } : {}) })
       }
-      need(content.length > 0, 'text or images required')
+      // Staged non-image files from `attachments.upload` (`{type:'file', receiptId}`).
+      for (const file of Array.isArray(a.files) ? a.files : []) {
+        need(str(file?.receiptId), 'file needs receiptId')
+        content.push({ type: 'file', receiptId: file.receiptId })
+      }
+      need(content.length > 0, 'text, images, or files required')
       return sc.prompt({
         requestId: str(a.requestId) ? a.requestId : randomUUID(),
         sessionId: a.sessionId, mode: a.mode, content, clientTimeZone: tz,
@@ -253,6 +258,8 @@ export function createPocketServer(opts) {
   const clients = new Set()
   /** approvalId -> { payload, settle(outcome) } */
   const approvals = new Map()
+  /** callId (or synthetic id) -> { payload, settle(answer), close } */
+  const userQuestions = new Map()
   const authedClients = () => [...clients].filter((c) => c.device)
   const broadcast = (m) => { for (const c of authedClients()) c.push(m) }
   const unsub = opts.onSessionEvent?.((kind, args) => broadcast({ ev: 'session', ...sessionEventPayload(kind, args) }))
@@ -380,6 +387,7 @@ export function createPocketServer(opts) {
 
   function sendPending(client) {
     for (const p of approvals.values()) client.push({ ev: 'approval', ...p.payload })
+    for (const p of userQuestions.values()) client.push({ ev: 'user-question', ...p.payload })
   }
 
   async function handle(client, msg, reply, fail) {
@@ -545,6 +553,37 @@ export function createPocketServer(opts) {
       })
       broadcast({ ev: 'approval', ...full })
       return { approvalId, answer, close }
+    },
+    /**
+     * Offer one user-question batch to connected devices.
+     * @returns {{ questionId: string, answer: Promise<{answer: object, by: string}>, close(status: string, by: string): void }}
+     */
+    offerUserQuestion(payload) {
+      const questionId = str(payload?.callId) ? payload.callId : randomUUID()
+      const full = { questionId, ...payload }
+      let resolve
+      const answer = new Promise((r) => { resolve = r })
+      const close = (status, by) => {
+        if (!userQuestions.has(questionId)) return
+        userQuestions.delete(questionId)
+        broadcast({ ev: 'user-question.closed', questionId, status, by })
+      }
+      userQuestions.set(questionId, {
+        payload: full,
+        settle: (ans, deviceId) => { resolve({ answer: ans, by: `device:${deviceId}` }) },
+      })
+      broadcast({ ev: 'user-question', ...full })
+      return { questionId, answer, close }
+    },
+    /** Settle a pending waterfall offer from `userQuestions.answer` (returns false if none). */
+    settleUserQuestion(callId, answer, deviceId = 'phone') {
+      const p = userQuestions.get(callId)
+      if (!p) return false
+      p.settle(answer, deviceId)
+      return true
+    },
+    hasPendingUserQuestion(callId) {
+      return userQuestions.has(callId)
     },
     listen: () => new Promise((resolve, reject) => {
       http.once('error', reject)

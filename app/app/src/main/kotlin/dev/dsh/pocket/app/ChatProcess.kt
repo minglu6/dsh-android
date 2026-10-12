@@ -80,6 +80,14 @@ sealed interface ChatRow {
         val defaultOpen: Boolean,
         val durationMs: Long? = null,
     ) : ChatRow
+
+    data class Deliverable(val item: Item.Deliverable) : ChatRow {
+        override val key get() = item.key
+    }
+
+    data class Changes(val item: Item.Changes) : ChatRow {
+        override val key get() = item.key
+    }
 }
 
 /** Map tool name → desktop `activity()` kind (`process-activity.js`). */
@@ -301,6 +309,14 @@ private fun emitTurnBody(
                 flushProcess(forceOpen = false, closed = !turnLive)
                 out += ChatRow.Notice(item)
             }
+            is Item.Deliverable -> {
+                flushProcess(forceOpen = false, closed = !turnLive)
+                out += ChatRow.Deliverable(item)
+            }
+            is Item.Changes -> {
+                flushProcess(forceOpen = false, closed = !turnLive)
+                out += ChatRow.Changes(item)
+            }
             else -> Unit
         }
     }
@@ -315,6 +331,8 @@ private fun emitPlain(out: MutableList<ChatRow>, item: Item) {
         is Item.Reasoning -> out += ChatRow.Reasoning(item)
         is Item.Text -> out += ChatRow.Answer(item)
         is Item.Notice -> out += ChatRow.Notice(item)
+        is Item.Deliverable -> out += ChatRow.Deliverable(item)
+        is Item.Changes -> out += ChatRow.Changes(item)
         else -> Unit
     }
 }

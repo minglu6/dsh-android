@@ -21,7 +21,10 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.rotate
 import androidx.compose.foundation.layout.offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -30,12 +33,34 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import android.graphics.BitmapFactory
 import dev.dsh.pocket.protocol.Approval
+import dev.dsh.pocket.protocol.ImageRef
 import dev.dsh.pocket.protocol.Item
+import dev.dsh.pocket.protocol.PromptFile
+import dev.dsh.pocket.protocol.PromptImage
 import dev.dsh.pocket.protocol.ToolStatus
+import dev.dsh.pocket.protocol.UserQuestion
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
+import kotlinx.serialization.json.putJsonArray
 
-enum class Sheet { None, Model, Permission, FullAccess, Preset, Plus, More, Panel, Team, Workspace, Goal, Feedback, Files, Jobs, Terminal, Todo }
+enum class AttachStatus { Pending, Uploading, Ready, Failed }
+
+data class PendingAttach(
+    val name: String,
+    val bytes: ByteArray,
+    val status: AttachStatus = AttachStatus.Pending,
+    val receiptId: String? = null,
+)
+
+enum class Sheet {
+    None, Model, Permission, FullAccess, Preset, Plus, More, Panel, Team, Workspace, Goal, Feedback,
+    Files, Jobs, Terminal, Todo, Commands, Mentions, FeedbackCategory,
+}
 
 @Composable
 fun ChatRoot(onMenu: () -> Unit) {
@@ -55,21 +80,53 @@ fun ChatRoot(onMenu: () -> Unit) {
     var draftPerm by remember { mutableStateOf(Pocket.prefs.defaultPermission) }
     var draftModel by remember { mutableStateOf<ModelChoice?>(null) }
     var draftCwd by remember { mutableStateOf<String?>(null) }
+    var pendingImages by remember { mutableStateOf<List<PromptImage>>(emptyList()) }
+    var pendingFiles by remember { mutableStateOf<List<PendingAttach>>(emptyList()) }
+    var feedbackTarget by remember { mutableStateOf<String?>(null) }
+    val questions by Pocket.userQuestions.collectAsState()
+    val feedbackMap by Pocket.feedback.collectAsState()
     val ctx = androidx.compose.ui.platform.LocalContext.current
+    val scope = androidx.compose.runtime.rememberCoroutineScope()
     val pickFiles = androidx.activity.compose.rememberLauncherForActivityResult(
         androidx.activity.result.contract.ActivityResultContracts.GetMultipleContents(),
     ) { uris ->
-        if (Pocket.chat.value == null || uris.isEmpty()) return@rememberLauncherForActivityResult
-        val images = uris.mapNotNull { uri ->
+        val st = Pocket.chat.value ?: return@rememberLauncherForActivityResult
+        if (uris.isEmpty()) return@rememberLauncherForActivityResult
+        val images = ArrayList<PromptImage>()
+        val files = ArrayList<PendingAttach>()
+        uris.forEach { uri ->
             runCatching {
-                val mime = ctx.contentResolver.getType(uri) ?: "image/jpeg"
-                if (!mime.startsWith("image/")) return@runCatching null
-                val bytes = ctx.contentResolver.openInputStream(uri)?.use { it.readBytes() } ?: return@runCatching null
-                val name = uri.lastPathSegment
-                dev.dsh.pocket.protocol.PromptImage(mime, android.util.Base64.encodeToString(bytes, android.util.Base64.NO_WRAP), name)
-            }.getOrNull()
+                val mime = ctx.contentResolver.getType(uri) ?: "application/octet-stream"
+                val bytes = ctx.contentResolver.openInputStream(uri)?.use { it.readBytes() } ?: return@runCatching
+                val name = uri.lastPathSegment?.substringAfterLast('/') ?: "file"
+                val b64 = android.util.Base64.encodeToString(bytes, android.util.Base64.NO_WRAP)
+                if (mime.startsWith("image/")) {
+                    images += PromptImage(mime, b64, name)
+                } else {
+                    files += PendingAttach(name, bytes, status = AttachStatus.Pending)
+                }
+            }
         }
-        if (images.isNotEmpty()) Pocket.sendImages("", images)
+        if (images.isNotEmpty()) pendingImages = pendingImages + images
+        if (files.isNotEmpty()) {
+            pendingFiles = pendingFiles + files
+            // Upload non-images via attachments.upload
+            files.forEachIndexed { i, f ->
+                val idx = pendingFiles.size - files.size + i
+                scope.launch {
+                    pendingFiles = pendingFiles.toMutableList().also {
+                        if (idx in it.indices) it[idx] = it[idx].copy(status = AttachStatus.Uploading)
+                    }
+                    val receipt = Pocket.uploadFile(st.sessionId, f.bytes, f.name)
+                    pendingFiles = pendingFiles.toMutableList().also {
+                        if (idx in it.indices) {
+                            it[idx] = if (receipt != null) it[idx].copy(status = AttachStatus.Ready, receiptId = receipt.receiptId)
+                            else it[idx].copy(status = AttachStatus.Failed)
+                        }
+                    }
+                }
+            }
+        }
     }
     fun doExport() {
         Pocket.exportSession { name, bytes ->
@@ -107,9 +164,32 @@ fun ChatRoot(onMenu: () -> Unit) {
                 Chip(D.folderOpen, (draftCwd ?: workspaces.firstOrNull())?.substringAfterLast('/') ?: "默认工作区") { sheet = Sheet.Workspace }
                 Chip(D.agentPreset, presetLabel(draftPreset)) { sheet = Sheet.Preset }
             }
-            Composer("描述你想要构建的内容, / 调用指令, @ 文件或对话", false, curPerm, curModel, enabled = dot == Dot.Online,
+            Composer(
+                "描述你想要构建的内容, / 调用指令, @ 文件或对话", false, curPerm, curModel, enabled = dot == Dot.Online,
+                pendingImages = pendingImages, pendingFiles = pendingFiles,
                 onPlus = { sheet = Sheet.Plus }, onPerm = { sheet = Sheet.Permission }, onModel = { sheet = Sheet.Model },
-                onSend = { Pocket.newSession(it, draftPreset, draftPerm, draftModel, draftCwd ?: workspaces.firstOrNull()) }, onStop = {})
+                onRemoveImage = { i -> pendingImages = pendingImages.toMutableList().also { it.removeAt(i) } },
+                onRemoveFile = { i -> pendingFiles = pendingFiles.toMutableList().also { it.removeAt(i) } },
+                onRetryFile = { i ->
+                    val f = pendingFiles.getOrNull(i) ?: return@Composer
+                    val stId = Pocket.chat.value?.sessionId ?: return@Composer
+                    pendingFiles = pendingFiles.toMutableList().also { it[i] = f.copy(status = AttachStatus.Uploading) }
+                    scope.launch {
+                        val receipt = Pocket.uploadFile(stId, f.bytes, f.name)
+                        pendingFiles = pendingFiles.toMutableList().also {
+                            if (i in it.indices) it[i] = if (receipt != null) f.copy(status = AttachStatus.Ready, receiptId = receipt.receiptId)
+                            else f.copy(status = AttachStatus.Failed)
+                        }
+                    }
+                },
+                onSlash = { sheet = Sheet.Commands },
+                onMention = { sheet = Sheet.Mentions },
+                onSend = { text ->
+                    Pocket.newSession(text, draftPreset, draftPerm, draftModel, draftCwd ?: workspaces.firstOrNull())
+                    pendingImages = emptyList(); pendingFiles = emptyList()
+                },
+                onStop = {},
+            )
             Spacer(Modifier.height(10.dp))
         } else {
             val st = chat!!
@@ -121,12 +201,51 @@ fun ChatRoot(onMenu: () -> Unit) {
                     onTool = { tool = it },
                     canFork = "sessions.fork" in ops && !st.running,
                     onFork = { seq -> Pocket.forkSession(seq) },
+                    feedback = feedbackMap,
+                    onLike = { id ->
+                        val cur = feedbackMap[id]
+                        if (cur?.rating == "positive") Pocket.setMessageFeedback(id, null)
+                        else Pocket.setMessageFeedback(id, "positive")
+                    },
+                    onDislike = { id ->
+                        feedbackTarget = id
+                        sheet = Sheet.FeedbackCategory
+                    },
                 ) else TrajectoryView(st)
             }
+            questions.firstOrNull { it.sessionId == null || it.sessionId == st.sessionId }?.let { UserQuestionCard(it) }
             approvals.firstOrNull { it.sessionId == null || it.sessionId == st.sessionId }?.let { ApprovalCard(it) }
-            Composer("发消息或创建任务, / 调用指令, @ 文件或对话", st.running, curPerm, curModel, enabled = dot == Dot.Online,
+            Composer(
+                "发消息或创建任务, / 调用指令, @ 文件或对话", st.running, curPerm, curModel, enabled = dot == Dot.Online,
+                pendingImages = pendingImages, pendingFiles = pendingFiles,
                 onPlus = { sheet = Sheet.Plus }, onPerm = { sheet = Sheet.Permission }, onModel = { sheet = Sheet.Model },
-                onSend = { Pocket.send(it) }, onStop = { Pocket.cancel() })
+                onRemoveImage = { i -> pendingImages = pendingImages.toMutableList().also { it.removeAt(i) } },
+                onRemoveFile = { i -> pendingFiles = pendingFiles.toMutableList().also { it.removeAt(i) } },
+                onRetryFile = { i ->
+                    val f = pendingFiles.getOrNull(i) ?: return@Composer
+                    pendingFiles = pendingFiles.toMutableList().also { it[i] = f.copy(status = AttachStatus.Uploading) }
+                    scope.launch {
+                        val receipt = Pocket.uploadFile(st.sessionId, f.bytes, f.name)
+                        pendingFiles = pendingFiles.toMutableList().also {
+                            if (i in it.indices) it[i] = if (receipt != null) f.copy(status = AttachStatus.Ready, receiptId = receipt.receiptId)
+                            else f.copy(status = AttachStatus.Failed)
+                        }
+                    }
+                },
+                onSlash = { sheet = Sheet.Commands },
+                onMention = { sheet = Sheet.Mentions },
+                onSend = { text ->
+                    val ready = pendingFiles.filter { it.status == AttachStatus.Ready && it.receiptId != null }
+                    val imgs = pendingImages
+                    when {
+                        imgs.isNotEmpty() || ready.isNotEmpty() ->
+                            Pocket.sendWithFiles(text, imgs, ready.map { PromptFile(it.receiptId!!) })
+                        else -> Pocket.send(text)
+                    }
+                    pendingImages = emptyList(); pendingFiles = emptyList()
+                },
+                onStop = { Pocket.cancel() },
+            )
             Footer(st)
         }
     }
@@ -143,7 +262,7 @@ fun ChatRoot(onMenu: () -> Unit) {
             onDismiss = { sheet = Sheet.None },
             onPerm = { sheet = Sheet.Permission },
             onModel = { sheet = Sheet.Model },
-            onFile = { pickFiles.launch("image/*") },
+            onFile = { pickFiles.launch("*/*") },
             onGoal = { sheet = Sheet.Goal },
             onPlan = { Pocket.executeCommand("/plan") },
             onFeedback = { sheet = Sheet.Feedback },
@@ -164,6 +283,15 @@ fun ChatRoot(onMenu: () -> Unit) {
         Sheet.Workspace -> WorkspaceSheet(workspaces, draftCwd ?: workspaces.firstOrNull(), onDismiss = { sheet = Sheet.None }) { draftCwd = it }
         Sheet.Goal -> GoalSheet(onDismiss = { sheet = Sheet.None })
         Sheet.Feedback -> FeedbackSheet(onDismiss = { sheet = Sheet.None })
+        Sheet.FeedbackCategory -> FeedbackCategorySheet(
+            onDismiss = { sheet = Sheet.None; feedbackTarget = null },
+            onSubmit = { cat, note ->
+                feedbackTarget?.let { Pocket.setMessageFeedback(it, "negative", cat, note) }
+                sheet = Sheet.None; feedbackTarget = null
+            },
+        )
+        Sheet.Commands -> CommandPopupSheet(onDismiss = { sheet = Sheet.None })
+        Sheet.Mentions -> MentionPopupSheet(onDismiss = { sheet = Sheet.None })
         Sheet.Files -> sid?.let { FilesSheet(it, onDismiss = { sheet = Sheet.None }) } ?: run { sheet = Sheet.None }
         Sheet.Jobs -> sid?.let { JobsSheet(it, onDismiss = { sheet = Sheet.None }) } ?: run { sheet = Sheet.None }
         Sheet.Terminal -> sid?.let { TerminalSheet(it, onDismiss = { sheet = Sheet.None }) } ?: run { sheet = Sheet.None }
@@ -263,6 +391,9 @@ private fun Transcript(
     onTool: (Item.Tool) -> Unit,
     canFork: Boolean = false,
     onFork: (Long?) -> Unit = {},
+    feedback: Map<String, dev.dsh.pocket.protocol.MessageFeedback> = emptyMap(),
+    onLike: (String) -> Unit = {},
+    onDislike: (String) -> Unit = {},
 ) {
     val list = rememberLazyListState()
     // Prefs are SharedPreferences-backed; read each composition for mode switches.
@@ -296,12 +427,22 @@ private fun Transcript(
                 is ChatRow.User -> {
                     val branchHere = canFork && row.key == branchKey
                     Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.End) {
-                        Text(
-                            row.item.text,
-                            style = MaterialTheme.typography.bodyLarge,
-                            color = T.Ink.copy(alpha = if (row.item.pending) 0.6f else 1f),
-                            modifier = Modifier.padding(start = 56.dp).clip(T.R20).background(T.Fill).padding(horizontal = 16.dp, vertical = 10.dp),
-                        )
+                        if (row.item.imageRefs.isNotEmpty()) {
+                            row.item.imageRefs.forEach { ref ->
+                                ImageBubble(st.sessionId, ref)
+                                Spacer(Modifier.height(6.dp))
+                            }
+                        } else if (row.item.images > 0) {
+                            Text(L.image() + " ×${row.item.images}", fontSize = 13.sp, color = T.Text3, modifier = Modifier.padding(bottom = 4.dp))
+                        }
+                        if (row.item.text.isNotBlank()) {
+                            Text(
+                                row.item.text,
+                                style = MaterialTheme.typography.bodyLarge,
+                                color = T.Ink.copy(alpha = if (row.item.pending) 0.6f else 1f),
+                                modifier = Modifier.padding(start = 56.dp).clip(T.R20).background(T.Fill).padding(horizontal = 16.dp, vertical = 10.dp),
+                            )
+                        }
                         MessageActions(
                             text = row.item.text,
                             timeMs = row.item.at,
@@ -314,6 +455,8 @@ private fun Transcript(
                 }
                 is ChatRow.Answer -> {
                     val branchHere = canFork && row.key == branchKey && !row.item.live
+                    val mid = row.item.messageId
+                    val rating = mid?.let { feedback[it]?.rating }
                     Column(Modifier.fillMaxWidth()) {
                         MarkdownView(row.item.text, streaming = row.item.live)
                         if (!row.item.live) MessageActions(
@@ -323,6 +466,10 @@ private fun Transcript(
                             branchEnabled = branchHere,
                             branchUnavailable = canFork && !branchHere,
                             onBranch = if (canFork) ({ onFork(row.item.seq) }) else null,
+                            messageId = mid,
+                            rating = rating,
+                            onLike = mid?.let { { onLike(it) } },
+                            onDislike = mid?.let { { onDislike(it) } },
                         )
                     }
                 }
@@ -330,6 +477,8 @@ private fun Transcript(
                 is ChatRow.Tool -> ToolCard(row.item) { onTool(row.item) }
                 is ChatRow.Reasoning -> ReasoningRow(row.item)
                 is ChatRow.Process -> ProcessGroupRow(row, onTool)
+                is ChatRow.Deliverable -> DeliverableCard(row.item)
+                is ChatRow.Changes -> ChangesCard(row.item)
             }
         }
         if (st.running) item(key = "status") { RunningLine(st.runStartedAt) }
@@ -338,7 +487,7 @@ private fun Transcript(
 
 private enum class MessageClock { Start, End }
 
-/** Desktop MessageIconActions: clock + copy + optional branch. */
+/** Desktop MessageIconActions: clock + copy + optional branch + like/dislike. */
 @Composable
 private fun MessageActions(
     text: String,
@@ -347,9 +496,14 @@ private fun MessageActions(
     branchEnabled: Boolean,
     branchUnavailable: Boolean,
     onBranch: (() -> Unit)?,
+    messageId: String? = null,
+    rating: String? = null,
+    onLike: (() -> Unit)? = null,
+    onDislike: (() -> Unit)? = null,
 ) {
     val clip = androidx.compose.ui.platform.LocalClipboardManager.current
     var copied by remember { mutableStateOf(false) }
+    val canFeedback = messageId != null && "feedback.set" in Pocket.ops.value
     LaunchedEffect(copied) {
         if (copied) {
             kotlinx.coroutines.delay(1000)
@@ -397,6 +551,24 @@ private fun MessageActions(
                     .padding(horizontal = 8.dp, vertical = 4.dp)
                     .semantics { contentDescription = label }
                     .testTag("messageBranch"),
+            )
+        }
+        if (canFeedback && onLike != null && onDislike != null) {
+            Spacer(Modifier.width(4.dp))
+            Text(
+                if (rating == "positive") L.undoRating() else L.like(),
+                fontSize = 12.sp,
+                color = if (rating == "positive") T.Accent else T.Text3,
+                modifier = Modifier.clip(T.R8).clickable(onClick = onLike).padding(horizontal = 8.dp, vertical = 4.dp)
+                    .testTag("messageLike"),
+            )
+            Text(
+                if (rating == "negative") L.undoRating() else L.dislike(),
+                fontSize = 12.sp,
+                color = if (rating == "negative") T.Err else T.Text3,
+                modifier = Modifier.clip(T.R8).clickable {
+                    if (rating == "negative") Pocket.setMessageFeedback(messageId!!, null) else onDislike()
+                }.padding(horizontal = 8.dp, vertical = 4.dp).testTag("messageDislike"),
             )
         }
         if (clock == MessageClock.End && timeMs != null) {
@@ -505,20 +677,232 @@ private fun ApprovalCard(a: Approval) {
 }
 
 @Composable
-private fun Composer(placeholder: String, running: Boolean, perm: String, model: ModelChoice?, enabled: Boolean,
-                     onPlus: () -> Unit, onPerm: () -> Unit, onModel: () -> Unit, onSend: (String) -> Unit, onStop: () -> Unit) {
+private fun ImageBubble(sessionId: String, ref: ImageRef) {
+    var bitmap by remember(ref.attachmentId) { mutableStateOf<ImageBitmap?>(null) }
+    var failed by remember(ref.attachmentId) { mutableStateOf(false) }
+    var loading by remember(ref.attachmentId) { mutableStateOf(true) }
+    var attempt by remember(ref.attachmentId) { mutableIntStateOf(0) }
+    LaunchedEffect(ref.attachmentId, attempt) {
+        loading = true; failed = false; bitmap = null
+        val bytes = Pocket.loadAttachmentBytes(sessionId, ref.attachmentId)
+        if (bytes == null) { failed = true; loading = false; return@LaunchedEffect }
+        val bmp = BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+        if (bmp == null) { failed = true; loading = false; return@LaunchedEffect }
+        bitmap = bmp.asImageBitmap(); loading = false
+    }
+    Column(Modifier.padding(start = 56.dp).clip(T.R12).background(T.Fill).padding(8.dp), horizontalAlignment = Alignment.End) {
+        when {
+            loading -> Text(L.imageLoading(), fontSize = 13.sp, color = T.Text3)
+            failed -> Text(
+                L.imageLoadFailed(),
+                fontSize = 13.sp,
+                color = T.Err,
+                modifier = Modifier.clickable { attempt++ },
+            )
+            bitmap != null -> {
+                Image(bitmap!!, L.image(), Modifier.widthIn(max = 220.dp).heightIn(max = 220.dp), contentScale = ContentScale.Fit)
+                Text(L.viewOriginal(), fontSize = 12.sp, color = T.Accent, modifier = Modifier.padding(top = 4.dp))
+            }
+        }
+    }
+}
+
+@Composable
+private fun DeliverableCard(item: Item.Deliverable) {
+    Column(Modifier.fillMaxWidth().clip(T.R12).border(1.dp, T.Border, T.R12).padding(14.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(L.deliverablesTitle(), fontSize = 14.sp, fontWeight = FontWeight.Medium, color = T.Ink)
+            Spacer(Modifier.weight(1f))
+            Text(L.delivered(), fontSize = 12.sp, color = T.Ok)
+        }
+        item.files.forEach { f ->
+            Spacer(Modifier.height(8.dp))
+            Text(f.path.substringAfterLast('/'), style = T.Mono.copy(fontSize = 13.sp, color = T.Ink), maxLines = 1, overflow = TextOverflow.Ellipsis)
+            f.description?.takeIf { it.isNotBlank() }?.let {
+                Text(it, fontSize = 12.sp, color = T.Text3, maxLines = 2, overflow = TextOverflow.Ellipsis)
+            }
+        }
+    }
+}
+
+@Composable
+private fun ChangesCard(item: Item.Changes) {
+    val name = item.name
+    val title = when {
+        name != null -> L.editedName(name)
+        else -> L.editedCount(item.count.coerceAtLeast(0))
+    }
+    Row(
+        Modifier.fillMaxWidth().clip(T.R12).border(1.dp, T.Border, T.R12).padding(horizontal = 14.dp, vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(title, fontSize = 14.sp, color = T.Ink, modifier = Modifier.weight(1f))
+        Text("T${item.turn}", fontSize = 12.sp, color = T.Caption, style = T.Mono)
+    }
+}
+
+@Composable
+private fun UserQuestionCard(q: UserQuestion) {
+    var index by remember(q.questionId) { mutableIntStateOf(0) }
+    val item = q.questions.getOrElse(index) { q.questions.first() }
+    val isPlan = item.intentKind == "plan-review"
+    var selected by remember(q.questionId, item.id) { mutableStateOf(setOf<String>()) }
+    var custom by remember(q.questionId, item.id) { mutableStateOf("") }
+    var err by remember { mutableStateOf<String?>(null) }
+    fun submit(skip: Boolean = false) {
+        if (!skip && selected.isEmpty() && custom.isBlank()) {
+            err = L.selectOrCustom(); return
+        }
+        val answers = q.questions.mapIndexed { i, qi ->
+            buildJsonObject {
+                put("id", qi.id)
+                if (i == index) {
+                    putJsonArray("selected") { selected.forEach { add(JsonPrimitive(it)) } }
+                    if (custom.isNotBlank()) put("custom", custom)
+                } else {
+                    putJsonArray("selected") {}
+                }
+            }
+        }
+        Pocket.answerUserQuestion(q.callId ?: q.questionId, answers)
+    }
+    Column(Modifier.padding(horizontal = 14.dp, vertical = 6.dp).fillMaxWidth().clip(T.R16).border(1.dp, T.WarnBorder, T.R16)) {
+        Row(Modifier.fillMaxWidth().background(T.WarnTint).padding(horizontal = 18.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
+            Box(Modifier.size(7.dp).clip(CircleShape).background(T.WarnBorder)); Spacer(Modifier.width(8.dp))
+            Text(if (isPlan) L.planReview() else (item.header ?: "问题 ${index + 1}/${q.questions.size}"), fontSize = 14.sp, color = T.WarnText)
+        }
+        Column(Modifier.padding(18.dp)) {
+            Text(item.question, fontSize = 16.sp, color = T.Ink)
+            item.detail?.takeIf { it.isNotBlank() }?.let {
+                Spacer(Modifier.height(8.dp))
+                Text(it, fontSize = 13.sp, color = T.Text3)
+            }
+            Spacer(Modifier.height(12.dp))
+            item.options.forEach { opt ->
+                val rec = opt.label.contains("推荐") || opt.label.contains("recommended", ignoreCase = true)
+                val display = opt.label.replace(Regex("""\s*[（(](?:推荐|recommended)[)）]\s*$""", RegexOption.IGNORE_CASE), "")
+                val on = opt.label in selected
+                Row(
+                    Modifier.fillMaxWidth().clip(T.R8).border(1.dp, if (on) T.Accent else T.Border, T.R8)
+                        .clickable {
+                            selected = if (item.multiSelect) {
+                                if (on) selected - opt.label else selected + opt.label
+                            } else setOf(opt.label)
+                            err = null
+                        }.padding(12.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(display, fontSize = 15.sp, color = T.Ink, modifier = Modifier.weight(1f))
+                    if (rec) Text(L.recommended(), fontSize = 11.sp, color = T.Accent)
+                }
+                Spacer(Modifier.height(6.dp))
+            }
+            OutlinedTextField(
+                custom, { custom = it; err = null },
+                placeholder = { Text(L.typeYourAnswer()) },
+                shape = T.R12,
+                modifier = Modifier.fillMaxWidth(),
+            )
+            err?.let { Spacer(Modifier.height(6.dp)); Text(it, fontSize = 12.sp, color = T.Err) }
+            Spacer(Modifier.height(14.dp))
+            if (isPlan) {
+                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    OutlinedButton({
+                        val decline = item.options.firstOrNull { it.label != item.approveLabel }?.label
+                        selected = decline?.let { setOf(it) }.orEmpty(); submit()
+                    }, Modifier.weight(1f).height(48.dp), shape = T.R12, border = BorderStroke(1.dp, T.Border),
+                        colors = ButtonDefaults.outlinedButtonColors(contentColor = T.Ink)) { Text(L.declinePlan()) }
+                    Button({
+                        item.approveLabel?.let { selected = setOf(it) }; submit()
+                    }, Modifier.weight(1f).height(48.dp), shape = T.R12, colors = PrimaryColors()) { Text(L.approvePlan()) }
+                }
+                TextButton({ submit(skip = false); /* discuss = custom */ }, Modifier.fillMaxWidth()) {
+                    Text(L.requestChanges(), color = T.Text3)
+                }
+            } else {
+                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    OutlinedButton({ submit(skip = true) }, Modifier.weight(1f).height(48.dp), shape = T.R12,
+                        border = BorderStroke(1.dp, T.Border), colors = ButtonDefaults.outlinedButtonColors(contentColor = T.Ink)) {
+                        Text(L.skip())
+                    }
+                    if (index < q.questions.lastIndex) {
+                        Button({
+                            if (selected.isEmpty() && custom.isBlank()) { err = L.completeQuestionFirst(); return@Button }
+                            index++
+                        }, Modifier.weight(1f).height(48.dp), shape = T.R12, colors = PrimaryColors()) { Text(L.nextQuestion()) }
+                    } else {
+                        Button({ submit() }, Modifier.weight(1f).height(48.dp), shape = T.R12, colors = PrimaryColors()) { Text(L.nextQuestion()) }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun Composer(
+    placeholder: String,
+    running: Boolean,
+    perm: String,
+    model: ModelChoice?,
+    enabled: Boolean,
+    pendingImages: List<PromptImage> = emptyList(),
+    pendingFiles: List<PendingAttach> = emptyList(),
+    onPlus: () -> Unit,
+    onPerm: () -> Unit,
+    onModel: () -> Unit,
+    onRemoveImage: (Int) -> Unit = {},
+    onRemoveFile: (Int) -> Unit = {},
+    onRetryFile: (Int) -> Unit = {},
+    onSlash: () -> Unit = {},
+    onMention: () -> Unit = {},
+    onSend: (String) -> Unit,
+    onStop: () -> Unit,
+) {
     var text by remember { mutableStateOf("") }
+    val hasPending = pendingImages.isNotEmpty() || pendingFiles.isNotEmpty()
+    val filesReady = pendingFiles.none { it.status == AttachStatus.Uploading || it.status == AttachStatus.Failed || it.status == AttachStatus.Pending }
+    val sendLabel = composerSendLabel(running)
     Column(Modifier.padding(horizontal = 14.dp, vertical = 4.dp).fillMaxWidth().clip(T.R20).border(1.dp, T.Border, T.R20).padding(start = 16.dp, end = 10.dp, top = 14.dp, bottom = 10.dp)) {
+        if (hasPending) {
+            Text(L.pendingFiles(), fontSize = 12.sp, color = T.Text3)
+            Spacer(Modifier.height(6.dp))
+            pendingImages.forEachIndexed { i, img ->
+                Row(Modifier.fillMaxWidth().padding(bottom = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Text(img.name ?: L.image(), fontSize = 13.sp, color = T.Ink, modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Text(L.removeFile(img.name ?: L.image()), fontSize = 12.sp, color = T.Text3, modifier = Modifier.clickable { onRemoveImage(i) })
+                }
+            }
+            pendingFiles.forEachIndexed { i, f ->
+                Row(Modifier.fillMaxWidth().padding(bottom = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Text(f.name, fontSize = 13.sp, color = T.Ink, modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    when (f.status) {
+                        AttachStatus.Uploading, AttachStatus.Pending -> Text(L.uploading(), fontSize = 12.sp, color = T.Caption)
+                        AttachStatus.Failed -> Text(L.uploadFailed(), fontSize = 12.sp, color = T.Err, modifier = Modifier.clickable { onRetryFile(i) })
+                        AttachStatus.Ready -> Text(L.removeFile(f.name), fontSize = 12.sp, color = T.Text3, modifier = Modifier.clickable { onRemoveFile(i) })
+                    }
+                }
+            }
+            Spacer(Modifier.height(8.dp))
+        }
         Box {
             if (text.isEmpty()) Text(placeholder, fontSize = 16.sp, color = T.Caption, maxLines = 2, overflow = TextOverflow.Ellipsis)
-            BasicTextField(text, { text = it }, textStyle = MaterialTheme.typography.bodyLarge.copy(color = T.Ink), cursorBrush = SolidColor(T.Accent),
-                modifier = Modifier.fillMaxWidth().heightIn(max = 160.dp).testTag("composerInput"))
+            BasicTextField(
+                text,
+                {
+                    text = it
+                    if (it == "/") onSlash()
+                    if (it == "@" || it.endsWith(" @") || (it.startsWith("@") && !it.contains(' '))) onMention()
+                },
+                textStyle = MaterialTheme.typography.bodyLarge.copy(color = T.Ink),
+                cursorBrush = SolidColor(T.Accent),
+                modifier = Modifier.fillMaxWidth().heightIn(max = 160.dp).testTag("composerInput"),
+            )
         }
         Spacer(Modifier.height(12.dp))
         Row(verticalAlignment = Alignment.CenterVertically) {
-            Box(Modifier.size(32.dp).clip(CircleShape).background(T.Fill).clickable(onClick = onPlus), contentAlignment = Alignment.Center) { Icon(D.plus, "添加", tint = T.Ink, modifier = Modifier.size(18.dp)) }
+            Box(Modifier.size(32.dp).clip(CircleShape).background(T.Fill).clickable(onClick = onPlus), contentAlignment = Alignment.Center) { Icon(D.plus, L.sectionAdd(), tint = T.Ink, modifier = Modifier.size(18.dp)) }
             Spacer(Modifier.width(8.dp))
-            // Narrow phones: access mode collapses to its icon (the sheet shows the full label); the model keeps priority.
             BoxWithConstraints(Modifier.weight(1f)) {
                 val roomy = maxWidth >= 300.dp
                 Row(verticalAlignment = Alignment.CenterVertically) {
@@ -536,20 +920,14 @@ private fun Composer(placeholder: String, running: Boolean, perm: String, model:
                 }
             }
             Spacer(Modifier.width(8.dp))
-            // Desktop InputBar `.primary`: 34px circle, button-info-fill (#4176E6), white 16px glyph;
-            // stop uses the same fill. Disabled = 0.4 opacity via *color* alpha — not Modifier.alpha,
-            // which creates a graphics layer that some OEM GPUs (e.g. ColorOS) fail to composite
-            // after focus/IME, leaving a tappable but invisible control.
-            // Chrome stays light (Color.White); always use T.Accent so dark Material primary cannot wash out.
-            val canSend = enabled && text.isNotBlank()
+            val canSend = enabled && (text.isNotBlank() || (hasPending && filesReady && pendingFiles.none { it.status != AttachStatus.Ready } && (pendingImages.isNotEmpty() || pendingFiles.isNotEmpty())))
             val primaryFill = T.Accent.copy(alpha = if (canSend || running) 1f else 0.4f)
-            if (running && text.isBlank()) {
+            if (running && text.isBlank() && !hasPending) {
                 Box(
                     Modifier.size(34.dp).clip(CircleShape).background(primaryFill).clickable(onClick = onStop)
                         .semantics { contentDescription = "终止" },
                     contentAlignment = Alignment.Center,
                 ) {
-                    // svg rect x=3 y=3 w=10 h=10 rx=3 in 16×16 viewBox
                     Box(Modifier.size(10.dp).clip(RoundedCornerShape(3.dp)).background(Color.White))
                 }
             } else {
@@ -558,10 +936,12 @@ private fun Composer(placeholder: String, running: Boolean, perm: String, model:
                         .size(34.dp)
                         .clip(CircleShape)
                         .background(primaryFill)
-                        .clickable(enabled = canSend) { onSend(text.trim()); text = "" },
+                        .clickable(enabled = canSend) { onSend(text.trim()); text = "" }
+                        .semantics { contentDescription = sendLabel }
+                        .testTag("composerSend"),
                     contentAlignment = Alignment.Center,
                 ) {
-                    Icon(Icons.Rounded.ArrowUpward, "发送", tint = Color.White, modifier = Modifier.size(16.dp))
+                    Icon(Icons.Rounded.ArrowUpward, sendLabel, tint = Color.White, modifier = Modifier.size(16.dp))
                 }
             }
         }
