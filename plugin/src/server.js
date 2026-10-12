@@ -119,7 +119,9 @@ export function createPocketServer(opts) {
     },
     'approval.pending': () => ({ approvals: [...approvals.values()].map((p) => p.payload) }),
   }
-  const allOps = () => [...Object.keys(ops), ...Object.keys(deviceOps), 'follow', 'unfollow']
+  /** Ops contributed by optional in-process services (see index.js). */
+  const extraOps = {}
+  const allOps = () => [...Object.keys(ops), ...Object.keys(deviceOps), ...Object.keys(extraOps), 'follow', 'unfollow']
 
   wss.on('connection', (ws) => {
     const client = {
@@ -203,6 +205,7 @@ export function createPocketServer(opts) {
       let op
       if (Object.hasOwn(ops, msg.op)) op = ops[msg.op]
       else if (Object.hasOwn(deviceOps, msg.op)) op = deviceOps[msg.op]
+      else if (Object.hasOwn(extraOps, msg.op)) op = extraOps[msg.op]
       else if (Object.hasOwn(adminOps, msg.op)) {
         if (!client.device.owner) { fail('auth/forbidden', 'owner token required'); return }
         op = adminOps[msg.op]
@@ -259,6 +262,11 @@ export function createPocketServer(opts) {
 
   return {
     devices, pairing,
+    /** Register extra ops; returns a disposer. */
+    registerOps(table) {
+      Object.assign(extraOps, table)
+      return () => { for (const k of Object.keys(table)) if (extraOps[k] === table[k]) delete extraOps[k] }
+    },
     hasDevices: () => authedClients().length > 0,
     /**
      * Offer one approval to connected devices.

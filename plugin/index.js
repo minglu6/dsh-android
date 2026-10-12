@@ -5,6 +5,7 @@ import { createDeviceStore } from './src/devices.js'
 import { createPairing } from './src/pairing.js'
 import { createPocketServer } from './src/server.js'
 import { loadOrCreateToken } from './src/token.js'
+import { permissionOps, presetOps } from './src/extra-ops.js'
 import { registerPairRoute } from './src/web-route.js'
 
 export const name = 'dsh-plugin-pocket'
@@ -43,6 +44,8 @@ export function apply(ctx, config = {}) {
     log(`pairing code ${w.code} (valid ${Math.round(w.expiresInSec / 60)} min) — dshpocket://pair?h=${host}:${port}&c=${w.code}`)
     return { ...w, host, port }
   }
+  ctx.inject(['permissionPresets', 'agents'], (c) => { c.effect(() => server.registerOps(permissionOps(c.permissionPresets, c.agents))) })
+  ctx.inject(['agentPresets'], (c) => { c.effect(() => server.registerOps(presetOps(c.agentPresets))) })
   ctx.inject(['webServer'], (webCtx) => registerPairRoute(webCtx, { openPairing, devices, pairing }))
 
   ctx.effect(() => {

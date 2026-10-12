@@ -7,7 +7,7 @@
 | 目录 | 内容 |
 |---|---|
 | `plugin/` | `dsh-plugin-pocket`：装在电脑端 dsh 里的桥接插件，给手机提供带鉴权的 JSON/WebSocket 协议 |
-| `app/` | Android App（M2 开始） |
+| `app/` | Android App：`core/protocol`（纯 JVM 协议客户端与会话折叠）+ `app`（Compose 界面），见 [app/README.md](app/README.md) |
 | `docs/` | 设计文档 [design.md](docs/design.md)、dsh 接口笔记 [api-notes.md](docs/api-notes.md)、[界面设计稿](docs/mockups/)（示意图） |
 
 ## 安装桥接插件（电脑端）
@@ -28,6 +28,6 @@ dsh web
 
 - [x] M0：插件骨架。支持会话列表、新建、重命名，发消息（排队或引导），取消，订阅流，翻历史，模型列表和切换，心跳，token 鉴权
 - [x] M1：审批转发（手机和网页端谁先答算谁的）、设备配对（6 位码、按设备发 token、设备列表和撤销）、断点续订
-- [ ] M2：Android App（WebSocket 连接）
+- [x] M2：Android App（WebSocket 连接）。最新调试包：[dsh-android-debug.apk](https://github.com/minglu6/dsh-android/releases/download/dsh-android-latest/dsh-android-debug.apk)
 - [ ] M3：iroh P2P 和中继
 - [ ] M4：手机本地模式

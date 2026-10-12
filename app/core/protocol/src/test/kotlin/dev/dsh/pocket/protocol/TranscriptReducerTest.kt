@@ -1,0 +1,77 @@
+package dev.dsh.pocket.protocol
+
+import kotlin.test.*
+
+class TranscriptReducerTest {
+    private fun j(s: String) = PocketJson.parseToJsonElement(s)
+    private fun ev(seq: Int, type: String, data: String) = j("""{"type":"event","event":{"type":"$type","seq":$seq,"time":${1000 + seq},"data":$data}}""")
+
+    @Test fun foldsSnapshotAndEvents() {
+        val r = TranscriptReducer()
+        r.apply(j("""{"type":"snapshot","cursor":2,"hasMore":false,"header":{},"projections":{"values":{"title":"问候","tokenUsage":{"uncachedInputTokens":40,"cacheReadTokens":960,"outputTokens":10}}},
+            "records":[{"type":"event","event":{"type":"turn/start","seq":1,"time":1,"data":{}}},
+                       {"type":"event","event":{"type":"user/message","seq":2,"time":2,"data":{"id":"m","role":"user","content":[{"type":"text","text":"hi"}]}}}]}"""))
+        assertEquals("问候", r.title)
+        assertEquals(96, r.usage.cacheHitPercent)
+        assertTrue(r.running)
+        r.apply(ev(3, "assistant/message", """{"turn":1,"step":1,"stream":[{"type":"reasoning-chunks","time0":100,"index":0,"dt":[0,500,2500],"texts":["a","b","c"]}],
+            "message":{"content":[{"type":"reasoning","text":"think"},{"type":"text","text":"hello"},{"type":"tool-call","id":"c1","name":"bash","arguments":"{\"cmd\":\"ls\"}"}]}}"""))
+        r.apply(ev(4, "tool/call", """{"callId":"c1","name":"bash","arguments":"{\"cmd\":\"ls\"}"}"""))
+        r.apply(ev(5, "approval/asked", """{"id":"a","toolName":"bash","callId":"c1"}"""))
+        assertEquals(ToolStatus.AwaitingApproval, (r.items().last() as Item.Tool).status)
+        r.apply(ev(6, "approval/decided", """{"id":"a","outcome":"allowed-once"}"""))
+        r.apply(ev(7, "tool/result", """{"message":{"toolCallId":"c1","content":[{"type":"text","text":"a.txt"}]}}"""))
+        r.apply(ev(8, "turn/end", "{}"))
+        val items = r.items()
+        assertEquals(listOf("User", "Reasoning", "Text", "Tool"), items.map { it::class.simpleName })
+        assertEquals(3000L, (items[1] as Item.Reasoning).durationMs)
+        val tool = items[3] as Item.Tool
+        assertEquals(ToolStatus.Ok, tool.status); assertEquals("a.txt", tool.result)
+        assertFalse(r.running)
+        assertEquals(1, r.usage.turns); assertEquals(1, r.usage.steps)
+        // duplicate/old seq ignored
+        r.apply(ev(7, "user/message", """{"content":[{"type":"text","text":"dup"}]}"""))
+        assertEquals(4, r.items().size)
+    }
+
+    @Test fun liveStreamThenCommit() {
+        val r = TranscriptReducer()
+        r.apply(j("""{"type":"snapshot","cursor":0,"records":[],"hasMore":false,"projections":{}}"""))
+        r.apply(j("""{"type":"assistant-stream","frame":{"type":"start","attemptId":"x","revision":1,"startedAfterSeq":0,"turn":1,"step":1}}"""))
+        r.apply(j("""{"type":"assistant-stream","frame":{"type":"chunk","attemptId":"x","revision":1,"index":0,"time":5,"chunk":{"type":"reasoning-delta","index":0,"text":"hm"}}}"""))
+        r.apply(j("""{"type":"assistant-stream","frame":{"type":"chunk","attemptId":"x","revision":1,"index":1,"time":6,"chunk":{"type":"text-delta","index":1,"text":"Hel"}}}"""))
+        r.apply(j("""{"type":"assistant-stream","frame":{"type":"chunk","attemptId":"x","revision":1,"index":2,"time":7,"chunk":{"type":"text-delta","index":1,"text":"lo"}}}"""))
+        r.apply(j("""{"type":"assistant-stream","frame":{"type":"chunk","attemptId":"x","revision":1,"index":3,"time":8,"chunk":{"type":"tool-call-delta","index":2,"id":"c9","name":"read","argumentsDelta":"{\"p"}}}"""))
+        val live = r.items()
+        assertEquals("Hello", (live[1] as Item.Text).text); assertTrue((live[1] as Item.Text).live)
+        assertEquals("read", (live[2] as Item.Tool).name)
+        r.apply(ev(1, "assistant/message", """{"stream":[],"message":{"content":[{"type":"text","text":"Hello"}]}}"""))
+        assertEquals(listOf(false), r.items().map { (it as Item.Text).live })
+    }
+
+    @Test fun resumeAppends() {
+        val r = TranscriptReducer()
+        r.apply(j("""{"type":"snapshot","cursor":1,"records":[{"type":"event","event":{"type":"user/message","seq":1,"time":1,"data":{"content":[{"type":"text","text":"a"}]}}}],"projections":{}}"""))
+        r.apply(j("""{"type":"resume","afterSeq":1,"cursor":2,"records":[{"type":"event","event":{"type":"user/message","seq":2,"time":2,"data":{"content":[{"type":"text","text":"b"}]}}}],"projections":{}}"""))
+        assertEquals(listOf("a", "b"), r.items().map { (it as Item.User).text })
+    }
+
+    @Test fun hidesInjectedContextAndMarksToolErrors() {
+        val r = TranscriptReducer()
+        r.apply(j("""{"type":"snapshot","cursor":0,"records":[],"projections":{}}"""))
+        r.apply(ev(1, "user/message", """{"role":"user","source":{"kind":"user"},"content":[{"type":"text","text":"hi"}]}"""))
+        r.apply(ev(2, "user/message", """{"role":"user","source":{"kind":"runtime-context"},"content":[{"type":"text","text":"cwd"}]}"""))
+        r.apply(ev(3, "tool/call", """{"callId":"c","name":"bash","arguments":"{}"}"""))
+        r.apply(ev(4, "tool/result", """{"message":{"toolCallId":"c","isError":true,"content":[{"type":"text","text":"Error: rejected"}]}}"""))
+        r.apply(ev(5, "assistant/message", """{"usage":{"inputTokens":100,"cacheReadTokens":900,"outputTokens":5},"message":{"content":[]}}"""))
+        assertEquals(1, r.items().count { it is Item.User })
+        assertEquals(ToolStatus.Error, (r.items().last() as Item.Tool).status)
+        assertEquals(90, r.usage.cacheHitPercent)
+    }
+
+    @Test fun pairingLink() {
+        assertEquals(PairingLink("100.106.128.87", 7690, "482913"), PairingLink.parse("dshpocket://pair?h=100.106.128.87:7690&c=482913"))
+        assertEquals(PairingLink("::1", 7691, "000001"), PairingLink.parse("dshpocket://pair?h=[::1]:7691&c=000001"))
+        assertNull(PairingLink.parse("dshpocket://pair?h=x:1&c=12"))
+    }
+}
