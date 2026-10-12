@@ -1,0 +1,8 @@
+# dsh-android bridge. Config fields (all optional):
+#   host: 127.0.0.1    listen address (use your Tailscale IP for remote access)
+#   port: 7690
+#   token: <string>    fixed token; otherwise one is generated into $DSH_HOME/pocket/token
+#   dataDir: <path>
+- insert:
+    - id: dsh-pocket
+      name: dsh-plugin-pocket
