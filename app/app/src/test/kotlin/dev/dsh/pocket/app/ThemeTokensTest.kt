@@ -52,4 +52,32 @@ class ThemeTokensTest {
         assertEquals(DswColors.Dark.ButtonInfoFill, T.Accent)
         ThemeState.setDark(false)
     }
+
+    @Test fun connAliasesDesktopTokensNotTokyoNight() {
+        ThemeState.setDark(false)
+        assertEquals(T.Bg, Conn.Bg)
+        assertEquals(T.Surface, Conn.Surface)
+        assertEquals(T.Input, Conn.Elevated)
+        assertEquals(T.Ink, Conn.Fg)
+        assertEquals(T.Accent, Conn.Accent)
+        assertEquals(DswColors.Light.BgBase, Conn.Bg)
+        // Must not be the old Tokyo Night navy / purple-blue accents.
+        assertFalse(Conn.Bg == Color(0xFF1A1B26))
+        assertFalse(Conn.Accent == Color(0xFF7AA2F7))
+        ThemeState.setDark(true)
+        assertEquals(DswColors.Dark.BgBase, Conn.Bg)
+        assertEquals(DswColors.Dark.BgLayer1, Conn.Surface)
+        assertEquals(DswColors.Dark.ButtonInfoFill, Conn.Accent)
+        ThemeState.setDark(false)
+    }
+
+    @Test fun settingsCardTokensMatchCss() {
+        ThemeState.setDark(false)
+        assertEquals(DswColors.Light.SettingsCardFill, T.SettingsCard)
+        assertEquals(DswColors.Light.SettingsCardStroke, T.SettingsCardStroke)
+        assertEquals(DswColors.Light.SpecificloginInput, T.Input)
+        ThemeState.setDark(true)
+        assertEquals(DswColors.Dark.SettingsCardFill, T.SettingsCard)
+        ThemeState.setDark(false)
+    }
 }

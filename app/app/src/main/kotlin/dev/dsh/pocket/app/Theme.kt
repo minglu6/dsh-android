@@ -8,7 +8,6 @@ import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.SideEffect
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -94,6 +93,18 @@ object T {
     val CodeBlock get() = c.MarkdownCodeBlock
     /** `--dsw-alias-bg-document-preview` */
     val DocumentPreviewBg get() = c.BgDocumentPreview
+    /** `--dsw-alias-settings-card-fill` */
+    val SettingsCard get() = c.SettingsCardFill
+    /** `--dsw-alias-settings-card-stroke` */
+    val SettingsCardStroke get() = c.SettingsCardStroke
+    /** `--dsw-specific-login-input` / settings field fill */
+    val Input get() = c.SpecificloginInput
+    /** `--dsw-specific-input-major` */
+    val InputMajor get() = c.SpecificinputMajor
+    /** `--dsw-alias-border-l4` (hairlines inside settings cards) */
+    val BorderStrong get() = c.BorderL4
+    /** `--dsw-alias-bg-layer-3` */
+    val Surface3 get() = c.BgLayer3
 
     // `--dsw-radius-*` / panel from base.css
     val R4 = RoundedCornerShape(4.dp)
@@ -104,7 +115,7 @@ object T {
     val R28 = RoundedCornerShape(28.dp)
     val Sheet = RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp)
 
-    /** Meslo Nerd Font — same code face as desktop / terminal (Tokyo Night blocks). */
+    /** Meslo Nerd Font — same code face as desktop / terminal. */
     val Mono get() = TextStyle(fontFamily = MesloNerdFamily, fontSize = 13.sp, color = Ink)
 }
 
@@ -116,27 +127,28 @@ fun resolveDarkAppearance(appearance: Appearance, systemDark: Boolean): Boolean 
 }
 
 /**
- * Tokyo Night chrome for the phone connection / pairing surface
- * (settings-style list rows, address sheets). Meslo via [T.Mono] / [Conn.Mono].
+ * Connection / pairing chrome — aliases of desktop `--dsw-alias-*` via [T] / [ThemeState].
+ * Kept as a named surface so Screens/Sheets call sites stay readable; never a separate palette.
  */
 object Conn {
-    val Bg = TokyoNight.Bg
-    val Surface = Color(0xFF24283B)
-    val Elevated = Color(0xFF1F2335)
-    val Fg = TokyoNight.Fg
-    val FgDim = Color(0xFFA9B1D6)
-    val FgMute = Color(0xFF565F89)
-    val Accent = Color(0xFF7AA2F7)
-    val Border = Color(0xFF414868)
-    val TabIdle = Color(0xFF1F2335)
-    val Ok = Color(0xFF9ECE6A)
-    val Err = Color(0xFFF7768E)
-    val Warn = Color(0xFFE0AF68)
-    val Scrim = Color(0x99000000)
-    val Mono = TextStyle(fontFamily = MesloNerdFamily, fontSize = 13.sp, color = FgDim)
-    val R12 = RoundedCornerShape(12.dp)
-    val R16 = RoundedCornerShape(16.dp)
-    val Sheet = RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp)
+    val Bg get() = T.Bg
+    val Surface get() = T.Surface
+    /** Field / elevated inset — `--dsw-specific-login-input`. */
+    val Elevated get() = T.Input
+    val Fg get() = T.Ink
+    val FgDim get() = T.Text2
+    val FgMute get() = T.Text3
+    val Accent get() = T.Accent
+    val Border get() = T.Border
+    val TabIdle get() = T.Fill2
+    val Ok get() = T.Ok
+    val Err get() = T.Err
+    val Warn get() = T.WarnText
+    val Scrim get() = T.Scrim
+    val Mono get() = T.Mono.copy(color = FgDim)
+    val R12 get() = T.R12
+    val R16 get() = T.R16
+    val Sheet get() = T.Sheet
 }
 
 @Composable
