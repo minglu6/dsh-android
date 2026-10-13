@@ -42,7 +42,7 @@ test('manage API advertises host:port pairing only', () => {
     revokeDevice: () => false,
   }
   const api = createManageApi({
-    host: '100.64.1.2',
+    getNetworks: () => [{ type: 'tailscale', host: '100.64.1.2' }],
     port: 7690,
     devices,
     pairing,
@@ -80,7 +80,7 @@ test('openPairing does not require iroh nodeId', () => {
     close: () => { window = null },
   }
   const api = createManageApi({
-    host: '100.64.1.2',
+    getNetworks: () => [{ type: 'tailscale', host: '100.64.1.2' }],
     port: 7690,
     devices: { list: () => [] },
     pairing,

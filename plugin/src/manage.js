@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { isTailscaleHost } from './advertise-host.js'
+import { selectNetwork } from './advertise-host.js'
 import { normalizeTransport } from './transport-pref.js'
 
 const PKG = JSON.parse(readFileSync(join(dirname(fileURLToPath(import.meta.url)), '..', 'package.json'), 'utf8'))
@@ -31,18 +31,9 @@ export function pairingString({ code, host, port, transport }) {
 }
 
 /**
- * Report how phones reach this host:port — Tailscale CGNAT/MagicDNS vs LAN/other.
- * @param {string} host
- * @returns {'tailscale'|'lan'}
- */
-export function connectionTypeForHost(host) {
-  return isTailscaleHost(host) ? 'tailscale' : 'lan'
-}
-
-/**
  * Facade used by management HTTP routes and the client half.
  * @param {{
- *   host: string,
+ *   getNetworks: () => Array<{type: 'lan'|'tailscale', host: string}>,
  *   port: number,
  *   devices: any,
  *   pairing: any,
@@ -53,7 +44,7 @@ export function connectionTypeForHost(host) {
  * }} opts
  */
 export function createManageApi({
-  host, port, devices, pairing, server, openPairing, getTransport, setTransport,
+  getNetworks, port, devices, pairing, server, openPairing, getTransport, setTransport,
   instanceId, getDiagnostics, getMdns,
 }) {
   const transport = () => getTransport()
@@ -61,7 +52,13 @@ export function createManageApi({
     const online = server.onlineDeviceIds()
     return devices.list().map((d) => ({ ...d, online: online.has(d.id) }))
   }
-  const enrichPairing = (status) => {
+  const listenPort = () => {
+    const address = server.address()
+    return address && typeof address === 'object' ? address.port : port
+  }
+  const enrichPairing = (status, selected, selectedPort) => {
+    if (!selected) return { open: false }
+    const { host } = selected
     const code = status?.code
     if (!code) return status?.open ? status : { open: false }
     const mode = transport()
@@ -71,18 +68,23 @@ export function createManageApi({
       code,
       transport: mode,
       host,
-      port,
-      uri: pairingUri({ code, host, port, transport: mode }),
-      pairingString: pairingString({ code, host, port, transport: mode }),
+      port: selectedPort,
+      uri: pairingUri({ code, host, port: selectedPort, transport: mode }),
+      pairingString: pairingString({ code, host, port: selectedPort, transport: mode }),
     }
   }
   return {
-    openPairing: () => {
-      openPairing()
-      return enrichPairing(pairing.status())
+    openPairing: (network) => {
+      const selected = selectNetwork(getNetworks(), network)
+      if (!selected || server.address() === null) {
+        throw Object.assign(new Error('No reachable network is available for pairing'), { statusCode: 503 })
+      }
+      const port = listenPort()
+      openPairing({ ...selected, port })
+      return enrichPairing(pairing.status(), selected, port)
     },
     closePairing: () => { pairing.close(); return { open: false } },
-    pairingStatus: () => enrichPairing(pairing.status()),
+    pairingStatus: (network) => enrichPairing(pairing.status(), selectNetwork(getNetworks(), network), listenPort()),
     listDevices: withOnline,
     revokeDevice: (id) => server.revokeDevice(id),
     renameDevice: (id, name) => devices.rename(id, name),
@@ -94,27 +96,29 @@ export function createManageApi({
       if (typeof getDiagnostics !== 'function') throw new Error('diagnostics unavailable')
       return getDiagnostics()
     },
-    getStatus: () => {
+    getStatus: (network) => {
+      const networks = getNetworks()
+      const selected = selectNetwork(networks, network)
       const addr = server.address()
       const listening = addr !== null
-      const listenHost = listening && typeof addr === 'object' ? addr.address : host
-      const listenPort = listening && typeof addr === 'object' ? addr.port : port
+      const listenHost = listening && typeof addr === 'object' ? addr.address : ''
+      const port = listenPort()
       const mode = transport()
       return {
         running: listening,
         version: PKG.version,
         plugin: PKG.name,
         transport: mode,
-        host,
-        port: listenPort,
+        networks,
+        host: selected?.host ?? '',
+        port,
         instanceId: typeof instanceId === 'string' ? instanceId : undefined,
         mdns: typeof getMdns === 'function' ? Boolean(getMdns()) : false,
-        /** Phone path: `tailscale` | `lan` from the advertised pairing host. */
-        connectionType: connectionTypeForHost(host),
+        connectionType: selected?.type ?? null,
         listen: listening
-          ? [{ host: listenHost, port: listenPort, address: typeof addr === 'string' ? addr : `${listenHost}:${listenPort}` }]
+          ? [{ host: listenHost, port, address: typeof addr === 'string' ? addr : `${listenHost}:${port}` }]
           : [],
-        pairing: enrichPairing(pairing.status()),
+        pairing: enrichPairing(pairing.status(), selected, port),
         devices: withOnline(),
       }
     },

@@ -1,75 +1,64 @@
 package dev.dsh.pocket.app
 
+import androidx.compose.runtime.*
+import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.createComposeRule
-import androidx.compose.ui.test.onNodeWithText
-import androidx.compose.ui.test.performClick
 import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
+import org.robolectric.RuntimeEnvironment
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
-import kotlin.test.assertFalse
-import kotlin.test.assertTrue
 
-/** Regression: Panel row taps must navigate without clearing the sheet via onDismiss. */
 @RunWith(RobolectricTestRunner::class)
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
 @Config(sdk = [34], qualifiers = "w412dp-h915dp-xxhdpi")
 class PanelSheetTest {
     @get:Rule val rule = createComposeRule()
 
-    @Before fun ops() {
-        Pocket.ops.value = setOf("files.list", "terminal.create", "jobs.list")
+    @Before fun state() {
+        Pocket.init(RuntimeEnvironment.getApplication())
+        Pocket.prefs.appearance = Appearance.Light
+        Pocket.ops.value = setOf("files.list", "terminal.create", "terminal.follow", "jobs.list")
     }
 
-    @Test fun panelRowsNavigateWithoutDismiss() {
-        var files = false
-        var terminal = false
-        var jobs = false
-        var dismissed = false
+    @Test fun filePageReturnsToGuideWithoutClosingPanel() {
         rule.setContent {
             PocketTheme {
-                PanelSheet(
-                    cwd = "/tmp/ws",
-                    onDismiss = { dismissed = true },
-                    onFiles = { files = true },
-                    onTerminal = { terminal = true },
-                    onJobs = { jobs = true },
-                )
+                var page by remember { mutableStateOf("guide") }
+                when (page) {
+                    "guide" -> PanelSheet(onDismiss = { page = "closed" }, onFiles = { page = "files" }, onTerminal = {})
+                    "files" -> FilesSheet("no-connection", onDismiss = { page = "closed" }, onBack = { page = "guide" })
+                }
             }
         }
-        rule.mainClock.advanceTimeBy(1500)
-        rule.waitForIdle()
-
         rule.onNodeWithText("工作区文件").performClick()
-        rule.waitForIdle()
-        assertTrue(files)
-        assertFalse(dismissed)
-
-        dismissed = false
-        rule.onNodeWithText("终端").performClick()
-        rule.waitForIdle()
-        assertTrue(terminal)
-        assertFalse(dismissed)
-
-        dismissed = false
-        rule.onNodeWithText("后台任务").performClick()
-        rule.waitForIdle()
-        assertTrue(jobs)
-        assertFalse(dismissed)
+        rule.onNodeWithContentDescription("返回").assertIsDisplayed().performClick()
+        rule.onNodeWithText("终端").assertIsDisplayed()
+        rule.onNodeWithContentDescription("收起右侧边栏").performClick()
+        rule.onNodeWithTag("rightPanel").assertDoesNotExist()
     }
 
-    @Test fun panelEmptyStateWhenOpsMissing() {
-        Pocket.ops.value = emptySet()
+    @Test fun capabilitiesUpdateWhileGuideIsOpen() {
+        Pocket.ops.value = setOf("terminal.create", "jobs.list")
+        rule.setContent { PocketTheme { PanelSheet(onDismiss = {}, onFiles = {}, onTerminal = {}) } }
+        rule.onNodeWithText("终端").assertDoesNotExist()
+        rule.onNodeWithText("后台任务").assertDoesNotExist()
+        rule.runOnIdle { Pocket.ops.value = setOf("files.list", "terminal.create", "terminal.follow") }
+        rule.onNodeWithText("工作区文件").assertIsEnabled()
+        rule.onNodeWithText("终端").assertIsEnabled()
+        rule.runOnIdle { Pocket.ops.value = emptySet() }
+        rule.onNodeWithText("工作区文件").assertDoesNotExist()
+        rule.onNodeWithText("终端").assertDoesNotExist()
+    }
+
+    @Test fun guideCannotOpenSessionToolsWithoutSession() {
         rule.setContent {
-            PocketTheme {
-                PanelSheet(cwd = "/tmp/ws", onDismiss = {}, onFiles = {}, onTerminal = {}, onJobs = {})
-            }
+            PocketTheme { PanelSheet(hasSession = false, onDismiss = {}, onFiles = {}, onTerminal = {}) }
         }
-        rule.mainClock.advanceTimeBy(1500)
-        rule.waitForIdle()
-        rule.onNodeWithText("当前连接未提供面板").assertExists()
+        rule.onNodeWithText("工作区文件").assertIsNotEnabled()
+        rule.onNodeWithText("终端").assertIsNotEnabled()
     }
 }

@@ -73,6 +73,30 @@ async function authed() {
   return c
 }
 
+test('permission catalog invalidation reaches only authenticated clients', async () => {
+  const authenticated = await authed()
+  const pending = connect()
+  await pending.open
+  const pendingEvents = []
+  pending.ws.on('message', (data) => {
+    const frame = JSON.parse(data.toString())
+    if (frame.ev) pendingEvents.push(frame)
+  })
+  server.broadcastPermissionCatalogChanged()
+  assert.deepEqual(await authenticated.next((frame) => frame.ev === 'permission-presets/catalog-changed'), {
+    ev: 'permission-presets/catalog-changed',
+  })
+  // The hello response is a wire-order barrier after the earlier broadcast.
+  assert.equal((await pending.call('hello', { proto: 1, token: TOKEN })).ok, true)
+  assert.deepEqual(pendingEvents, [])
+  server.broadcastPermissionCatalogChanged()
+  assert.deepEqual(await pending.next((frame) => frame.ev === 'permission-presets/catalog-changed'), {
+    ev: 'permission-presets/catalog-changed',
+  })
+  authenticated.ws.close()
+  pending.ws.close()
+})
+
 test('rejects bad token and closes 4401', async () => {
   const c = connect(); await c.open
   const r = await c.call('hello', { proto: 1, token: 'nope' })

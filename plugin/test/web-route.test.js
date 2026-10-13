@@ -45,15 +45,18 @@ test('management routes: status, pair, rename, revoke, Origin fence', async (t) 
       list: async () => ({ items: [] }),
       follow: () => (async function* () {})(),
     },
-    token: OWNER, port: 0, devices, pairing, pairFailDelayMs: 1,
+    token: OWNER, host: '0.0.0.0', port: 0, devices, pairing, pairFailDelayMs: 1,
   })
   const addr = await server.listen()
   t.after(() => server.close())
-  const host = '127.0.0.1'
+  let networks = [
+    { type: 'lan', host: '192.168.1.5' },
+    { type: 'tailscale', host: '100.64.1.2' },
+  ]
   const port = Number(String(addr).split(':').pop())
   const openPairing = () => pairing.open()
   const manage = createManageApi({
-    host, port, devices, pairing, server, openPairing,
+    getNetworks: () => networks, port, devices, pairing, server, openPairing,
     getTransport: () => 'tailscale',
     instanceId: 'a'.repeat(64),
     getMdns: () => false,
@@ -95,9 +98,9 @@ test('management routes: status, pair, rename, revoke, Origin fence', async (t) 
   assert.equal(st.running, true)
   assert.equal(st.version, '0.1.0')
   assert.ok(Array.isArray(st.listen))
-  // Advertise host is loopback in this test → LAN (not Tailscale CGNAT).
   assert.equal(st.connectionType, 'lan')
-  assert.equal(st.host, '127.0.0.1')
+  assert.equal(st.host, '192.168.1.5')
+  assert.deepEqual(st.networks, networks)
   // Legacy iroh path reports must not affect /pocket/status connectionType.
   server.noteIrohPath?.('peer-status', 'relay')
   const st2 = await (await fetch(`${base}/pocket/status`)).json()
@@ -117,6 +120,49 @@ test('management routes: status, pair, rename, revoke, Origin fence', async (t) 
   assert.equal(get.open, true)
   assert.equal(get.code, pr.code)
   assert.equal(get.pairingString, pr.pairingString)
+
+  // Selection changes only this response, not the pairing window or WS listener.
+  const selected = await (await fetch(`${base}/pocket/status?network=tailscale`)).json()
+  assert.equal(selected.host, '100.64.1.2')
+  assert.equal(selected.connectionType, 'tailscale')
+  assert.equal(selected.pairing.host, selected.host)
+  assert.equal(selected.pairing.code, pr.code)
+  assert.equal(new URL(selected.pairing.uri).searchParams.get('h'), `100.64.1.2:${port}`)
+  const tsPair = await (await fetch(`${base}/pocket/pair?network=tailscale`)).json()
+  assert.equal(tsPair.uri, selected.pairing.uri)
+  const openedTs = await (await fetch(`${base}/pocket/pair?network=tailscale`, { method: 'POST' })).json()
+  assert.equal(openedTs.host, '100.64.1.2')
+  assert.equal(new URL(openedTs.uri).searchParams.get('h'), `100.64.1.2:${port}`)
+  assert.equal(openedTs.pairingString, openedTs.uri)
+  const defaultStatus = await (await fetch(`${base}/pocket/status`)).json()
+  assert.equal(defaultStatus.connectionType, 'lan')
+  assert.equal(defaultStatus.pairing.code, openedTs.code)
+  assert.equal(defaultStatus.pairing.host, defaultStatus.host)
+  assert.equal(new URL(defaultStatus.pairing.uri).searchParams.get('h'), `192.168.1.5:${port}`)
+  assert.deepEqual(defaultStatus.listen, st.listen)
+
+  networks = [networks[0]]
+  for (const [path, method] of [['status', 'GET'], ['pair', 'GET'], ['pair', 'POST']]) {
+    const unavailable = await fetch(`${base}/pocket/${path}?network=tailscale`, { method })
+    assert.equal(unavailable.status, 503)
+    assert.match((await unavailable.json()).error, /tailscale.*unavailable/)
+    const invalid = await fetch(`${base}/pocket/${path}?network=unknown`, { method })
+    assert.equal(invalid.status, 400)
+    assert.match((await invalid.json()).error, /network must be/)
+  }
+  assert.equal(pairing.status().code, openedTs.code)
+  const lanOnly = await (await fetch(`${base}/pocket/pair?network=lan`, { method: 'POST' })).json()
+  assert.equal(lanOnly.host, '192.168.1.5')
+  assert.ok(lanOnly.uri)
+
+  networks = []
+  const offline = await (await fetch(`${base}/pocket/status`)).json()
+  assert.deepEqual(offline.networks, [])
+  assert.equal(offline.host, '')
+  assert.equal(offline.connectionType, null)
+  assert.deepEqual(offline.pairing, { open: false })
+  assert.equal((await fetch(`${base}/pocket/pair`, { method: 'POST' })).status, 503)
+  assert.equal(pairing.status().code, lanOnly.code)
 
   const { deviceId } = devices.add('Phone A')
   const renamed = await (await fetch(`${base}/pocket/devices`, {

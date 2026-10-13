@@ -6,3 +6,7 @@ build/
 .tools/
 plugin/iroh/target/
 app/app/src/main/jniLibs/
+.codegraph/
+.vscode/
+.kotlin/
+/app/core/protocol/bin/

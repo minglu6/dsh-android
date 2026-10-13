@@ -5,6 +5,7 @@ import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
@@ -53,6 +54,22 @@ class DrawerSidebarParityTest {
         rule.onNodeWithTag("drawerHeader:搜索").assertIsDisplayed()
         rule.onNodeWithTag("drawerHeader:视图选项").assertIsDisplayed()
         rule.onNodeWithTag("drawerHeader:添加工作区").assertIsDisplayed()
+    }
+
+    @Test
+    @Config(qualifiers = "w360dp-h792dp-xxhdpi")
+    fun connectionIdentityFitsToTheRightOfSettings() {
+        Pocket.profiles.value = listOf(Profile("p1", "Mac mini with a long remote name", host = "100.106.128.87", port = 7690))
+        rule.setContent { PocketTheme { SessionDrawer({}, {}, {}, {}) } }
+        rule.waitForIdle()
+        val footer = rule.onNodeWithTag("drawerFooter").fetchSemanticsNode().boundsInRoot
+        val settings = rule.onNodeWithTag("drawerSettings").assertIsDisplayed().fetchSemanticsNode().boundsInRoot
+        val connection = rule.onNodeWithTag("drawerConnection").assertIsDisplayed().fetchSemanticsNode().boundsInRoot
+        val address = rule.onNodeWithText("100.106.128.87:7690", useUnmergedTree = true).assertIsDisplayed().fetchSemanticsNode().boundsInRoot
+        assertTrue(connection.left >= settings.right)
+        assertTrue(connection.right <= footer.right)
+        assertTrue(address.left >= connection.left && address.right <= connection.right)
+        assertTrue(kotlin.math.abs(settings.center.y - connection.center.y) < 1f)
     }
 
     @Test

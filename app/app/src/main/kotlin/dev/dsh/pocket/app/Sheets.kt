@@ -166,31 +166,6 @@ fun ModelSheet(catalog: ModelCatalog?, cur: ModelChoice?, onDismiss: () -> Unit,
     }
 }
 
-@Composable
-fun PermissionSheet(cur: String, onDismiss: () -> Unit, onPick: (String) -> Unit) {
-    val supported = "permissions.set" in Pocket.ops.value
-    PocketSheet(onDismiss) {
-        SheetTitle("访问模式")
-        PERMISSION_LABEL.forEach { (id, l) -> OptionRow(l.first, l.second, D.permission(id), selected = cur == id, enabled = supported || Pocket.chat.value == null) { onPick(id) } }
-    }
-}
-
-@Composable
-fun FullAccessSheet(onDismiss: () -> Unit, onConfirm: () -> Unit) {
-    var ack by remember { mutableStateOf(false) }
-    PocketSheet(onDismiss) {
-        Box(Modifier.padding(horizontal = 22.dp).size(44.dp).clip(CircleShape).background(T.WarnTint), contentAlignment = Alignment.Center) { Icon(D.warning, null, tint = T.WarnText) }
-        Spacer(Modifier.height(12.dp)); SheetTitle("启用完全权限？")
-        Text("智能体将不受限制地读写文件系统、执行任意命令并访问网络，可能造成不可逆的改动。", fontSize = 14.sp, color = T.Text2, lineHeight = 22.sp, modifier = Modifier.padding(horizontal = 22.dp))
-        Row(Modifier.padding(horizontal = 12.dp, vertical = 10.dp).clip(T.R8).clickable { ack = !ack }.padding(10.dp), verticalAlignment = Alignment.CenterVertically) {
-            Checkbox(ack, { ack = it }, colors = CheckboxDefaults.colors(checkedColor = T.Ink)); Text("我已了解风险，并愿意继续", fontSize = 14.sp)
-        }
-        Row(Modifier.padding(horizontal = 22.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-            OutlinedButton(onDismiss, Modifier.weight(1f).height(50.dp), shape = T.R12, border = BorderStroke(1.dp, T.Border), colors = ButtonDefaults.outlinedButtonColors(contentColor = T.Ink)) { Text("取消") }
-            Button(onConfirm, Modifier.weight(1f).height(50.dp), enabled = ack, shape = T.R12, colors = PrimaryColors()) { Text("启用完全权限") }
-        }
-    }
-}
 
 @Composable
 fun PresetSheet(cur: String, editable: Boolean, onDismiss: () -> Unit, onPick: (String) -> Unit) {
@@ -324,38 +299,6 @@ fun FeedbackSheet(onDismiss: () -> Unit) {
 
 @Composable private fun Stat(k: String, v: String) = Column { Text(v, fontSize = 17.sp, fontWeight = FontWeight.Medium); Text(k, fontSize = 12.sp, color = T.Text3) }
 
-@Composable
-fun PanelSheet(
-    cwd: String?,
-    todos: List<dev.dsh.pocket.protocol.TodoItem> = emptyList(),
-    onDismiss: () -> Unit,
-    onFiles: () -> Unit,
-    onTerminal: () -> Unit,
-    onJobs: () -> Unit,
-    onTodo: () -> Unit = {},
-) {
-    val files = "files.list" in Pocket.ops.value
-    val terminal = "terminal.create" in Pocket.ops.value
-    val jobs = "jobs.list" in Pocket.ops.value
-    val hasTodo = todos.isNotEmpty()
-    PocketSheet(onDismiss) {
-        SheetTitle("右侧边栏")
-        cwd?.let { Text(it, style = T.Mono.copy(color = T.Text3), modifier = Modifier.padding(horizontal = 22.dp, vertical = 4.dp)) }
-        SectionLabel("开始")
-        // Navigate by replacing Sheet.Panel — do not call onDismiss() (that would clear to Sheet.None).
-        if (files) OptionRow("工作区文件", "浏览会话工作区的文件", D.folderOpen) { onFiles() }
-        if (terminal) OptionRow("终端", "在会话工作区运行命令", D.terminal) { onTerminal() }
-        if (jobs) OptionRow("后台任务", "查看后台任务", D.clock) { onJobs() }
-        // Desktop conversation.todo.title = 任务
-        if (hasTodo) {
-            val done = todos.count { it.status == "completed" }
-            OptionRow("任务", "$done/${todos.size} 已完成", D.plan) { onTodo() }
-        }
-        if (!files && !terminal && !jobs && !hasTodo) {
-            Text("当前连接未提供面板", fontSize = 13.sp, color = T.Caption, modifier = Modifier.padding(horizontal = 22.dp, vertical = 10.dp))
-        }
-    }
-}
 
 /** Desktop TodoPanel — locale `todo.title` / status / progress. */
 @Composable
@@ -402,90 +345,6 @@ fun TodoSheet(todos: List<dev.dsh.pocket.protocol.TodoItem>, onDismiss: () -> Un
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-fun TerminalSheet(sessionId: String, onDismiss: () -> Unit) {
-    val revision by Pocket.terminalRevision.collectAsState()
-    val meta by Pocket.terminalMeta.collectAsState()
-    val dismiss = {
-        Pocket.closeTerminalFollow()
-        onDismiss()
-    }
-    LaunchedEffect(sessionId) { Pocket.openTerminal(sessionId) }
-    // Same themed sheet chrome as PocketSheet, but no outer verticalScroll — the grid is fixed.
-    ModalBottomSheet(
-        onDismissRequest = dismiss,
-        sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
-        shape = T.Sheet,
-        containerColor = T.Surface,
-        scrimColor = T.Scrim,
-        tonalElevation = 0.dp,
-        properties = ModalBottomSheetProperties(securePolicy = SecureFlagPolicy.SecureOff),
-        dragHandle = { Box(Modifier.padding(top = 10.dp, bottom = 14.dp).size(40.dp, 4.dp).clip(CircleShape).background(T.Border)) },
-    ) {
-        Column(Modifier.fillMaxWidth().navigationBarsPadding().padding(bottom = 24.dp)) {
-            Row(Modifier.padding(horizontal = 22.dp), verticalAlignment = Alignment.CenterVertically) {
-                Text(meta?.title ?: "终端", fontSize = 18.sp, fontWeight = FontWeight.SemiBold, color = T.Ink)
-                Spacer(Modifier.weight(1f))
-                meta?.state?.let { Text(it, fontSize = 12.sp, color = T.Text3) }
-            }
-            TerminalView(
-                terminal = Pocket.terminal,
-                revision = revision,
-                modifier = Modifier.padding(horizontal = 22.dp, vertical = 10.dp),
-                onResize = { cols, rows -> Pocket.resizeTerminal(cols, rows) },
-                onInput = { Pocket.writeTerminal(it) },
-            )
-        }
-    }
-}
-
-@Composable
-fun FilesSheet(sessionId: String, onDismiss: () -> Unit) {
-    var path by remember { mutableStateOf(".") }
-    var entries by remember { mutableStateOf<List<Pair<String, String>>>(emptyList()) }
-    var err by remember { mutableStateOf<String?>(null) }
-    var previewPath by remember { mutableStateOf<String?>(null) }
-    val scope = rememberCoroutineScope()
-    fun load(p: String) {
-        scope.launch {
-            runCatching {
-                val r = Pocket.listFiles(sessionId, p)
-                path = r["path"].str() ?: p
-                entries = r["entries"].arr().orEmpty().mapNotNull { e ->
-                    val name = e["name"].str() ?: return@mapNotNull null
-                    val type = e["type"].str() ?: "file"
-                    name to type
-                }
-                err = null
-            }.onFailure { err = it.message }
-        }
-    }
-    LaunchedEffect(sessionId) { load(".") }
-    if (previewPath != null) {
-        FilePreviewSheet(sessionId, previewPath!!, onDismiss = { previewPath = null })
-        return
-    }
-    PocketSheet(onDismiss) {
-        SheetTitle("工作区文件")
-        SelectableOutput {
-            Text(path, style = T.Mono.copy(color = T.Text3), modifier = Modifier.padding(horizontal = 22.dp, vertical = 4.dp))
-        }
-        err?.let { SelectableOutput { Text(it, color = T.Err, fontSize = 13.sp, modifier = Modifier.padding(22.dp)) } }
-        if (path != "." && path != "/") {
-            OptionRow("..", icon = D.folderOpen) {
-                val parent = path.trimEnd('/').substringBeforeLast('/', ".")
-                load(if (parent.isEmpty()) "." else parent)
-            }
-        }
-        entries.forEach { (name, type) ->
-            val child = if (path == "." || path.isEmpty()) name else "${path.trimEnd('/')}/$name"
-            OptionRow(name, type, if (type == "directory") D.folderOpen else D.document) {
-                if (type == "directory") load(child) else previewPath = child
-            }
-        }
-    }
-}
 
 @Composable
 fun JobsSheet(sessionId: String, onDismiss: () -> Unit) {

@@ -20,10 +20,10 @@ import {
   modelsSettingsOps, pluginsOps, pluginSettingsOps, pluginInventoryOps, scheduleOps, credentialsOps,
 } from './src/settings-ops.js'
 import { registerPairRoute } from './src/web-route.js'
-import { createManageApi, pairingUri, pairingString, connectionTypeForHost } from './src/manage.js'
+import { createManageApi, pairingString } from './src/manage.js'
 import { startIrohSidecar } from './src/iroh.js'
 import { loadTransport, saveTransport, normalizeTransport } from './src/transport-pref.js'
-import { pickAdvertiseHost, pickBindHost } from './src/advertise-host.js'
+import { listAdvertiseNetworks, pickBindHost, selectNetwork } from './src/advertise-host.js'
 import { loadOrCreateInstanceId } from './src/instance-id.js'
 import { startMdnsAdvertise } from './src/mdns-advertise.js'
 import { collectConnectionDiagnostics } from './src/diagnostics.js'
@@ -54,23 +54,35 @@ export function apply(ctx, config = {}) {
   const configLocksTransport = Boolean(normalizeTransport(config.transport))
 
   const port = config.port ?? 7690
-  const advertiseHost = pickAdvertiseHost(config.host)
   const bindHost = pickBindHost(config.host)
   const instanceId = loadOrCreateInstanceId(dataDir)
   /** @type {{ stop: () => Promise<void>, deviceName: string } | null} */
   let mdns = null
-  const buildDiagnostics = () => collectConnectionDiagnostics({
-    version: PKG.version,
-    plugin: PKG.name,
-    transport: remoteTransport,
-    host: advertiseHost,
-    port,
-    instanceId,
-    connectionType: connectionTypeForHost(advertiseHost),
-    running: server.address() !== null,
-    mdns: mdns !== null,
-    deviceName: mdns?.deviceName,
-  })
+  const getNetworks = () => {
+    const address = server.address()
+    return address && typeof address === 'object'
+      ? listAdvertiseNetworks(config.host, address.address)
+      : []
+  }
+  const buildDiagnostics = () => {
+    const selected = selectNetwork(getNetworks())
+    const address = server.address()
+    return collectConnectionDiagnostics({
+      version: PKG.version,
+      plugin: PKG.name,
+      transport: remoteTransport,
+      host: selected?.host ?? '',
+      port: address && typeof address === 'object' ? address.port : port,
+      instanceId,
+      connectionType: selected?.type ?? 'unavailable',
+      running: address !== null,
+      mdns: mdns !== null,
+      deviceName: mdns?.deviceName,
+      probes: selected ? undefined : {
+        reachability: async () => ({ ok: false, error: 'no-reachable-network' }),
+      },
+    })
+  }
   const taskHub = new TaskEventHub()
   /** @type {TaskFallbackTracker | null} */
   let taskFallback = null
@@ -109,6 +121,11 @@ export function apply(ctx, config = {}) {
   for (const kind of SESSION_EVENTS) {
     ctx.on(`api-session/${kind}`, (...args) => { for (const fn of listeners) fn(kind, args) })
   }
+  ctx.inject(['sessionProjections'], (c) => {
+    c.effect(() => c.sessionProjections.onChanged((session, key, value, seq) => {
+      server.broadcastProjection(session.id, key, value, seq)
+    }))
+  })
   // prepend: run outside the web UI forwarder so we can race it.
   ctx.on('approval/request', createApprovalHook(server, { log }), { prepend: true })
   ctx.on('user-questions/request', createUserQuestionHook(server, { log }), { prepend: true })
@@ -126,23 +143,31 @@ export function apply(ctx, config = {}) {
     return remoteTransport
   }
 
-  const openPairing = () => {
+  const openPairing = ({ type, host, port }) => {
     const mode = remoteTransport
     const w = pairing.open()
-    const uri = pairingUri({ code: w.code, host: advertiseHost, port, transport: mode })
-    const line = pairingString({ code: w.code, host: advertiseHost, port, transport: mode })
-    log(`pairing (${mode}, ${Math.round(w.expiresInSec / 60)} min): ${line}`)
-    return { ...w, transport: mode, host: advertiseHost, port, uri, pairingString: line }
+    const line = pairingString({ code: w.code, host, port, transport: mode })
+    log(`pairing (${type}, ${Math.round(w.expiresInSec / 60)} min): ${line}`)
   }
   const manage = createManageApi({
-    host: advertiseHost, port, devices, pairing, server, openPairing,
+    getNetworks, port, devices, pairing, server, openPairing,
     getTransport,
     setTransport: setTransportMode,
     instanceId,
     getDiagnostics: buildDiagnostics,
     getMdns: () => mdns !== null,
   })
-  ctx.inject(['permissionPresets', 'agents'], (c) => { c.effect(() => server.registerOps(permissionOps(c.permissionPresets, c.agents))) })
+  ctx.on('permission-presets/catalog-changed', () => server.broadcastPermissionCatalogChanged())
+  ctx.inject(['permissionPresets', 'agents'], (c) => {
+    c.effect(() => {
+      const unregister = server.registerOps(permissionOps(c.permissionPresets, c.agents))
+      server.broadcastPermissionCatalogChanged()
+      return () => {
+        unregister()
+        server.broadcastPermissionCatalogChanged()
+      }
+    })
+  })
   ctx.inject(['agentPresets'], (c) => { c.effect(() => server.registerOps(presetOps(c.agentPresets))) })
   ctx.inject(['commands', 'agents'], (c) => { c.effect(() => server.registerOps(commandOps(c.commands, c.agents))) })
   ctx.inject(['workspaceFiles', 'sessions'], (c) => {
@@ -221,7 +246,7 @@ export function apply(ctx, config = {}) {
 
   ctx.effect(() => {
     const start = async () => {
-      log(`remote transport: ${remoteTransport} (advertise ${advertiseHost}:${port}, bind ${bindHost})`)
+      log(`remote transport: ${remoteTransport} (bind ${bindHost}:${port})`)
 
       // Legacy opt-in only — phone APK no longer ships iroh; keep server code dormant by default.
       if (config.iroh === true) {
@@ -247,25 +272,30 @@ export function apply(ctx, config = {}) {
       }
 
       const addr = await server.listen()
-      log(`ws listening on ws://${addr} (pairing advertises ${advertiseHost}:${port})`)
+      const selected = selectNetwork(getNetworks())
+      const listenAddress = server.address()
+      const listenPort = listenAddress && typeof listenAddress === 'object' ? listenAddress.port : port
+      log(`ws listening on ws://${addr} (pairing ${selected ? `${selected.type}: ${selected.host}:${listenPort}` : 'unavailable: no reachable network'})`)
       log(`instance ${instanceId.slice(0, 8)}…`)
       log(created ? `new owner token written to ${path}: ${token}` : `owner token: ${path}`)
 
       try {
-        mdns = startMdnsAdvertise({
-          host: advertiseHost,
-          port,
-          instanceId,
-          log,
-          onError: (err) => console.error('[pocket] mdns:', err.message ?? err),
-        })
+        if (selected) {
+          mdns = startMdnsAdvertise({
+            host: selected.host,
+            port: listenPort,
+            instanceId,
+            log,
+            onError: (err) => console.error('[pocket] mdns:', err.message ?? err),
+          })
+        }
       } catch (e) {
         console.error('[pocket] mdns advertise failed:', e.message ?? e)
         mdns = null
       }
 
       if (config.pair || devices.list().length === 0) {
-        try { openPairing() } catch (e) { console.error('[pocket]', e.message ?? e) }
+        try { manage.openPairing() } catch (e) { console.error('[pocket]', e.message ?? e) }
       }
     }
     start().catch((error) => console.error('[pocket] start failed:', error))

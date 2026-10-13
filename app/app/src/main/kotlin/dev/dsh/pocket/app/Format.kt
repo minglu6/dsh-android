@@ -10,13 +10,7 @@ val PRESET_LABEL = linkedMapOf(
     "minimal" to ("极简模式" to "最少工具与提示，响应更快"),
     "cordis" to ("创造模式" to "面向 Cordis 插件开发的创作环境"),
 )
-val PERMISSION_LABEL = linkedMapOf(
-    "read-only" to ("仅可查看" to "只能读取文件，不会修改任何内容"),
-    "workspace-write" to ("工作区内修改" to "可在工作区内读写文件并执行命令"),
-    "danger-full-access" to ("完全权限" to "不受限制地访问文件系统与网络"),
-)
 fun presetLabel(id: String?) = PRESET_LABEL[id ?: "standard"]?.first ?: id ?: "标准模式"
-fun permissionLabel(id: String?) = PERMISSION_LABEL[id ?: "workspace-write"]?.first ?: id ?: "工作区内修改"
 
 private val ARG_KEYS = listOf("command", "cmd", "path", "file_path", "filePath", "file", "pattern", "query", "url", "glob", "name")
 
@@ -45,14 +39,6 @@ fun formatElapsed(ms: Long): String {
     val seconds = ms / 1000.0
     return if (ms < 10_000) "${"%.2f".format(seconds)}s" else "${"%.1f".format(seconds)}s"
 }
-
-fun footerText(turns: Int, steps: Int, hit: Int?) = buildString {
-    append("$turns 轮 $steps 步")
-    if (hit != null) append(" · 缓存命中 $hit%")
-}
-
-/** "DeepSeek-V4.1-Flash" -> "V4.1-Flash": the vendor prefix is implied in a DeepSeek client. */
-fun shortModelName(name: String): String = name.removePrefix("DeepSeek-").removePrefix("deepseek-").ifBlank { name }
 
 /**
  * Desktop `formatMessageClock` / `clock.md` / `clock.ymd`:

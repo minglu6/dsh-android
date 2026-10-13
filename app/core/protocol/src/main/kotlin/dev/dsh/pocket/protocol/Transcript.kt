@@ -275,6 +275,8 @@ data class RequestHeaderFact(
 class TranscriptReducer {
     private val committed = ArrayList<Item>()
     private val toolIndex = HashMap<String, Int>()
+    /** Preserve unmatched endpoints so history pages can complete actual call/result pairs. */
+    private val toolTimings = HashMap<String, ToolCallTiming>()
     private val approvalCall = HashMap<String, String>()
     private val userByRpc = HashMap<String, Int>()
     private val localEchoes = ArrayList<Pair<Int, String>>()
@@ -325,6 +327,12 @@ class TranscriptReducer {
     private var todos: List<TodoItem> = emptyList()
     /** Host `plan` projection (`plan/mode` + projections.values.plan.active). */
     private var planActive: Boolean = false
+    private val composerProjections = ComposerProjectionStore()
+
+    val composerMetrics: ComposerMetrics get() = composerProjections.metrics(settledSteps, toolTimings.values)
+
+    /** Connection generations have incomparable Host projection watermarks. */
+    fun clearComposerProjections() = composerProjections.clear()
 
     val usage get() = Usage(turns, steps, inputTokens, cacheRead, outputTokens)
     fun stepRecords(): List<StepRecord> = settledSteps.toList()
@@ -342,7 +350,7 @@ class TranscriptReducer {
                 reset()
                 records(frame["records"])
                 keep.filter { t -> committed.none { it is Item.User && it.text == t } }.forEach(::echo)
-                readProjections(frame["projections"])
+                readProjections(frame["projections"], frame["cursor"].long() ?: cursor)
                 cursor = frame["cursor"].long() ?: cursor
                 hasMore = frame["hasMore"].bool() ?: false
                 firstSeq = minSeq(frame["records"])
@@ -350,11 +358,16 @@ class TranscriptReducer {
             }
             "resume" -> {
                 records(frame["records"])
-                readProjections(frame["projections"])
+                readProjections(frame["projections"], frame["cursor"].long() ?: cursor)
                 cursor = maxOf(cursor, frame["cursor"].long() ?: cursor)
                 baseline(frame["assistantStream"])
             }
             "event" -> event(frame["event"])
+            "projection" -> return composerProjections.apply(
+                frame["key"].str() ?: return false,
+                frame["value"],
+                frame["seq"].long() ?: return false,
+            )
             "assistant-stream" -> stream(frame["frame"])
             else -> return false
         }
@@ -382,6 +395,15 @@ class TranscriptReducer {
             put("records", JsonArray(filtered))
             put("projections", buildJsonObject {})
         })
+        for ((id, earlier) in prior.toolTimings) {
+            val later = toolTimings[id]
+            if (later == null) {
+                toolTimings[id] = earlier
+            } else {
+                later.callStartedAt = later.callStartedAt ?: earlier.callStartedAt
+                later.resultAt = earlier.resultAt ?: later.resultAt
+            }
+        }
         val older = prior.items()
         val olderSteps = prior.stepRecords()
         val shift = older.size
@@ -401,7 +423,7 @@ class TranscriptReducer {
         }
         val min = filtered.mapNotNull { it["event"]["seq"].long() }.minOrNull()
         if (min != null) firstSeq = if (firstSeq < 0) min else minOf(firstSeq, min)
-        return shift > 0 || olderSteps.isNotEmpty() || olderHeaders.isNotEmpty()
+        return shift > 0 || olderSteps.isNotEmpty() || olderHeaders.isNotEmpty() || prior.toolTimings.isNotEmpty()
     }
 
     private fun rebuildIndexes() {
@@ -424,6 +446,7 @@ class TranscriptReducer {
 
     private fun reset() {
         committed.clear(); toolIndex.clear(); compactIndex.clear(); approvalCall.clear(); userByRpc.clear(); localEchoes.clear()
+        toolTimings.clear()
         stepStartTimes.clear(); settledSteps.clear(); headerFacts.clear(); toolsByName.clear()
         toolsCatalogJson = null; previousToolsCatalogJson = null; lastSystemPromptText = null
         systemPromptSeen = false; live = null
@@ -436,14 +459,16 @@ class TranscriptReducer {
         planActive = false
     }
 
-    private fun readProjections(p: JsonElement?) {
+    private fun readProjections(p: JsonElement?, atSeq: Long) {
+        composerProjections.baseline(p, atSeq)
         val values = p["values"]
         values["title"].str()?.let { title = it }
         val usage = values["tokenUsage"]
         if (usage is JsonObject) {
             val uncached = usage["uncachedInputTokens"].long() ?: 0
             val cr = usage["cacheReadTokens"].long() ?: 0
-            cacheRead = cr; inputTokens = uncached + cr; outputTokens = usage["outputTokens"].long() ?: 0
+            cacheRead = cr; inputTokens = uncached + cr + (usage["cacheWriteTokens"].long() ?: 0)
+            outputTokens = usage["outputTokens"].long() ?: 0
         }
         values["todos"].arr()?.let { arr ->
             todos = arr.mapNotNull { row ->
@@ -604,7 +629,7 @@ class TranscriptReducer {
                 )
                 u?.let {
                     outputTokens += it["outputTokens"].long() ?: 0
-                    inputTokens += (it["inputTokens"].long() ?: 0) + (it["cacheReadTokens"].long() ?: 0)
+                    inputTokens += (it["inputTokens"].long() ?: 0) + (it["cacheReadTokens"].long() ?: 0) + (it["cacheWriteTokens"].long() ?: 0)
                     cacheRead += it["cacheReadTokens"].long() ?: 0
                 }
                 val source = data["message"]["source"]
@@ -634,18 +659,25 @@ class TranscriptReducer {
                 // (assistant cell isError) — do not invent a 系统 Context/System row here.
                 if (interrupted) committed += Item.Notice("i$seq", "已停止")
             }
-            "tool/call" -> upsertTool(
-                data["callId"].str() ?: "c$seq",
-                data["name"].str().orEmpty(),
-                data["arguments"].str().orEmpty(),
-                e["time"].long(),
-                turn = data["turn"].long()?.toInt() ?: openTurn,
-                step = data["step"].long()?.toInt() ?: openStep,
-            )
+            "tool/call" -> {
+                val id = data["callId"].str() ?: "c$seq"
+                val time = e["time"].long()
+                toolTimings.getOrPut(id) { ToolCallTiming() }.callStartedAt = time
+                upsertTool(
+                    id,
+                    data["name"].str().orEmpty(),
+                    data["arguments"].str().orEmpty(),
+                    time,
+                    turn = data["turn"].long()?.toInt() ?: openTurn,
+                    step = data["step"].long()?.toInt() ?: openStep,
+                )
+            }
             "tool/result" -> {
                 val id = data["message"]["toolCallId"].str()
                     ?: data["message"]["source"]["callId"].str()
                     ?: return
+                val timing = toolTimings.getOrPut(id) { ToolCallTiming() }
+                timing.resultAt = timing.resultAt ?: e["time"].long()
                 val text = data["message"]["content"].arr().orEmpty().filter { it["type"].str() == "text" }.joinToString("\n") { it["text"].str().orEmpty() }
                 val err = data["error"]
                 val isErr = err != null || data["message"]["isError"].bool() == true

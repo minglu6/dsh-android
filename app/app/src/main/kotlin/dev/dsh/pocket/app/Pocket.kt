@@ -31,6 +31,7 @@ data class ChatState(
     val todos: List<TodoItem> = emptyList(),
     /** Host `plan` projection — plan mode is on (desktop PlanChip). */
     val planMode: Boolean = false,
+    val composerMetrics: ComposerMetrics = ComposerMetrics(),
 )
 
 data class ModelChoice(val provider: String, val model: String, val name: String, val effort: String?)
@@ -86,6 +87,12 @@ object Pocket {
     val ops = MutableStateFlow<Set<String>>(emptySet())
     val chat = MutableStateFlow<ChatState?>(null)
     val permission = MutableStateFlow<Map<String, String>>(emptyMap())
+    val permissionCatalog = MutableStateFlow<PermissionCatalog?>(null)
+    val permissionCatalogLoading = MutableStateFlow(false)
+    val permissionCatalogError = MutableStateFlow<String?>(null)
+    val permissionChanging = MutableStateFlow(false)
+    private val permissionCatalogEpoch = AtomicLong()
+    private var permissionProjectionSeq = -1L
     val model = MutableStateFlow<Map<String, ModelChoice>>(emptyMap())
     val errors = MutableSharedFlow<String>(extraBufferCapacity = 8)
     /** Handshake version mismatch for the active profile (plugin/app too old). */
@@ -114,6 +121,8 @@ object Pocket {
     private var connJob: Job? = null
     private var reducer = TranscriptReducer()
     private var subId: String? = null
+    private val followEpoch = AtomicLong()
+    private var pendingFollowEpoch: Long? = null
     private var terminalSubId: String? = null
     /** Last panel grid size from [TerminalView]; used when creating / attaching a PTY. */
     private var wantCols = 80
@@ -195,10 +204,16 @@ object Pocket {
 
     fun connect(profileId: String) {
         connJob?.cancel(); client?.close(); client = null
+        followEpoch.incrementAndGet()
+        detachFollow()
         active.value = profileId; prefs.activeProfile = profileId
         sessions.value = emptyList(); chat.value = null; approvals.value = emptyList()
         userQuestions.value = emptyList(); archivedIds.value = emptySet(); pinnedIds.value = emptySet()
         feedback.value = emptyMap(); attachmentCache.clear()
+        invalidatePermissionCatalog()
+        permission.value = emptyMap()
+        permissionChanging.value = false
+        permissionProjectionSeq = -1L
         compatibility.value = null
         setRoute(profileId, null)
         connJob = main.launch { runConnection(profileId) }
@@ -230,6 +245,10 @@ object Pocket {
                 val hello = c.connect(factories, Auth.Token(token), CONNECT_TIMEOUT_MS)
                 applyCompatibility(hello)
                 client = c; ops.value = hello.ops
+                followEpoch.incrementAndGet()
+                detachFollow()
+                reducer.clearComposerProjections()
+                permissionProjectionSeq = -1L
                 setRoute(p.id, c.route ?: hello.route)
                 setDot(p.id, Dot.Online); backoffMs.set(ReconnectBackoffPolicy.reset())
                 val remoteInstance = hello.raw["instanceId"].str()
@@ -247,7 +266,7 @@ object Pocket {
                             c.route?.let { setRoute(p.id, it) }
                         }
                     }
-                    launch { c.events.collect { onPush(it) } }
+                    launch { c.events.collect { if (client === c) onPush(it) } }
                     launch { refreshAll(c) }
                     c.state.first { it == PocketClient.State.Closed }
                     cancel()
@@ -256,6 +275,10 @@ object Pocket {
                 if (!currentCoroutineContext().isActive) { c.close(); throw e }
             } catch (e: Exception) { /* fall through to retry */ }
             client = null; c.close(); setRoute(profileId, null)
+            followEpoch.incrementAndGet()
+            detachFollow()
+            invalidatePermissionCatalog()
+            permissionChanging.value = false
             val reason = c.closeReason.orEmpty() + ""
             if ("4401" in reason || "4403" in reason || "auth/" in reason) { setDot(p.id, Dot.Unauthorized); return }
             // Oversized iroh frame: surface the error and stop spinning the open chat.
@@ -292,11 +315,49 @@ object Pocket {
         runCatching { sessions.value = c.listSessions().sortedByDescending { it.updatedAt } }
         runCatching { approvals.value = c.call("approval.pending")["approvals"].arr().orEmpty().mapNotNull { (it as? JsonObject)?.let(Approval::parse) } }
         runCatching { catalog.value = c.modelCatalog() }
+        if ("permissions.catalog" in ops.value) loadPermissionCatalog(c)
         if ("presets.list" in ops.value) runCatching { presets.value = c.presets() }
         if ("workspace.state" in ops.value) runCatching { refreshWorkspaceState(c) }
         chat.value?.let { st ->
             refollow(c, st.sessionId, reducer.cursor.takeIf { s -> s >= 0 })
             if ("feedback.get" in ops.value) runCatching { loadFeedback(st.sessionId) }
+        }
+    }
+
+    private fun invalidatePermissionCatalog() {
+        permissionCatalogEpoch.incrementAndGet()
+        permissionCatalog.value = null
+        permissionCatalogLoading.value = false
+        permissionCatalogError.value = null
+    }
+
+    /** A refresh belongs to one connection generation; late responses cannot revive stale options. */
+    private suspend fun loadPermissionCatalog(c: PocketClient) {
+        val epoch = permissionCatalogEpoch.incrementAndGet()
+        permissionCatalog.value = null
+        permissionCatalogLoading.value = true
+        permissionCatalogError.value = null
+        try {
+            val value = c.permissionCatalog()
+            if (client === c && permissionCatalogEpoch.get() == epoch) permissionCatalog.value = value
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            if (client === c && permissionCatalogEpoch.get() == epoch) {
+                permissionCatalogError.value = e.message ?: "无法读取主机权限目录"
+            }
+        } finally {
+            if (client === c && permissionCatalogEpoch.get() == epoch) permissionCatalogLoading.value = false
+        }
+    }
+
+    fun reloadPermissionCatalog() = main.launch {
+        val c = client
+        if (c == null) {
+            invalidatePermissionCatalog()
+            permissionCatalogError.value = "未连接到主机"
+        } else {
+            loadPermissionCatalog(c)
         }
     }
 
@@ -308,9 +369,14 @@ object Pocket {
 
     private fun onPush(m: JsonObject) {
         when (m["ev"].str()) {
+            "permission-presets/catalog-changed" -> {
+                invalidatePermissionCatalog()
+                client?.let { c -> main.launch { loadPermissionCatalog(c) } }
+            }
             "follow" -> {
                 val sid = m["subId"].str() ?: return
-                if (sid == subId) applyFrame(m["frame"]) else stray.getOrPut(sid) { mutableListOf() }.add(m)
+                if (sid == subId) applyFrame(m["frame"])
+                else if (pendingFollowEpoch == followEpoch.get()) stray.getOrPut(sid) { mutableListOf() }.add(m)
             }
             "follow.end" -> if (m["subId"].str() == subId) subId = null
             "follow.error" -> if (m["subId"].str() == subId) {
@@ -383,8 +449,30 @@ object Pocket {
 
     private fun applyFrame(f: kotlinx.serialization.json.JsonElement?) {
         val st = chat.value ?: return
+        if (f["type"].str() == "projection" && f["sessionId"].str() != st.sessionId) return
         val wasRunning = reducer.running
         reducer.apply(f)
+        val projection = when (f["type"].str()) {
+            "snapshot", "resume" -> f["projections"]
+            else -> null
+        }
+        if (projection != null) {
+            val seq = projection["asOfSeq"].long() ?: -1L
+            if (seq >= permissionProjectionSeq) {
+                permissionProjectionSeq = seq
+                val current = projection["values"]["permissions"]["currentValue"].str()
+                permission.value = if (current == null) permission.value - st.sessionId
+                    else permission.value + (st.sessionId to current)
+            }
+        } else if (f["type"].str() == "projection" && f["key"].str() == "permissions") {
+            val seq = f["seq"].long() ?: -1L
+            if (seq >= permissionProjectionSeq) {
+                permissionProjectionSeq = seq
+                val current = f["value"]["currentValue"].str()
+                permission.value = if (current == null) permission.value - st.sessionId
+                    else permission.value + (st.sessionId to current)
+            }
+        }
         if (f["type"].str() == "snapshot") followAttempts.remove(st.sessionId)
         chat.value = st.copy(
             items = reducer.items(),
@@ -392,6 +480,7 @@ object Pocket {
             title = reducer.title ?: st.title,
             running = reducer.running,
             usage = reducer.usage,
+            composerMetrics = reducer.composerMetrics,
             loaded = true,
             hasMore = reducer.hasMore,
             firstSeq = reducer.firstSeq,
@@ -401,34 +490,82 @@ object Pocket {
         )
     }
 
-    private suspend fun refollow(c: PocketClient, sessionId: String, afterSeq: Long?) {
-        val attempts = (followAttempts[sessionId] ?: 0) + 1
-        if (attempts > MAX_FOLLOW_ATTEMPTS) {
-            errors.tryEmit("会话同步失败（已重试 $MAX_FOLLOW_ATTEMPTS 次）")
-            chat.value = chat.value?.copy(loaded = true)
-            return
-        }
-        followAttempts[sessionId] = attempts
-        subId?.let { old -> runCatching { c.unfollow(old) } }
+    /** Revoke delivery eligibility synchronously, before any unsubscribe can suspend. */
+    private fun detachFollow(): String? {
+        val old = subId
         subId = null
-        val sid = c.follow(sessionId, afterSeq, maxMessages = HistoryPagingPolicy.FOLLOW_MAX_MESSAGES)
-        subId = sid
-        stray.remove(sid)?.forEach { applyFrame(it["frame"]) }
+        pendingFollowEpoch = null
         stray.clear()
+        return old
+    }
+
+    private fun currentFollow(c: PocketClient, sessionId: String, epoch: Long): Boolean =
+        client === c && chat.value?.sessionId == sessionId && followEpoch.get() == epoch
+
+    private suspend fun refollow(c: PocketClient, sessionId: String, afterSeq: Long?) {
+        if (client !== c || chat.value?.sessionId != sessionId) return
+        val epoch = followEpoch.incrementAndGet()
+        val old = detachFollow()
+        try {
+            if (old != null) {
+                try { c.unfollow(old) }
+                catch (e: CancellationException) { throw e }
+                catch (_: Exception) { /* The old subscription is already locally detached. */ }
+            }
+            if (!currentFollow(c, sessionId, epoch)) return
+            val attempts = (followAttempts[sessionId] ?: 0) + 1
+            if (attempts > MAX_FOLLOW_ATTEMPTS) {
+                errors.tryEmit("会话同步失败（已重试 $MAX_FOLLOW_ATTEMPTS 次）")
+                chat.value = chat.value?.copy(loaded = true)
+                return
+            }
+            followAttempts[sessionId] = attempts
+            pendingFollowEpoch = epoch
+            val sid = c.follow(sessionId, afterSeq, maxMessages = HistoryPagingPolicy.FOLLOW_MAX_MESSAGES)
+            if (!currentFollow(c, sessionId, epoch)) {
+                // A newer selection won while the Host was opening this subscription.
+                try { c.unfollow(sid) }
+                catch (e: CancellationException) { throw e }
+                catch (_: Exception) { /* Never adopt an obsolete subscription. */ }
+                return
+            }
+            subId = sid
+            pendingFollowEpoch = null
+            val buffered = stray.remove(sid)
+            stray.clear()
+            buffered?.forEach { if (currentFollow(c, sessionId, epoch)) applyFrame(it["frame"]) }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            if (currentFollow(c, sessionId, epoch)) throw e
+        } finally {
+            if (pendingFollowEpoch == epoch) {
+                pendingFollowEpoch = null
+                stray.clear()
+            }
+        }
     }
 
     fun openSession(sessionId: String) = main.launch {
         followAttempts.remove(sessionId)
         reducer = TranscriptReducer()
+        permissionProjectionSeq = -1L
         feedback.value = emptyMap()
         chat.value = ChatState(sessionId, title = sessions.value.firstOrNull { it.sessionId == sessionId }?.title)
         val c = client ?: return@launch
         runCatching { refollow(c, sessionId, null) }
             .onFailure {
-                errors.tryEmit(it.message ?: "follow failed")
-                chat.value = chat.value?.copy(loaded = true)
+                if (it is CancellationException) throw it
+                if (client === c && chat.value?.sessionId == sessionId) {
+                    errors.tryEmit(it.message ?: "follow failed")
+                    chat.value = chat.value?.copy(loaded = true)
+                }
             }
-        if ("permissions.get" in ops.value) runCatching { c.permission(sessionId)?.let { permission.value = permission.value + (sessionId to it) } }
+        if (client !== c || chat.value?.sessionId != sessionId) return@launch
+        if ("permissions.get" in ops.value) runCatching {
+            val current = c.permission(sessionId)
+            if (client === c && chat.value?.sessionId == sessionId) permission.value = permission.value + (sessionId to current)
+        }
         if ("feedback.get" in ops.value) runCatching { loadFeedback(sessionId) }
     }
 
@@ -453,6 +590,7 @@ object Pocket {
             chat.value = chat.value?.copy(
                 items = reducer.items(),
                 steps = reducer.stepRecords(),
+                composerMetrics = reducer.composerMetrics,
                 hasMore = reducer.hasMore,
                 firstSeq = reducer.firstSeq,
                 loadingOlder = false,
@@ -463,7 +601,16 @@ object Pocket {
         }
     }
 
-    fun closeChat() = main.launch { subId?.let { s -> client?.let { runCatching { it.unfollow(s) } } }; subId = null; chat.value = null }
+    fun closeChat() = main.launch {
+        followEpoch.incrementAndGet()
+        val old = detachFollow()
+        chat.value = null
+        if (old != null) client?.let { c ->
+            try { c.unfollow(old) }
+            catch (e: CancellationException) { throw e }
+            catch (_: Exception) { /* The local chat is closed even if Host cleanup fails. */ }
+        }
+    }
 
     /**
      * Desktop add-workspace → startSession: create a blank session in [cwd].
@@ -485,9 +632,18 @@ object Pocket {
     fun newSession(text: String, preset: String?, pendingPermission: String?, pendingModel: ModelChoice?, cwd: String? = null) = main.launch {
         val c = client ?: return@launch errors.tryEmit("未连接").let { }
         try {
+            pendingPermission?.let { p ->
+                val available = permissionCatalog.value
+                check(available != null && available.options.any { it.value == p } && !permissionCatalogLoading.value) {
+                    "权限目录已变化，请重新选择访问模式"
+                }
+            }
             val id = c.createSession(cwd = cwd, agentPreset = preset)
             pendingModel?.let { m -> c.selectModel(id, m.provider, m.model, m.effort); model.value = model.value + (id to m) }
-            pendingPermission?.let { p -> if ("permissions.set" in ops.value) c.setPermission(id, p)?.let { permission.value = permission.value + (id to it) } }
+            pendingPermission?.let { p ->
+                check("permissions.set" in ops.value) { "主机不支持切换权限" }
+                permission.value = permission.value + (id to c.setPermission(id, p))
+            }
             openSession(id).join()
             if (text.isNotBlank()) { echo(text); c.prompt(id, text, "queue") }
         } catch (e: Exception) { errors.tryEmit(e.message ?: e.toString()) }
@@ -525,10 +681,35 @@ object Pocket {
         runCatching { client?.selectModel(sessionId, m.provider, m.model, m.effort) }.onFailure { errors.tryEmit(it.message ?: "切换模型失败") }
     }
 
-    fun setPermission(sessionId: String?, name: String) = main.launch {
-        if (sessionId == null) return@launch
-        runCatching { client?.setPermission(sessionId, name)?.let { permission.value = permission.value + (sessionId to it) } }
-            .onFailure { errors.tryEmit(it.message ?: "切换权限失败") }
+    fun setPermission(sessionId: String?, name: String, onComplete: (Boolean) -> Unit = {}) = main.launch {
+        val c = client
+        if (sessionId == null || c == null || permissionChanging.value || permissionCatalogLoading.value) {
+            onComplete(false)
+            return@launch
+        }
+        if (permissionCatalog.value?.options?.none { it.value == name } != false) {
+            errors.tryEmit("权限目录已变化，请重新选择访问模式")
+            onComplete(false)
+            return@launch
+        }
+        permissionChanging.value = true
+        try {
+            val selected = c.setPermission(sessionId, name)
+            if (client === c) {
+                permission.value = permission.value + (sessionId to selected)
+                if (selected != name) errors.tryEmit("主机未应用所选权限，当前模式为 $selected")
+                onComplete(selected == name)
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            if (client === c) {
+                errors.tryEmit(e.message ?: "切换权限失败")
+                onComplete(false)
+            }
+        } finally {
+            if (client === c) permissionChanging.value = false
+        }
     }
 
     fun rename(sessionId: String, title: String) = main.launch { runCatching { client?.call("sessions.rename", jsonOf("sessionId" to sessionId, "title" to title)) } }
@@ -785,6 +966,7 @@ object Pocket {
 
     /** Open (or reuse) a host PTY for [sessionId] and start following its screen. */
     fun openTerminal(sessionId: String) = main.launch {
+        terminalMeta.value = null
         val c = client ?: run { errors.tryEmit("未连接"); return@launch }
         if (!hasOp("terminal.create") || !hasOp("terminal.follow")) {
             errors.tryEmit("桌面端未提供终端"); return@launch
@@ -792,8 +974,13 @@ object Pocket {
         val cols = wantCols
         val rows = wantRows
         runCatching {
-            terminalSubId?.let { old -> runCatching { c.unfollow(old) } }
+            val old = terminalSubId
             terminalSubId = null
+            if (old != null) {
+                try { c.unfollow(old) }
+                catch (e: CancellationException) { throw e }
+                catch (_: Exception) { /* Already detached locally. */ }
+            }
             terminal.resize(cols, rows)
             terminal.clear()
             terminalRevision.value = terminal.revision
@@ -813,7 +1000,10 @@ object Pocket {
                 terminalRevision.value = terminal.revision
                 runCatching { c.resizeTerminal(sessionId, id, attachmentId, cCols, cRows) }
             }
-        }.onFailure { errors.tryEmit(it.message ?: "打开终端失败") }
+        }.onFailure {
+            if (it is CancellationException) throw it
+            errors.tryEmit(it.message ?: "打开终端失败")
+        }
     }
 
     fun writeTerminal(data: String) = main.launch {
@@ -836,10 +1026,15 @@ object Pocket {
             .onFailure { errors.tryEmit(it.message ?: "终端调整失败") }
     }
 
-    fun closeTerminalFollow() = main.launch {
-        val c = client ?: return@launch
-        terminalSubId?.let { runCatching { c.unfollow(it) } }
+    fun closeTerminalFollow(): Job {
+        // Detach before suspending so an older unfollow cannot erase a newly opened panel.
+        val c = client
+        val old = terminalSubId
         terminalSubId = null
+        terminalMeta.value = null
+        return main.launch {
+            if (c != null && old != null) runCatching { c.unfollow(old) }
+        }
     }
 
     /** Pair using an already-parsed [PairingLink] (host:port WebSocket). */
@@ -918,7 +1113,16 @@ object Pocket {
     }
 
     fun removeProfile(id: String) = main.launch {
-        if (active.value == id) { connJob?.cancel(); client?.close(); client = null; active.value = null; prefs.activeProfile = null; sessions.value = emptyList(); chat.value = null }
+        if (active.value == id) {
+            connJob?.cancel(); client?.close(); client = null
+            followEpoch.incrementAndGet()
+            detachFollow()
+            active.value = null; prefs.activeProfile = null
+            sessions.value = emptyList(); chat.value = null
+            invalidatePermissionCatalog()
+            permission.value = emptyMap()
+            permissionChanging.value = false
+        }
         tokens.remove(id); profiles.value = profiles.value.filter { it.id != id }; prefs.profiles = profiles.value
     }
 

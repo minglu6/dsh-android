@@ -7,6 +7,15 @@ const json = (res, status, body) => {
 
 const refuse = (res) => json(res, 403, { error: 'forbidden' })
 
+const networkSelection = (req) => new URL(req.url, 'http://localhost').searchParams.get('network') ?? undefined
+const networkResponse = (req, res, action) => {
+  try {
+    return json(res, 200, action(networkSelection(req)))
+  } catch (error) {
+    return json(res, error?.statusCode === 400 ? 400 : 503, { error: String(error?.message ?? error) })
+  }
+}
+
 async function readJson(req, res, limit = 4096) {
   let body = ''
   for await (const c of req) {
@@ -27,10 +36,10 @@ async function readJson(req, res, limit = 4096) {
  * Management routes on dsh's webServer (loopback Host/Origin fence).
  * @param {import('@deepseek-ai/cordis').Context} ctx
  * @param {{
- *   openPairing: () => object,
+ *   openPairing: (network?: string) => object,
  *   closePairing?: () => object,
- *   pairingStatus: () => object,
- *   getStatus: () => object,
+ *   pairingStatus: (network?: string) => object,
+ *   getStatus: (network?: string) => object,
  *   listDevices: () => object[],
  *   revokeDevice: (id: string) => boolean,
  *   renameDevice: (id: string, name: string) => boolean,
@@ -48,7 +57,7 @@ export function registerPairRoute(ctx, api) {
     kind: 'exact', path: '/pocket/status',
     handler: async (req, res) => {
       if (!gate(req, res)) return
-      if (req.method === 'GET') return json(res, 200, api.getStatus())
+      if (req.method === 'GET') return networkResponse(req, res, api.getStatus)
       if (req.method === 'PATCH') {
         const body = await readJson(req, res)
         if (body === undefined) return
@@ -56,7 +65,7 @@ export function registerPairRoute(ctx, api) {
         if (typeof api.setTransport !== 'function') return json(res, 405, { error: 'method not allowed' })
         try {
           api.setTransport(body.transport)
-          return json(res, 200, api.getStatus())
+          return networkResponse(req, res, api.getStatus)
         } catch (e) {
           return json(res, 400, { error: String(e?.message ?? e) })
         }
@@ -83,15 +92,9 @@ export function registerPairRoute(ctx, api) {
     kind: 'exact', path: '/pocket/pair',
     handler: (req, res) => {
       if (!gate(req, res)) return
-      if (req.method === 'POST') {
-        try {
-          return json(res, 200, api.openPairing())
-        } catch (e) {
-          return json(res, 503, { error: String(e?.message ?? e) })
-        }
-      }
+      if (req.method === 'POST') return networkResponse(req, res, api.openPairing)
       if (req.method === 'DELETE') return json(res, 200, (api.closePairing ?? (() => ({ open: false })))())
-      if (req.method === 'GET') return json(res, 200, api.pairingStatus())
+      if (req.method === 'GET') return networkResponse(req, res, api.pairingStatus)
       return json(res, 405, { error: 'method not allowed' })
     },
   }))

@@ -152,6 +152,8 @@ Packages: `ui-conversation` (header shell), `ui-agent-preset`, experimental `cli
 **会话统计** lives in the **composer dock** (`ui-chat` StatsPills: `stats.dialog.title` 会话统计, `stats.counts`, `stats.cacheHit`, …), not the header ⋯.
 
 Phone note: Android currently also puts rename + stats into the ⋯ sheet for reachability; desktop keeps rename on the sidebar row.
+The Android composer dock uses authoritative whole-log `sessionStats` and `tokenUsage` plus Host context-pressure/breakdown projections. Compact displays speed/cache/context readings; Detailed adds counts and inspection dialogs. The permission trigger is intentionally icon-only on phones; its menu is the live Host catalog, including acknowledged current-session auto review when available.
+
 
 ---
 
@@ -201,7 +203,9 @@ Empty: `empty.none` 暂无会话 / `empty.noMatches` 无匹配结果.
 
 Packages: `ui-sidebar-right` + files / terminal / browser / documentpreview / deliverables.  
 **Desktop guide launchers are only three:** Workspace files, New terminal, Browser (orders 10/20/30).  
-Phone adaptation: themed bottom sheets.
+Phone adaptation: a full-height end panel (full width on phones, capped at 480dp on wider windows), shared by the guide, workspace files, document previews and terminal. The guide uses the official compass, 20dp capsule radius, 14dp gaps and title/description hierarchy. Back returns to the guide (or file list from preview); collapse closes the panel. Browser, docking, split and floating windows remain desktop-only. The terminal entry is labeled “终端” because Android reuses the current running Host PTY rather than creating a new shell on every visit.
+
+Guide artwork is selected from the owning feature's registry, not from generic controls: `filesDefinition().guide[].icon` → `GuideArtworkFiles` (`guide-artwork.tsx`, fill `#FFBC4D`, stroke `#FFCD78`, width `1.97886`); terminal registration → `PluginArtworkTerminal` (`plugin-artwork.tsx`, stroke `#679EFE`, width `3.5`). Both keep the original 36×36 viewBox at 26dp display size and never receive theme tint. The compass is 56dp (`neutral-200` light / `neutral-700` dark); its title glyph is 16dp with `label-tertiary`. Expand/collapse use the mirrored Regular panel glyph at 15dp with `label-secondary`; Android retains larger touch targets.
 
 | Entry | Locale | Data | Decision |
 |---|---|---|---|
@@ -209,15 +213,15 @@ Phone adaptation: themed bottom sheets.
 | 终端 | `title` 终端 / guide `新建终端` | `terminal.*` | feasible (done) |
 | 浏览器 | `guide.title` 浏览器 | client iframe only | **hide** |
 | 文档预览 | documentpreview locales | Host file bytes + preview (opened via `openResource`, not a guide capsule) | **done** — `files.read` text paging + `files.readBytes` (base64) for image/PDF; `FilePreviewSheet` |
-| Dock split / float | `dock.*` | desktop layout | **hide** (phone sheets) |
+| Dock split / float | `dock.*` | desktop layout | **hide** (single adaptive end panel) |
 | Deliverable / changes-review tabs | `deliverables.*` | events / turn payloads | feasible once events parsed |
 
 **Not right-panel guide entries (desktop placement):**
 
 | Surface | Desktop home | Locale | Phone |
 |---|---|---|---|
-| 后台任务 | **Session header** job list action | `job.list.aria` 后台任务 | sheet from panel launcher (done) — acceptable phone regroup |
-| 任务 / 清单 (Todo) | **Conversation dock** `TodoPanel` (+ `todo_write` tool row) | `todo.title` 任务 | sheet from panel when todos present (done) — not a desktop right-rail launcher |
+| 后台任务 | **Session header** job list action | `job.list.aria` 后台任务 | action beside the chat/trajectory tabs, opening `JobsSheet` |
+| 任务 / 清单 (Todo) | **Conversation dock** `TodoPanel` (+ `todo_write` tool row) | `todo.title` 任务 | progress row above the composer, opening `TodoSheet` |
 
 ---
 

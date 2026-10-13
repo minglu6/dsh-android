@@ -313,6 +313,10 @@ export function createPocketServer(opts) {
   const childSessions = new Set()
   const authedClients = () => [...clients].filter((c) => c.device)
   const broadcast = (m) => { for (const c of authedClients()) c.push(m) }
+  const projectionKeys = new Set(['sessionStats', 'tokenUsage', 'contextPressure', 'contextBreakdown', 'permissions'])
+  // Follow's snapshot is the baseline. Hold newer projections until it is sent,
+  // including while a reconnect snapshot is paged or trimmed for the wire.
+  const followProjections = new WeakMap()
   const pushTaskEvent = (event) => {
     need(str(event?.sessionId), 'sessionId required')
     const kind = event.kind === 'question' ? 'question' : 'done'
@@ -470,6 +474,7 @@ export function createPocketServer(opts) {
         const subId = `s${client.nextSub++}`
         const ac = new AbortController()
         client.subs.set(subId, ac)
+        followProjections.set(ac, { sessionId: args.sessionId, ready: false, pending: new Map() })
         reply({ ok: true, result: { subId } })
         void pump(client, subId, ac, args)
         return
@@ -543,6 +548,12 @@ export function createPocketServer(opts) {
           throw new OpError('frame/too-large', `follow frame exceeds ${FRAME_HARD_LIMIT} bytes`)
         }
         client.push(wire)
+        const projectionState = followProjections.get(ac)
+        if (projectionState && !projectionState.ready) {
+          projectionState.ready = true
+          for (const update of projectionState.pending.values()) client.push({ ev: 'follow', subId, frame: update })
+          projectionState.pending.clear()
+        }
       }
       if (!ac.signal.aborted) client.push({ ev: 'follow.end', subId })
     } catch (error) {
@@ -657,6 +668,26 @@ export function createPocketServer(opts) {
      */
     broadcastTaskEvent(event) {
       pushTaskEvent(event)
+    },
+    /** Mirror the official session control carrier, only to matching live follows. */
+    broadcastProjection(sessionId, key, value, seq) {
+      if (!str(sessionId) || !projectionKeys.has(key) || !Number.isSafeInteger(seq)) return
+      const frame = { type: 'projection', sessionId, key, value: value ?? null, seq }
+      for (const client of authedClients()) {
+        for (const [subId, ac] of client.subs) {
+          const state = followProjections.get(ac)
+          if (!state || state.sessionId !== sessionId || ac.signal.aborted) continue
+          if (state.ready) client.push({ ev: 'follow', subId, frame })
+          else {
+            const previous = state.pending.get(key)
+            if (!previous || seq >= previous.seq) state.pending.set(key, frame)
+          }
+        }
+      }
+    },
+    /** Invalidate the process catalog; authenticated clients re-read its complete value. */
+    broadcastPermissionCatalogChanged() {
+      broadcast({ ev: 'permission-presets/catalog-changed' })
     },
     isRootSession(sessionId) {
       return str(sessionId) && !childSessions.has(sessionId)

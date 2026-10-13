@@ -56,7 +56,7 @@ data class PendingAttach(
 )
 
 enum class Sheet {
-    None, Model, Permission, FullAccess, Preset, Plus, More, Panel, Team, Workspace, Goal, Feedback,
+    None, Model, Permission, PermissionRisk, Preset, Plus, More, Panel, Team, Workspace, Goal, Feedback,
     Files, Jobs, Terminal, Todo, Commands, Mentions, FeedbackCategory, FilePreview,
 }
 
@@ -96,11 +96,17 @@ fun ChatRoot(onMenu: () -> Unit, showMenuButton: Boolean = true) {
     val status by Pocket.status.collectAsState()
     val ops by Pocket.ops.collectAsState()
     val compatibility by Pocket.compatibility.collectAsState()
-    var sheet by remember { mutableStateOf(Sheet.None) }
+    val permissionDirectory by Pocket.permissionCatalog.collectAsState()
+    val permissionLoading by Pocket.permissionCatalogLoading.collectAsState()
+    val permissionError by Pocket.permissionCatalogError.collectAsState()
+    val permissionChanging by Pocket.permissionChanging.collectAsState()
+    var sheet by remember(active, chat?.sessionId) { mutableStateOf(Sheet.None) }
     var tool by remember { mutableStateOf<Item.Tool?>(null) }
+    var riskPermission by remember(active, chat?.sessionId) { mutableStateOf<String?>(null) }
+    var permissionPickerAttempt by remember { mutableIntStateOf(0) }
     // New-chat drafts (applied when the session gets created).
     var draftPreset by remember { mutableStateOf("standard") }
-    var draftPerm by remember { mutableStateOf(Pocket.prefs.defaultPermission) }
+    var draftPerm by remember(active, chat?.sessionId) { mutableStateOf(Pocket.prefs.defaultPermission) }
     var draftModel by remember { mutableStateOf<ModelChoice?>(null) }
     var draftCwd by remember { mutableStateOf<String?>(null) }
     var pendingImages by remember { mutableStateOf<List<PromptImage>>(emptyList()) }
@@ -172,11 +178,42 @@ fun ChatRoot(onMenu: () -> Unit, showMenuButton: Boolean = true) {
     val defaultModel = catalog?.let { c -> c.find(c.defaultProvider, c.defaultModel) ?: c.groups.firstOrNull()?.models?.firstOrNull() }
         ?.let { ModelChoice(it.provider, it.id, it.name, it.defaultEffort) }
     val curModel = (if (sid != null) models[sid] else draftModel) ?: defaultModel
-    val curPerm = if (sid != null) perms[sid] ?: "workspace-write" else draftPerm
+    val curPerm = if (sid != null) perms[sid].orEmpty() else if ("permissions.catalog" in ops) draftPerm else ""
+    val currentPermissionLabel = permissionLabel(curPerm, permissionDirectory?.find(curPerm))
     val summary = sessions.firstOrNull { it.sessionId == sid }
     val dot = status[active]
     val workspaces = sessions.mapNotNull { it.cwd }.distinct()
-    val showPanel = "files.list" in ops || "jobs.list" in ops || "terminal.create" in ops || (chat?.todos?.isNotEmpty() == true)
+    val showPanel = "files.list" in ops || ("terminal.create" in ops && "terminal.follow" in ops)
+    LaunchedEffect(sheet) {
+        if (sheet == Sheet.Permission) Pocket.reloadPermissionCatalog()
+    }
+    LaunchedEffect(permissionDirectory, dot, sid) {
+        val directory = permissionDirectory
+        if (sid == null && directory != null && directory.find(draftPerm) == null) {
+            draftPerm = directory.defaultPreset
+        }
+        if (sheet == Sheet.PermissionRisk && (riskPermission == null || dot != Dot.Online ||
+                directory?.find(riskPermission.orEmpty()) == null)) {
+            riskPermission = null
+            sheet = Sheet.None
+        }
+    }
+    fun selectPermission(value: String) {
+        if (Pocket.permissionCatalog.value?.find(value) == null || dot != Dot.Online) return
+        if (sid == null) {
+            draftPerm = value
+            riskPermission = null
+            sheet = Sheet.None
+        } else {
+            Pocket.setPermission(sid, value) { success ->
+                if (Pocket.chat.value?.sessionId == sid) {
+                    riskPermission = null
+                    permissionPickerAttempt++
+                    sheet = if (success) Sheet.None else Sheet.Permission
+                }
+            }
+        }
+    }
 
     // Connection status lives in the drawer only (desktop session header has no pocket status dot).
     CompositionLocalProvider(LocalOpenFilePreview provides { path ->
@@ -199,8 +236,11 @@ fun ChatRoot(onMenu: () -> Unit, showMenuButton: Boolean = true) {
                 Chip(D.agentPreset, presetLabel(draftPreset)) { sheet = Sheet.Preset }
             }
             Composer(
-                "描述你想要构建的内容, / 调用指令, @ 文件或对话", false, curPerm, curModel, enabled = dot == Dot.Online,
+                "描述你想要构建的内容, / 调用指令, @ 文件或对话", false, curPerm, curModel,
+                enabled = dot == Dot.Online && (curPerm.isEmpty() ||
+                    (!permissionLoading && permissionDirectory?.find(curPerm) != null)),
                 pendingImages = pendingImages, pendingFiles = pendingFiles,
+                permissionName = currentPermissionLabel,
                 onPlus = { sheet = Sheet.Plus }, onPerm = { sheet = Sheet.Permission }, onModel = { sheet = Sheet.Model },
                 onRemoveImage = { i -> pendingImages = pendingImages.toMutableList().also { it.removeAt(i) } },
                 onRemoveFile = { i -> pendingFiles = pendingFiles.toMutableList().also { it.removeAt(i) } },
@@ -219,7 +259,7 @@ fun ChatRoot(onMenu: () -> Unit, showMenuButton: Boolean = true) {
                 onSlash = { sheet = Sheet.Commands },
                 onMention = { sheet = Sheet.Mentions },
                 onSend = { text ->
-                    Pocket.newSession(text, draftPreset, draftPerm, draftModel, draftCwd ?: workspaces.firstOrNull())
+                    Pocket.newSession(text, draftPreset, curPerm.takeIf { it.isNotEmpty() }, draftModel, draftCwd ?: workspaces.firstOrNull())
                     pendingImages = emptyList(); pendingFiles = emptyList()
                 },
                 onStop = {},
@@ -228,7 +268,16 @@ fun ChatRoot(onMenu: () -> Unit, showMenuButton: Boolean = true) {
         } else {
             val st = chat!!
             var tab by remember(st.sessionId) { mutableIntStateOf(0) }
-            Tabs(tab) { tab = it }
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Box(Modifier.weight(1f)) { Tabs(tab) { tab = it } }
+                if ("jobs.list" in ops) {
+                    TextButton(onClick = { sheet = Sheet.Jobs }, modifier = Modifier.padding(end = 8.dp)) {
+                        Icon(D.clock, null, modifier = Modifier.size(16.dp), tint = T.Text2)
+                        Spacer(Modifier.width(6.dp))
+                        Text("后台任务", color = T.Text2, fontSize = 12.sp)
+                    }
+                }
+            }
             Box(Modifier.weight(1f).fillMaxWidth()) {
                 if (tab == 0) Transcript(
                     st,
@@ -249,10 +298,22 @@ fun ChatRoot(onMenu: () -> Unit, showMenuButton: Boolean = true) {
             }
             questions.firstOrNull { it.sessionId == null || it.sessionId == st.sessionId }?.let { UserQuestionCard(it) }
             approvals.firstOrNull { it.sessionId == null || it.sessionId == st.sessionId }?.let { ApprovalCard(it) }
+            if (st.todos.isNotEmpty()) {
+                Row(
+                    Modifier.fillMaxWidth().clickable { sheet = Sheet.Todo }.padding(horizontal = 20.dp, vertical = 10.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Icon(D.plan, null, tint = T.Text3, modifier = Modifier.size(16.dp))
+                    Text("任务", color = T.Text2, fontSize = 13.sp, modifier = Modifier.padding(start = 8.dp).weight(1f))
+                    Text("${st.todos.count { it.status == "completed" }}/${st.todos.size}", color = T.Text3, fontSize = 12.sp)
+                    Icon(D.chevronRight, null, tint = T.Text3, modifier = Modifier.padding(start = 8.dp).size(16.dp))
+                }
+            }
             Composer(
                 "发消息或创建任务, / 调用指令, @ 文件或对话", st.running, curPerm, curModel, enabled = dot == Dot.Online,
                 planMode = st.planMode,
                 pendingImages = pendingImages, pendingFiles = pendingFiles,
+                permissionName = currentPermissionLabel,
                 onPlus = { sheet = Sheet.Plus }, onPerm = { sheet = Sheet.Permission }, onModel = { sheet = Sheet.Model },
                 onRemoveImage = { i -> pendingImages = pendingImages.toMutableList().also { it.removeAt(i) } },
                 onRemoveFile = { i -> pendingFiles = pendingFiles.toMutableList().also { it.removeAt(i) } },
@@ -282,17 +343,34 @@ fun ChatRoot(onMenu: () -> Unit, showMenuButton: Boolean = true) {
                 },
                 onStop = { Pocket.cancel() },
             )
-            Footer(st)
+            ComposerStats(st.composerMetrics)
         }
     }
 
     tool?.let { ToolSheet(it) { tool = null } }
     when (sheet) {
         Sheet.Model -> ModelSheet(catalog, curModel, onDismiss = { sheet = Sheet.None }) { m -> if (sid == null) draftModel = m else Pocket.selectModel(sid, m) }
-        Sheet.Permission -> PermissionSheet(curPerm, onDismiss = { sheet = Sheet.None }) { p ->
-            if (p == "danger-full-access") sheet = Sheet.FullAccess else { if (sid == null) draftPerm = p else Pocket.setPermission(sid, p); sheet = Sheet.None }
+        Sheet.Permission -> key(permissionPickerAttempt) {
+            PermissionPickerSheet(
+                current = curPerm, catalog = permissionDirectory, loading = permissionLoading, error = permissionError,
+                onRefresh = { Pocket.reloadPermissionCatalog() }, onDismiss = { sheet = Sheet.None },
+                enabled = dot == Dot.Online, busy = permissionChanging,
+                onPick = { value ->
+                    if (value == "danger-full-access" || value == "auto") {
+                        riskPermission = value
+                        sheet = Sheet.PermissionRisk
+                    } else selectPermission(value)
+                },
+            )
         }
-        Sheet.FullAccess -> FullAccessSheet(onDismiss = { sheet = Sheet.None }) { if (sid == null) draftPerm = "danger-full-access" else Pocket.setPermission(sid, "danger-full-access"); sheet = Sheet.None }
+        Sheet.PermissionRisk -> riskPermission?.let { value ->
+            PermissionRiskSheet(
+                preset = value, onDismiss = { riskPermission = null; sheet = Sheet.None },
+                onConfirm = { selectPermission(value) },
+                enabled = dot == Dot.Online && !permissionChanging && !permissionLoading &&
+                    permissionDirectory?.find(value) != null,
+            )
+        }
         Sheet.Preset -> PresetSheet(if (sid == null) draftPreset else "standard", editable = sid == null, onDismiss = { sheet = Sheet.None }) { draftPreset = it }
         Sheet.Plus -> PlusSheet(
             onDismiss = { sheet = Sheet.None },
@@ -307,13 +385,10 @@ fun ChatRoot(onMenu: () -> Unit, showMenuButton: Boolean = true) {
         )
         Sheet.More -> MoreSheet(chat, onDismiss = { sheet = Sheet.None }, onFeedback = { sheet = Sheet.Feedback }, onExport = { doExport() })
         Sheet.Panel -> PanelSheet(
-            summary?.cwd,
-            todos = chat?.todos.orEmpty(),
+            hasSession = sid != null,
             onDismiss = { sheet = Sheet.None },
             onFiles = { sheet = Sheet.Files },
             onTerminal = { sheet = Sheet.Terminal },
-            onJobs = { sheet = Sheet.Jobs },
-            onTodo = { sheet = Sheet.Todo },
         )
         Sheet.Team -> TeamSheet(onDismiss = { sheet = Sheet.None })
         Sheet.Workspace -> WorkspaceSheet(workspaces, draftCwd ?: workspaces.firstOrNull(), onDismiss = { sheet = Sheet.None }) { draftCwd = it }
@@ -338,9 +413,9 @@ fun ChatRoot(onMenu: () -> Unit, showMenuButton: Boolean = true) {
             onExport = { doExport() },
         )
         Sheet.Mentions -> MentionPopupSheet(onDismiss = { sheet = Sheet.None })
-        Sheet.Files -> sid?.let { FilesSheet(it, onDismiss = { sheet = Sheet.None }) } ?: run { sheet = Sheet.None }
+        Sheet.Files -> sid?.let { FilesSheet(it, onDismiss = { sheet = Sheet.None }, onBack = { sheet = Sheet.Panel }) }
         Sheet.Jobs -> sid?.let { JobsSheet(it, onDismiss = { sheet = Sheet.None }) } ?: run { sheet = Sheet.None }
-        Sheet.Terminal -> sid?.let { TerminalSheet(it, onDismiss = { sheet = Sheet.None }) } ?: run { sheet = Sheet.None }
+        Sheet.Terminal -> sid?.let { TerminalSheet(it, onDismiss = { sheet = Sheet.None }, onBack = { sheet = Sheet.Panel }) }
         Sheet.Todo -> TodoSheet(chat?.todos.orEmpty(), onDismiss = { sheet = Sheet.None })
         Sheet.FilePreview -> {
             val p = previewPath
@@ -372,7 +447,7 @@ private fun TopBar(title: String?, inChat: Boolean, onMenu: (() -> Unit)?, onMor
         }
         IconButton(onMore, Modifier.size(40.dp)) { Icon(D.ellipsis, "更多", tint = T.Ink) }
         if (!inChat) IconButton(onNew, Modifier.size(40.dp)) { Icon(D.newChat, "新会话", tint = T.Ink) }
-        if (onPanel != null) IconButton(onPanel, Modifier.size(40.dp)) { Icon(D.panelRight, "右侧面板", tint = T.Ink, modifier = Modifier.size(20.dp)) }
+        if (onPanel != null) IconButton(onPanel, Modifier.size(40.dp)) { Icon(D.panelRight, "右侧面板", tint = T.Text2, modifier = Modifier.size(15.dp)) }
     }
     HorizontalDivider(color = T.Fill)
 }
@@ -1002,6 +1077,7 @@ private fun Composer(
     model: ModelChoice?,
     enabled: Boolean,
     planMode: Boolean = false,
+    permissionName: String = permissionLabel(perm),
     pendingImages: List<PromptImage> = emptyList(),
     pendingFiles: List<PendingAttach> = emptyList(),
     onPlus: () -> Unit,
@@ -1099,18 +1175,22 @@ private fun Composer(
                     Spacer(Modifier.width(6.dp))
                 }
                 val danger = perm == "danger-full-access"
-                // Match desktop PermissionSelect: each built-in preset has its own artwork.
-                Row(Modifier.clip(T.R8).clickable(onClick = onPerm).padding(horizontal = 6.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
-                    D.permission(perm)?.let { icon ->
-                        Icon(icon, permissionLabel(perm), tint = if (danger) T.WarnText else T.Text2, modifier = Modifier.size(16.dp))
-                        Spacer(Modifier.width(5.dp))
+                // Keep the current mode accessible without taking width from the model name.
+                if (perm.isNotEmpty()) IconButton(
+                    onClick = onPerm,
+                    modifier = Modifier.size(40.dp).testTag("composerPermission")
+                        .semantics { contentDescription = permissionName },
+                ) {
+                    val icon = D.permission(perm)
+                    if (icon != null) {
+                        Icon(icon, null, tint = if (danger) T.WarnText else T.Text2, modifier = Modifier.size(18.dp))
+                    } else {
+                        Text(permissionName, fontSize = 12.sp, color = T.Text2, maxLines = 1, overflow = TextOverflow.Ellipsis)
                     }
-                    Text(permissionLabel(perm), fontSize = 14.sp, color = T.Text2, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    Icon(D.chevronDown, null, tint = T.Text2, modifier = Modifier.size(16.dp))
                 }
                 Row(Modifier.weight(1f), horizontalArrangement = Arrangement.End) {
                     Row(Modifier.clip(T.R8).clickable(onClick = onModel).padding(horizontal = 6.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
-                        Text(model?.let { shortModelName(it.name) } ?: "选择模型", fontSize = 14.sp, color = T.Text2, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
+                        Text(model?.name ?: "选择模型", fontSize = 14.sp, color = T.Text2, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false).testTag("composerModelName"))
                         model?.effort?.let { Spacer(Modifier.width(5.dp)); Text(it.replaceFirstChar(Char::uppercase), fontSize = 14.sp, color = T.Caption, maxLines = 1, softWrap = false) }
                         Icon(D.chevronDown, null, tint = T.Text2, modifier = Modifier.size(16.dp))
                     }
@@ -1142,15 +1222,5 @@ private fun Composer(
                 }
             }
         }
-    }
-}
-
-@Composable
-private fun Footer(st: ChatState) {
-    val u = st.usage
-    val detailed = Pocket.prefs.performanceUsage == PerformanceUsage.Detailed
-    Row(Modifier.fillMaxWidth().padding(vertical = 8.dp), horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically) {
-        Text("${u.turns} 轮 ${u.steps} 步", fontSize = 12.sp, color = T.Text3)
-        if (detailed) u.cacheHitPercent?.let { Spacer(Modifier.width(14.dp)); Text("缓存命中 $it%", fontSize = 12.sp, color = T.Text3) }
     }
 }

@@ -13,28 +13,49 @@ export function isTailscaleHost(host) {
 }
 
 /**
- * Pick the address advertised in pairing URIs.
- * Prefer an explicit non-loopback config host; else Tailscale IP; else first LAN IPv4.
+ * Discover phone-reachable IPv4 endpoints on the interfaces actually bound by WS.
+ * A concrete bind (including a resolved config hostname) must not advertise other NICs.
  *
  * @param {string | undefined | null} configured
- * @returns {string}
+ * @param {string} boundHost Actual server.address().address, or the configured bind.
+ * @param {ReturnType<typeof networkInterfaces>} [interfaces]
+ * @returns {Array<{type: 'lan'|'tailscale', host: string}>}
  */
-export function pickAdvertiseHost(configured) {
+export function listAdvertiseNetworks(configured, boundHost = pickBindHost(configured), interfaces = networkInterfaces()) {
   const pinned = typeof configured === 'string' ? configured.trim() : ''
-  if (pinned && pinned !== '127.0.0.1' && pinned !== '0.0.0.0' && pinned !== '::' && pinned !== 'localhost') {
-    return pinned
-  }
-  const addrs = []
-  for (const list of Object.values(networkInterfaces())) {
+  const wildcard = boundHost === '0.0.0.0' || boundHost === '::'
+  const explicit = pinned && pinned !== '0.0.0.0' && pinned !== '::'
+  const networks = []
+  for (const list of Object.values(interfaces)) {
     for (const n of list ?? []) {
-      const family = n.family
-      if (family !== 'IPv4' && family !== 4) continue
-      if (n.internal) continue
-      if (!n.address) continue
-      addrs.push(n.address)
+      if (n.family !== 'IPv4' && n.family !== 4) continue
+      if (n.internal || !n.address || n.address.startsWith('127.') || n.address === '0.0.0.0') continue
+      if (!wildcard && n.address !== boundHost) continue
+      if (explicit && pinned !== n.address && boundHost === pinned) continue
+      const host = explicit ? pinned : n.address
+      const type = isTailscaleHost(host) || isTailscaleHost(n.address) ? 'tailscale' : 'lan'
+      if (!networks.some((network) => network.type === type)) networks.push({ type, host })
     }
   }
-  return addrs.find((a) => isTailscaleHost(a)) ?? addrs[0] ?? (pinned || '127.0.0.1')
+  return networks.sort((a, b) => Number(a.type === 'tailscale') - Number(b.type === 'tailscale'))
+}
+
+/**
+ * Omitted selection prefers LAN; explicit unavailable selections never fall back.
+ * @param {Array<{type: 'lan'|'tailscale', host: string}>} networks
+ * @param {string} [requested]
+ */
+export function selectNetwork(networks, requested) {
+  if (requested !== undefined && requested !== 'lan' && requested !== 'tailscale') {
+    throw Object.assign(new Error('network must be lan or tailscale'), { statusCode: 400 })
+  }
+  const selected = requested === undefined
+    ? networks.find((network) => network.type === 'lan') ?? networks[0]
+    : networks.find((network) => network.type === requested)
+  if (requested !== undefined && !selected) {
+    throw Object.assign(new Error(`${requested} network is unavailable on the bound interfaces`), { statusCode: 503 })
+  }
+  return selected
 }
 
 /**

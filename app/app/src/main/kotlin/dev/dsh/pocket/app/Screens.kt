@@ -25,6 +25,9 @@ import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
@@ -197,15 +200,6 @@ private fun SessionDrawerBody(
     Column(Modifier.fillMaxHeight()) {
         Row(Modifier.padding(start = 18.dp, end = 18.dp, top = 18.dp, bottom = 12.dp), verticalAlignment = Alignment.CenterVertically) {
             androidx.compose.foundation.Image(D.wordmark, "deepseek HARNESS", modifier = Modifier.height(22.dp).width(167.dp))
-            Spacer(Modifier.width(8.dp))
-            Row(
-                Modifier.weight(1f).clip(T.R8).clickable(onClick = onConnections).padding(4.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.End,
-            ) {
-                StatusDot(status[active]); Spacer(Modifier.width(6.dp))
-                Text(profile?.name ?: "未连接", fontSize = 13.sp, color = T.Text2, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            }
         }
         Row(
             Modifier.padding(horizontal = 12.dp).fillMaxWidth().height(38.dp).clip(T.R12).background(T.Surface).border(1.dp, T.Border, T.R12)
@@ -385,7 +379,7 @@ private fun SessionDrawerBody(
                 }
             }
         }
-        DrawerItem(D.settings, "设置", onClick = onSettings)
+        DrawerConnectionFooter(profile, status[active], onSettings, onConnections)
         Spacer(Modifier.height(8.dp))
     }
     if (viewOptionsOpen) {
@@ -630,12 +624,44 @@ private fun SessionRow(
 
 private val RoundedCornerShapeEnd = androidx.compose.foundation.shape.RoundedCornerShape(topEnd = 20.dp, bottomEnd = 20.dp)
 
+/** Keep connection identity next to Settings, leaving the session-list header uncluttered. */
 @Composable
-private fun DrawerItem(icon: ImageVector, text: String, enabled: Boolean = true, onClick: () -> Unit = {}) {
-    Row(Modifier.padding(horizontal = 10.dp).fillMaxWidth().clip(T.R8).clickable(enabled = enabled, onClick = onClick).alpha(if (enabled) 1f else 0.45f).padding(12.dp),
-        verticalAlignment = Alignment.CenterVertically) {
-        Icon(icon, null, Modifier.size(18.dp), tint = T.Ink); Spacer(Modifier.width(12.dp))
-        Text(text, fontSize = 15.sp, color = T.Ink, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+internal fun DrawerConnectionFooter(
+    profile: Profile?,
+    status: Dot?,
+    onSettings: () -> Unit,
+    onConnections: () -> Unit,
+) {
+    Row(Modifier.fillMaxWidth().padding(horizontal = 10.dp).testTag("drawerFooter"), verticalAlignment = Alignment.CenterVertically) {
+        Row(
+            Modifier.clip(T.R8).clickable(role = Role.Button, onClick = onSettings)
+                .heightIn(min = 48.dp).padding(horizontal = 10.dp).testTag("drawerSettings"),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(D.settings, null, Modifier.size(18.dp), tint = T.Ink)
+            Spacer(Modifier.width(8.dp))
+            Text(L.settings(), fontSize = 14.sp, color = T.Ink)
+        }
+        Spacer(Modifier.width(4.dp))
+        val connectionName = profile?.name ?: if (Pocket.prefs.language == AppLanguage.En) "Not connected" else "未连接"
+        Column(
+            Modifier.weight(1f).clip(T.R8).clickable(role = Role.Button, onClick = onConnections)
+                .heightIn(min = 48.dp).padding(horizontal = 8.dp, vertical = 5.dp)
+                .testTag("drawerConnection")
+                .semantics { contentDescription = listOfNotNull(connectionName, profile?.subtitle, dotLabel(status)).joinToString("，") },
+            horizontalAlignment = Alignment.End,
+            verticalArrangement = Arrangement.Center,
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                StatusDot(status)
+                Spacer(Modifier.width(6.dp))
+                Text(connectionName, fontSize = 12.sp, color = T.Text2, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            }
+            profile?.let {
+                Text(it.subtitle, style = T.Mono.copy(fontSize = 11.sp, color = T.Text3),
+                    maxLines = 1, overflow = TextOverflow.Ellipsis)
+            }
+        }
     }
 }
 
@@ -1393,10 +1419,21 @@ fun GeneralSettingsScreen(onBack: () -> Unit) {
     var perf by remember { mutableStateOf(Pocket.prefs.performanceUsage) }
     var layout by remember { mutableStateOf(Pocket.prefs.layoutMode) }
     var sheet by remember { mutableStateOf<String?>(null) }
+    val permissionDirectory by Pocket.permissionCatalog.collectAsState()
+    val permissionLoading by Pocket.permissionCatalogLoading.collectAsState()
+    val permissionError by Pocket.permissionCatalogError.collectAsState()
+    val activeHost by Pocket.active.collectAsState()
+    val connections by Pocket.status.collectAsState()
+    val permissionOnline = connections[activeHost] == Dot.Online
+    LaunchedEffect(sheet) { if (sheet == "perm") Pocket.reloadPermissionCatalog() }
+    LaunchedEffect(permissionDirectory, permissionOnline, activeHost) {
+        if (sheet == "permRisk" && (!permissionOnline ||
+                permissionDirectory?.allowsDefault("danger-full-access") != true)) sheet = null
+    }
     Column(Modifier.fillMaxSize().background(T.Bg).systemBarsPadding().verticalScroll(rememberScrollState())) {
         Header("通用设置", onBack)
         Card {
-            Row2("权限", "选择新会话的默认权限模式", value = permissionLabel(perm), onClick = { sheet = "perm" }, trailing = { DownArrow() })
+            Row2("权限", "选择新会话的默认权限模式", value = permissionLabel(perm, permissionDirectory?.find(perm)), onClick = { sheet = "perm" }, trailing = { DownArrow() })
             Row2(L.language(), value = lang.label, onClick = { sheet = "lang" }, trailing = { DownArrow() })
             Row2(
                 L.appearance(),
@@ -1432,10 +1469,31 @@ fun GeneralSettingsScreen(onBack: () -> Unit) {
         Text("当前版本：${BuildConfig.VERSION_NAME}", fontSize = 12.sp, color = T.Caption, textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth().padding(16.dp))
     }
     when (sheet) {
-        "perm" -> PocketSheet({ sheet = null }) {
-            SheetTitle("默认权限")
-            PERMISSION_LABEL.forEach { (id, l) -> OptionRow(l.first, l.second, selected = perm == id) { perm = id; Pocket.prefs.defaultPermission = id; sheet = null } }
-        }
+        "perm" -> PermissionPickerSheet(
+            current = perm, catalog = permissionDirectory, loading = permissionLoading, error = permissionError,
+            onRefresh = { Pocket.reloadPermissionCatalog() }, onDismiss = { sheet = null },
+            enabled = permissionOnline, forDefaults = true,
+            onPick = { value ->
+                if (value == "danger-full-access") sheet = "permRisk"
+                else if (Pocket.permissionCatalog.value?.allowsDefault(value) == true) {
+                    perm = value
+                    Pocket.prefs.defaultPermission = value
+                    sheet = null
+                }
+            },
+        )
+        "permRisk" -> PermissionRiskSheet(
+            preset = "danger-full-access", onDismiss = { sheet = null }, forDefaults = true,
+            enabled = permissionOnline && !permissionLoading &&
+                permissionDirectory?.allowsDefault("danger-full-access") == true,
+            onConfirm = {
+                if (Pocket.permissionCatalog.value?.allowsDefault("danger-full-access") == true) {
+                    perm = "danger-full-access"
+                    Pocket.prefs.defaultPermission = perm
+                    sheet = null
+                }
+            },
+        )
         "lang" -> PocketSheet({ sheet = null }) {
             SheetTitle(L.language())
             AppLanguage.entries.forEach { o -> OptionRow(o.label, selected = lang == o) { lang = o; Pocket.prefs.language = o; sheet = null } }

@@ -137,20 +137,26 @@ class PocketClient(
         if (m["ev"] != null) scope.launch { _events.emit(m) }
     }
 
-    /** Send one op; returns `result` or throws [PocketError]. */
+    /** Send one op; returns `result` or throws [PocketError], preserving caller cancellation. */
     suspend fun call(op: String, args: JsonObject = JsonObject(emptyMap()), timeoutMs: Long = 60_000): JsonElement {
         val t = transport ?: throw PocketError("transport", "not connected")
         val id = nextId.getAndIncrement()
         val d = CompletableDeferred<JsonObject>()
         pending[id] = d
         val frame = buildJsonObject { put("id", id); put("op", op); put("args", args) }
-        try {
-            t.send(frame.toString())
-        } catch (e: Exception) {
+        val reply = try {
+            try {
+                t.send(frame.toString())
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                throw PocketError("transport", e.message ?: "send failed")
+            }
+            withTimeoutOrNull(timeoutMs) { d.await() }
+                ?: throw PocketError("timeout", "RPC $op timed out after ${timeoutMs}ms")
+        } finally {
             pending.remove(id)
-            throw PocketError("transport", e.message ?: "send failed")
         }
-        val reply = try { withTimeout(timeoutMs) { d.await() } } finally { pending.remove(id) }
         if (reply["ok"].bool() == true) return reply["result"] ?: JsonNull
         throw PocketError(reply["error"]["code"].str() ?: "error", reply["error"]["message"].str() ?: "")
     }
@@ -246,9 +252,11 @@ class PocketClient(
     suspend fun unfollow(subId: String) = call("unfollow", jsonOf("subId" to subId))
     suspend fun answerApproval(approvalId: String, outcome: String) =
         call("approval.answer", jsonOf("approvalId" to approvalId, "outcome" to outcome))
-    suspend fun permissionCatalog(): List<String> = call("permissions.catalog")["options"].arr().orEmpty().mapNotNull { it["value"].str() }
-    suspend fun permission(sessionId: String): String? = call("permissions.get", jsonOf("sessionId" to sessionId))["current"].str()
-    suspend fun setPermission(sessionId: String, name: String): String? = call("permissions.set", jsonOf("sessionId" to sessionId, "name" to name))["current"].str()
+    suspend fun permissionCatalog(): PermissionCatalog = PermissionCatalog.parse(call("permissions.catalog"))
+    suspend fun permission(sessionId: String): String =
+        PermissionSelection.parse(call("permissions.get", jsonOf("sessionId" to sessionId))).currentValue
+    suspend fun setPermission(sessionId: String, name: String): String =
+        PermissionSelection.parse(call("permissions.set", jsonOf("sessionId" to sessionId, "name" to name))).currentValue
     suspend fun presets(): List<String> = call("presets.list")["presets"].arr().orEmpty().mapNotNull { it["id"].str() }
 
     suspend fun searchSessions(query: String): JsonElement =

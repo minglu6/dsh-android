@@ -68,8 +68,15 @@ test('real dsh: permissions + presets ops', { skip: !hasDsh, timeout: 240_000 },
   assert.ok(h.ops.includes('permissions.set') && h.ops.includes('presets.list'), h.ops.join())
   const cat = await c.ok('permissions.catalog')
   assert.ok(cat.options.length > 0)
+  for (const option of cat.options) {
+    assert.equal(typeof option.value, 'string')
+    assert.equal(typeof option.name, 'string')
+    if ('description' in option) assert.equal(typeof option.description, 'string')
+  }
+  assert.ok(cat.defaultOptions.some((option) => option.value === cat.defaultPreset))
+  assert.ok(cat.defaultOptions.every((option) => option.value !== 'auto' && option.value !== 'custom'))
   const { sessionId } = await c.ok('sessions.create', {})
-  const other = cat.options.map((o) => o.value ?? o.name ?? o.id).find((v) => v && v !== cat.defaultPreset) ?? cat.defaultPreset
+  const other = cat.defaultOptions.find((option) => option.value !== cat.defaultPreset)?.value ?? cat.defaultPreset
   const set = await c.ok('permissions.set', { sessionId, name: other })
   assert.equal(set.current, other)
   assert.equal((await c.ok('permissions.get', { sessionId })).current, other)

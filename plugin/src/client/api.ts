@@ -1,3 +1,5 @@
+export type NetworkType = 'lan' | 'tailscale'
+
 export type PairingStatus = {
   open: boolean
   code?: string
@@ -27,9 +29,31 @@ export type PocketStatus = {
   transport?: 'tailscale'
   host: string
   port: number
+  connectionType: NetworkType | null
+  networks: Array<{ type: NetworkType, host: string }>
   listen: Array<{ host: string, port: number, address: string }>
   pairing: PairingStatus
   devices: DeviceRow[]
+}
+
+export type ConnectionDiagnostics = {
+  version: number
+  generatedAt: number
+  overall: string
+  summary: string
+  report: string
+  checks: Array<{ id: string, status: string, label: string, detail: string }>
+}
+
+export interface PocketApi {
+  status(network?: NetworkType): Promise<PocketStatus>
+  pairStatus(network?: NetworkType): Promise<PairingStatus>
+  openPair(network?: NetworkType): Promise<PairingStatus>
+  closePair(): Promise<{ open: false }>
+  listDevices(): Promise<DeviceRow[]>
+  revoke(id: string): Promise<{ removed: boolean, devices: DeviceRow[] }>
+  rename(id: string, name: string): Promise<{ renamed: boolean, devices: DeviceRow[] }>
+  diagnostics(): Promise<ConnectionDiagnostics>
 }
 
 async function readBody(res: Response): Promise<unknown> {
@@ -54,14 +78,14 @@ async function parse<T>(res: Response): Promise<T> {
 }
 
 /** Same-origin fetch helpers for the Host management routes. */
-export function createPocketApi(base = '') {
-  const url = (path: string) => `${base}${path}`
-  const get = async <T>(path: string, init?: RequestInit) => parse<T>(await fetch(url(path), init))
+export function createPocketApi(base = ''): PocketApi {
+  const get = async <T>(path: string, init?: RequestInit) => parse<T>(await fetch(`${base}${path}`, init))
+  const networkPath = (path: string, network?: NetworkType) => network ? `${path}?network=${network}` : path
   return {
-    status: () => get<PocketStatus>('/pocket/status'),
-    pairStatus: () => get<PairingStatus>('/pocket/pair'),
-    openPair: () => get<PairingStatus & { uri?: string, pairingString?: string }>(
-      '/pocket/pair', { method: 'POST' },
+    status: (network?: NetworkType) => get<PocketStatus>(networkPath('/pocket/status', network)),
+    pairStatus: (network?: NetworkType) => get<PairingStatus>(networkPath('/pocket/pair', network)),
+    openPair: (network?: NetworkType) => get<PairingStatus>(
+      networkPath('/pocket/pair', network), { method: 'POST' },
     ),
     closePair: () => get<{ open: false }>('/pocket/pair', { method: 'DELETE' }),
     listDevices: () => get<{ devices: DeviceRow[] }>('/pocket/devices').then((r) => r.devices),
@@ -79,15 +103,6 @@ export function createPocketApi(base = '') {
         body: JSON.stringify({ id, name }),
       },
     ),
-    diagnostics: () => get<{
-      version: number
-      generatedAt: number
-      overall: string
-      summary: string
-      report: string
-      checks: Array<{ id: string, status: string, label: string, detail: string }>
-    }>('/pocket/diagnostics'),
+    diagnostics: () => get<ConnectionDiagnostics>('/pocket/diagnostics'),
   }
 }
-
-export type PocketApi = ReturnType<typeof createPocketApi>

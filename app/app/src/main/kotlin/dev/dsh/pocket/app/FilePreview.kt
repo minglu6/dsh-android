@@ -22,6 +22,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -75,7 +76,7 @@ fun previewKindFor(path: String): PreviewKind {
  * Copy action uses common locale `copy` / `copied`.
  */
 @Composable
-fun FilePreviewSheet(sessionId: String, path: String, onDismiss: () -> Unit) {
+fun FilePreviewSheet(sessionId: String, path: String, onDismiss: () -> Unit, onBack: (() -> Unit)? = null) {
     val kind = remember(path) { previewKindFor(path) }
     var loading by remember(path) { mutableStateOf(true) }
     var error by remember(path) { mutableStateOf<String?>(null) }
@@ -112,22 +113,18 @@ fun FilePreviewSheet(sessionId: String, path: String, onDismiss: () -> Unit) {
 
     LaunchedEffect(sessionId, path) { reload() }
 
-    PocketSheet(onDismiss) {
+    RightPanelFrame(
+        title = path.substringAfterLast('/').substringAfterLast('\\').ifBlank { path },
+        onDismiss = onDismiss,
+        onBack = onBack,
+    ) {
+        Column(Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(vertical = 12.dp)) {
         Row(
             Modifier.fillMaxWidth().padding(horizontal = 22.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Column(Modifier.weight(1f)) {
-                Text(
-                    path.substringAfterLast('/').substringAfterLast('\\').ifBlank { path },
-                    fontSize = 18.sp,
-                    fontWeight = FontWeight.SemiBold,
-                    color = T.Ink,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-                Text(path, style = T.Mono.copy(color = T.Text3, fontSize = 12.sp), maxLines = 2, overflow = TextOverflow.Ellipsis)
-            }
+            Text(path, style = T.Mono.copy(color = T.Text3, fontSize = 12.sp), maxLines = 2,
+                overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
             if (text != null) {
                 Text(
                     if (copied) L.copied() else L.copy(),
@@ -189,6 +186,7 @@ fun FilePreviewSheet(sessionId: String, path: String, onDismiss: () -> Unit) {
                 color = T.Text2,
                 modifier = Modifier.padding(22.dp),
             )
+        }
         }
     }
 }

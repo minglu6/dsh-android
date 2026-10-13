@@ -10,7 +10,7 @@ dsh plugin --profile web add /path/to/dsh-android/plugin # 从源码安装
 dsh web
 ```
 
-启动后日志会出现 `[pocket] remote transport: tailscale (advertise host:port, bind …)`。第一次运行时会生成 token，保存在 `$DSH_HOME/pocket/token`，文件权限 0600。
+启动后日志会出现 `[pocket] remote transport: tailscale (bind …)`，随后显示实际监听端口和默认配对地址。`tailscale` 是沿用的 WebSocket 传输标识，不代表必须安装 Tailscale。第一次运行时会生成 token，保存在 `$DSH_HOME/pocket/token`，文件权限 0600。
 
 ## 配置（`$DSH_HOME/profiles/web/cordis.patch.yml`）
 
@@ -18,7 +18,7 @@ dsh web
 - id: dsh-pocket
   config:
     # transport: tailscale     # 手机路径仅 host:port WS
-    # host:                    # 不写则自动选 Tailscale IP，否则局域网 IP；绑定默认 0.0.0.0
+    # host:                    # 不写则默认局域网，可选 Tailscale；绑定默认 0.0.0.0
     # port: 7690
     # token: 固定 token；不填则使用自动生成的那个
     # iroh: true               # 可选：启动遗留 pocket-host sidecar（不参与手机配对）
@@ -29,12 +29,14 @@ dsh web
 
 手机只走 **host:port WebSocket**。插件默认：
 
-1. 若配置了 `host`，用该地址做配对广告（并按该地址绑定）。
-2. 否则优先检测本机 Tailscale IP（`100.64.0.0/10` / `.ts.net`），没有则用局域网 IPv4；WS 绑定 `0.0.0.0`。
+1. 不配置 `host` 时，WS 绑定 `0.0.0.0`，默认使用局域网 IPv4；无局域网地址时使用可用的 Tailscale 地址。
+2. 同时有两类地址时，设置页显示「局域网 / Tailscale」切换；地址、二维码和复制的配对链接同步切换，不重启服务、不影响已配对设备。
+3. 配置具体 `host` 时，仅公布该监听接口的地址。若希望两类网络均可连接，请移除具体 `host` 配置；配置 `0.0.0.0` 也可。
+4. 仅有一种可用网络时不显示切换控件；无可用地址时禁用配对。刷新会重新发现网卡，明确选择的网络不可用时会报错，不悄悄生成另一网络的二维码。
 
-配对 URI：`dshpocket://pair?h=<host:port>&c=<6位码>`（不再使用 `n=` / `nodeId#code`）。
+配对 URI：`dshpocket://pair?h=<host:port>&c=<6位码>`。每类网络使用第一个可用 IPv4 地址，不支持 IPv6-only 配对地址。
 
-电脑与手机需在同一 Tailscale tailnet，或同一局域网。
+局域网连接无需 Tailscale；手机与电脑需在同一可互访网络，防火墙允许配对端口，Wi-Fi 不启用设备隔离。Tailscale 连接要求两端在可互访的 tailnet 中。
 
 ## 管理 UI（桌面 / `dsh web`）
 
@@ -48,9 +50,10 @@ dsh web
 该弹层由 `@deepseek-ai/dsh-client-ui-settings-account` 的 `AccountMenu` 占用 `settings.launcher`（`kind: 'single'`）。菜单项是写死的数组（`settings` → `contact` → `signout`），**没有**类似 `settings.launcher.item` 的 list slot。替换整个 `settings.launcher` 会盖掉官方 AccountMenu，不算合法扩展。要在「设置」与「意见反馈」之间加一行，需要上游 dsh 新增扩展点。本插件因此**不**往侧栏 footer / 账号菜单乱挂入口。
 
 面板功能：
-- 连接器状态（配对广告地址、插件版本）
-- 打开配对窗口：6 位码 + 倒计时 + QR + 可复制配对串（`h=` URI）
-- 已配对设备：名称、最近活跃、是否在线；可重命名 / 撤销
+- 简洁的服务状态、网络选择和可复制地址；主页面不显示版本、协议和操作说明
+- 打开配对窗口：6 位码、倒计时、二维码、复制配对链接及关闭/重新配对
+- 已配对设备：数量、名称、在线状态及简短时间；重命名、二次确认后解除配对
+- 「连接诊断」展开脱敏报告，保留版本、网络、端口检查和报告复制
 
 文案走 `ctx.locale.register('pocket', { zh, en })`，跟随 dsh 的语言设置。样式只用 `--dsw-alias-*` 主题 token。
 
@@ -64,8 +67,9 @@ dsh web
 - **管理 UI**：设置 →「手机连接」（推荐）
 - CLI：`node bin/pocket.js pair`，用本机的 owner token 连上插件后打开窗口；`node bin/pocket.js devices` 查看设备，`node bin/pocket.js revoke <id>` 撤销设备
 - dsh 网页端口上的管理路由（Host 必须是回环权威，拒绝 `sec-fetch-site: cross-site` 与跨站 Origin）：
-  - `GET /pocket/status` — 运行状态 / 监听地址 / 版本 / 设备（含 online）
-  - `POST /pocket/pair` 打开窗口，`GET` 查状态（含 code），`DELETE` 关闭
+  - `GET /pocket/status[?network=lan|tailscale]` — 状态、可用 `networks`、实际选中的 `connectionType`、地址、版本、设备
+  - `POST /pocket/pair[?network=lan|tailscale]` 打开窗口；`GET` 支持相同选择并返回对应 URI；`DELETE` 关闭
+  - `network` 缺省时优先 LAN；未知值返回 400，不可用网络返回 503，均不打开配对窗口
   - `GET /pocket/devices` 列表；`POST` `{id}` 撤销；`PATCH` `{id,name}` 重命名
 - 在 patch 配置里写 `pair: true`
 
@@ -81,7 +85,17 @@ dsh 发起 `approval/request` 时，如果有已登录的设备在线，插件�
 
 ## 断点续订
 
-`sessions.follow` 支持 `fromSeq`。手机断线重连后带上次 cursor 续订；服务端按 seq 补帧。
+`follow` 支持 `afterSeq`。手机断线重连后带上次 cursor 续订；服务端按 seq 补帧。
+
+手机的统计栏使用 Host `sessionStats`、`tokenUsage`、`contextPressure`、`contextBreakdown` 投影，当前权限使用 `permissions` 投影。桥接订阅 `sessionProjections.onChanged`，只向正在 follow 对应会话的已认证客户端发送：
+
+```json
+{"ev":"follow","subId":"s1","frame":{"type":"projection","sessionId":"…","key":"contextPressure","value":{"pressureTokens":15437,"projectedTokens":15501,"contextWindow":180000},"seq":22}}
+```
+
+首个 snapshot/resume 发送前发生的变更按 key 暂存，先发送基线，再发送较新的投影。`seq` 是投影水位，不用于推进历史 cursor。
+
+`permissions.catalog` 返回完整 `options`、`defaultOptions`、`defaultPreset`。自动审查只在 Host 注册 `auto` 时可选，且不允许作为默认权限；`permissions.get/set` 保持既有 `{current: "…"}` 返回格式。Host 目录变化时广播 `{"ev":"permission-presets/catalog-changed"}`，客户端撤回旧选项并重新读取。新统计的实时更新与目录失效通知需要运行本版桥接；只更新 APK 不会自动重载电脑上的插件。
 
 ## 插件与自动化管理
 

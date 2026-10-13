@@ -49,12 +49,12 @@ async function parse(res) {
 }
 /** Same-origin fetch helpers for the Host management routes. */
 function createPocketApi(base = "") {
-	const url = (path) => `${base}${path}`;
-	const get = async (path, init) => parse(await fetch(url(path), init));
+	const get = async (path, init) => parse(await fetch(`${base}${path}`, init));
+	const networkPath = (path, network) => network ? `${path}?network=${network}` : path;
 	return {
-		status: () => get("/pocket/status"),
-		pairStatus: () => get("/pocket/pair"),
-		openPair: () => get("/pocket/pair", { method: "POST" }),
+		status: (network) => get(networkPath("/pocket/status", network)),
+		pairStatus: (network) => get(networkPath("/pocket/pair", network)),
+		openPair: (network) => get(networkPath("/pocket/pair", network), { method: "POST" }),
 		closePair: () => get("/pocket/pair", { method: "DELETE" }),
 		listDevices: () => get("/pocket/devices").then((r) => r.devices),
 		revoke: (id) => get("/pocket/devices", {
@@ -79,90 +79,80 @@ function createPocketApi(base = "") {
 const zh = {
 	entry: "手机连接",
 	title: "手机连接",
-	statusTitle: "连接器状态",
-	statusRunning: "运行中",
-	statusStopped: "未运行",
-	advertise: "配对地址",
-	wsReady: "WebSocket 已监听（Tailscale / 局域网）",
-	wsHint: "手机与电脑需在同一 Tailscale 或局域网；配对串为 host:port",
-	version: "版本",
+	statusRunning: "服务就绪",
+	statusStopped: "服务未就绪",
+	newDevice: "连接新设备",
+	network: "连接网络",
+	lan: "局域网",
+	tailscale: "Tailscale",
+	lanAddress: "局域网地址",
+	tailscaleAddress: "Tailscale 地址",
+	noNetwork: "没有可用的网络地址",
 	pair: "开始配对",
 	pairAgain: "重新配对",
 	pairClose: "关闭配对",
-	pairingOpen: "配对窗口已打开",
 	code: "配对码",
 	expiresIn: "{n} 秒后过期",
-	expiresMin: "约 {n} 分钟有效",
-	scanHint: "用手机扫码，或粘贴下方配对串",
-	uriHint: "配对串",
-	copy: "复制",
+	copy: "复制配对链接",
+	copyAddress: "复制地址",
 	copied: "已复制",
 	devices: "已配对设备",
-	empty: "还没有手机配对过",
+	empty: "暂无已配对设备",
 	online: "在线",
 	offline: "离线",
-	lastSeen: "最近活跃",
+	lastSeen: "上次在线",
 	neverSeen: "尚未连接",
 	rename: "重命名",
 	renameSave: "保存",
 	renameCancel: "取消",
-	revoke: "撤销",
-	revokeTitle: "撤销设备",
-	revokeBody: "将撤销「{name}」。之后该手机需重新配对才能连接。",
+	revoke: "解除配对",
+	revokeTitle: "解除配对",
+	revokeBody: "解除与「{name}」的配对？该手机需重新配对才能连接。",
 	cancel: "取消",
 	loading: "加载中…",
-	loadFailed: "加载失败",
 	refresh: "刷新",
 	close: "关闭",
-	noCode: "点击「开始配对」生成二维码与配对串",
 	diagnostics: "连接诊断",
-	openDiagnostics: "打开连接诊断",
-	diagnosticsCopy: "复制脱敏报告",
-	diagnosticsCopied: "已复制"
+	diagnosticsCopy: "复制脱敏报告"
 };
 const en = {
 	entry: "Phone connection",
 	title: "Phone connection",
-	statusTitle: "Connector status",
-	statusRunning: "Running",
-	statusStopped: "Stopped",
-	advertise: "Pairing address",
-	wsReady: "WebSocket listening (Tailscale / LAN)",
-	wsHint: "Phone and desktop must share a Tailscale or LAN; pairing uses host:port",
-	version: "Version",
+	statusRunning: "Service ready",
+	statusStopped: "Service unavailable",
+	newDevice: "Connect a device",
+	network: "Connection network",
+	lan: "LAN",
+	tailscale: "Tailscale",
+	lanAddress: "LAN address",
+	tailscaleAddress: "Tailscale address",
+	noNetwork: "No network address available",
 	pair: "Start pairing",
 	pairAgain: "Pair again",
 	pairClose: "Close pairing",
-	pairingOpen: "Pairing window open",
 	code: "Pairing code",
 	expiresIn: "Expires in {n}s",
-	expiresMin: "Valid for about {n} min",
-	scanHint: "Scan the QR, or paste the pairing string on the phone",
-	uriHint: "Pairing string",
-	copy: "Copy",
+	copy: "Copy pairing link",
+	copyAddress: "Copy address",
 	copied: "Copied",
 	devices: "Paired devices",
-	empty: "No phone paired yet",
+	empty: "No paired devices",
 	online: "Online",
 	offline: "Offline",
-	lastSeen: "Last seen",
+	lastSeen: "Last online",
 	neverSeen: "Never connected",
 	rename: "Rename",
 	renameSave: "Save",
 	renameCancel: "Cancel",
-	revoke: "Revoke",
-	revokeTitle: "Revoke device",
-	revokeBody: "Revoke “{name}”. The phone will need to pair again to reconnect.",
+	revoke: "Unpair",
+	revokeTitle: "Unpair device",
+	revokeBody: "Unpair “{name}”? The phone will need to pair again to reconnect.",
 	cancel: "Cancel",
 	loading: "Loading…",
-	loadFailed: "Failed to load",
 	refresh: "Refresh",
 	close: "Close",
-	noCode: "Click “Start pairing” for a QR and pairing string",
 	diagnostics: "Connection diagnostics",
-	openDiagnostics: "Open connection diagnostics",
-	diagnosticsCopy: "Copy redacted report",
-	diagnosticsCopied: "Copied"
+	diagnosticsCopy: "Copy redacted report"
 };
 
 //#endregion
@@ -210,192 +200,314 @@ function installPocketNavIcon() {
 
 //#endregion
 //#region src/client/styles.ts
-/**
-* Inline styles aligned with dsh settings chrome / ui-primitives tokens.
-* Does not `require` `@deepseek-ai/dsh-client-ui-primitives` (plugin hard rule);
-* geometry mirrors SettingsForm fields, DeveloperToolsRow, Button, StateDot.
-*/
+const text = "var(--dsw-alias-label-primary)";
+const muted = "var(--dsw-alias-label-secondary)";
+const border = "1px solid var(--dsw-alias-border-l2)";
+const surface = "var(--dsw-alias-bg-module-platform, var(--dsw-alias-bg-base))";
+const button = {
+	appearance: "none",
+	display: "inline-flex",
+	alignItems: "center",
+	justifyContent: "center",
+	gap: 8,
+	border: "none",
+	borderRadius: 8,
+	background: "transparent",
+	color: muted,
+	cursor: "pointer",
+	font: "inherit",
+	fontSize: 13,
+	lineHeight: "20px",
+	padding: "8px 10px"
+};
 const styles = {
 	settingsRoot: {
-		display: "flex",
-		flexDirection: "column",
 		width: "100%",
-		padding: "0 0 24px"
+		padding: "8px 0 24px",
+		color: text,
+		containerType: "inline-size"
 	},
-	settingsRow: {
+	header: {
+		display: "flex",
+		alignItems: "center",
+		justifyContent: "space-between",
+		gap: 16,
+		marginBottom: 24
+	},
+	title: {
+		margin: 0,
+		fontSize: 24,
+		fontWeight: 650,
+		lineHeight: "32px"
+	},
+	service: {
+		display: "inline-flex",
+		alignItems: "center",
+		gap: 6,
+		fontSize: 12,
+		color: muted
+	},
+	pairingCard: {
+		border,
+		borderRadius: 16,
+		background: surface,
+		padding: "24px 24px 0"
+	},
+	pairingTop: {
 		display: "flex",
 		alignItems: "center",
 		justifyContent: "space-between",
 		gap: 24,
-		padding: "16px 0",
-		borderBottom: "0.5px solid var(--dsw-alias-border-l2)"
+		minHeight: 168,
+		paddingBottom: 24
 	},
-	settingsBlock: {
+	pairControls: {
 		display: "flex",
 		flexDirection: "column",
-		gap: 0,
-		padding: "16px 0",
-		borderBottom: "0.5px solid var(--dsw-alias-border-l2)"
+		alignItems: "flex-start",
+		gap: 18,
+		minWidth: 0
 	},
 	rowTitle: {
-		fontSize: 14,
-		lineHeight: "20px",
-		color: "var(--dsw-alias-label-primary)"
+		margin: 0,
+		fontSize: 16,
+		lineHeight: "24px",
+		fontWeight: 600,
+		color: text
 	},
-	rowDescription: {
-		marginTop: 4,
+	illustration: {
+		width: 180,
+		maxWidth: "30%",
+		flexShrink: 0,
+		color: "var(--dsw-alias-label-tertiary)",
+		opacity: .55,
+		marginRight: 20
+	},
+	segments: {
+		display: "inline-flex",
+		padding: 3,
+		borderRadius: 10,
+		gap: 2,
+		background: "var(--dsw-alias-bg-overlay)"
+	},
+	segment: {
+		...button,
+		minWidth: 88,
+		padding: "6px 16px"
+	},
+	segmentActive: {
+		color: text,
+		background: "var(--dsw-alias-bg-base)",
+		boxShadow: "0 1px 4px rgba(0,0,0,.08)"
+	},
+	footer: {
+		display: "flex",
+		flexWrap: "wrap",
+		alignItems: "center",
+		justifyContent: "space-between",
+		gap: "8px 16px",
+		borderTop: border,
+		padding: "14px 0"
+	},
+	address: {
+		display: "flex",
+		flexWrap: "wrap",
+		alignItems: "center",
+		gap: 8,
+		minWidth: 0,
 		fontSize: 12,
-		lineHeight: "18px",
-		color: "var(--dsw-alias-label-secondary)"
+		color: muted
+	},
+	addressValue: {
+		fontFamily: "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace",
+		fontSize: 12,
+		color: text,
+		overflowWrap: "anywhere"
+	},
+	footerActions: {
+		display: "flex",
+		alignItems: "center",
+		gap: 10,
+		marginLeft: "auto"
+	},
+	divider: {
+		width: 1,
+		height: 16,
+		background: "var(--dsw-alias-border-l2)",
+		flexShrink: 0
+	},
+	iconBtn: {
+		...button,
+		padding: 8
+	},
+	textBtn: button,
+	primaryBtn: {
+		...button,
+		height: 40,
+		padding: "0 18px",
+		fontSize: 14,
+		fontWeight: 550,
+		borderRadius: 10,
+		background: "var(--dsw-alias-button-primary-fill)",
+		color: "var(--dsw-alias-label-primary-foreground, var(--dsw-alias-bg-base))"
+	},
+	outlineBtn: {
+		...button,
+		border,
+		color: text
+	},
+	outlineBtnSm: {
+		...button,
+		padding: "5px 8px",
+		color: text
+	},
+	destructiveBtn: {
+		...button,
+		background: "var(--dsw-alias-state-error-primary)",
+		color: "#fff",
+		padding: "8px 14px"
+	},
+	ghostBtn: {
+		...button,
+		border,
+		color: text
 	},
 	hint: {
 		margin: 0,
 		fontSize: 12,
-		lineHeight: "18px",
-		color: "var(--dsw-alias-label-tertiary)"
+		lineHeight: "20px",
+		color: muted
 	},
 	errorText: {
-		margin: "0 0 12px",
+		margin: "0 0 16px",
 		fontSize: 12,
-		lineHeight: "18px",
+		lineHeight: "20px",
 		color: "var(--dsw-alias-state-error-primary)"
 	},
-	valueLine: {
+	stateDotSlot: (state) => ({
 		display: "inline-flex",
 		alignItems: "center",
-		gap: 10,
-		fontSize: 14,
-		lineHeight: "20px",
-		color: "var(--dsw-alias-label-primary)"
-	},
-	stateDotSlot: (state) => ({
-		position: "relative",
-		display: "inline-block",
-		flex: "none",
-		alignSelf: "center",
+		justifyContent: "center",
 		width: 10,
 		height: 10,
-		color: state === "done" ? "var(--dsw-alias-state-success-primary)" : state === "error" ? "var(--dsw-alias-state-error-primary)" : "var(--dsw-alias-state-idle-primary, var(--dsw-alias-label-tertiary))"
+		flexShrink: 0,
+		color: state === "done" ? "var(--dsw-alias-state-success-primary)" : state === "error" ? "var(--dsw-alias-state-error-primary)" : "var(--dsw-alias-label-tertiary)"
 	}),
 	stateDotCore: {
-		position: "absolute",
-		inset: "20%",
+		width: 6,
+		height: 6,
 		borderRadius: "50%",
 		background: "currentColor"
 	},
-	metaStack: {
+	pairingContent: {
+		display: "flex",
+		flexWrap: "wrap",
+		alignItems: "center",
+		gap: 24,
+		padding: "0 0 24px"
+	},
+	code: {
+		fontFamily: "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace",
+		fontSize: 28,
+		letterSpacing: ".16em",
+		fontWeight: 600,
+		margin: "4px 0 8px"
+	},
+	qrBox: {
+		padding: 10,
+		borderRadius: 10,
+		background: "#fff",
+		lineHeight: 0
+	},
+	actionRow: {
+		display: "flex",
+		flexWrap: "wrap",
+		gap: 8,
+		marginTop: 16
+	},
+	devicesSection: { marginTop: 30 },
+	devicesHeader: {
+		display: "flex",
+		alignItems: "center",
+		gap: 10,
+		marginBottom: 16
+	},
+	count: {
+		background: surface,
+		color: muted,
+		borderRadius: 8,
+		minWidth: 24,
+		textAlign: "center",
+		fontSize: 12,
+		padding: "2px 4px"
+	},
+	deviceList: {
 		display: "flex",
 		flexDirection: "column",
-		gap: 4,
-		marginTop: 10
+		gap: 10
 	},
-	metaLine: {
-		fontSize: 12,
-		lineHeight: "18px",
-		color: "var(--dsw-alias-label-tertiary)"
+	deviceRow: {
+		display: "flex",
+		flexWrap: "wrap",
+		alignItems: "center",
+		gap: 14,
+		padding: "18px 20px",
+		border,
+		borderRadius: 14
 	},
-	primaryBtn: {
-		appearance: "none",
-		boxSizing: "border-box",
-		display: "inline-flex",
+	deviceIcon: {
+		display: "flex",
 		alignItems: "center",
 		justifyContent: "center",
-		height: 36,
-		padding: "0 14px",
-		border: "none",
-		borderRadius: "var(--dsw-radius-md, 8px)",
-		background: "var(--dsw-alias-button-primary-fill)",
-		color: "var(--dsw-alias-label-primary-foreground, var(--dsw-alias-bg-base))",
-		cursor: "pointer",
-		font: "inherit",
-		fontSize: 14,
-		lineHeight: "22px"
+		width: 44,
+		height: 48,
+		borderRadius: 11,
+		background: surface,
+		color: muted
 	},
-	outlineBtn: {
-		appearance: "none",
-		boxSizing: "border-box",
-		display: "inline-flex",
-		alignItems: "center",
-		justifyContent: "center",
-		height: 36,
-		padding: "0 14px",
-		border: "0.5px solid var(--dsw-alias-border-l3)",
-		borderRadius: "var(--dsw-radius-md, 8px)",
-		background: "transparent",
-		color: "var(--dsw-alias-label-primary)",
-		cursor: "pointer",
-		font: "inherit",
-		fontSize: 14,
-		lineHeight: "22px"
+	deviceInfo: {
+		flex: "1 1 120px",
+		minWidth: 0
 	},
-	outlineBtnSm: {
-		appearance: "none",
-		boxSizing: "border-box",
-		display: "inline-flex",
+	deviceHeading: {
+		display: "flex",
 		alignItems: "center",
-		justifyContent: "center",
-		height: 28,
-		padding: "0 10px",
-		border: "0.5px solid var(--dsw-alias-border-l3)",
-		borderRadius: "var(--dsw-radius-sm, 6px)",
-		background: "transparent",
-		color: "var(--dsw-alias-label-primary)",
-		cursor: "pointer",
-		font: "inherit",
-		fontSize: 12,
-		lineHeight: "18px"
+		gap: 10,
+		minWidth: 0
 	},
-	dangerBtn: {
-		appearance: "none",
-		boxSizing: "border-box",
-		display: "inline-flex",
-		alignItems: "center",
-		justifyContent: "center",
-		height: 28,
-		padding: "0 10px",
-		border: "none",
-		borderRadius: "var(--dsw-radius-sm, 6px)",
-		background: "transparent",
-		color: "var(--dsw-alias-state-error-primary)",
-		cursor: "pointer",
-		font: "inherit",
-		fontSize: 12,
-		lineHeight: "18px"
-	},
-	destructiveBtn: {
-		appearance: "none",
-		boxSizing: "border-box",
-		display: "inline-flex",
-		alignItems: "center",
-		justifyContent: "center",
-		height: 36,
-		padding: "0 14px",
-		border: "none",
-		borderRadius: "var(--dsw-radius-md, 8px)",
-		background: "var(--dsw-alias-state-error-primary)",
-		color: "var(--dsw-alias-label-primary-foreground, #fff)",
-		cursor: "pointer",
-		font: "inherit",
+	deviceName: {
 		fontSize: 14,
 		lineHeight: "22px",
-		fontWeight: 500
+		fontWeight: 550,
+		color: text,
+		overflow: "hidden",
+		textOverflow: "ellipsis",
+		whiteSpace: "nowrap"
 	},
-	ghostBtn: {
-		appearance: "none",
-		boxSizing: "border-box",
-		display: "inline-flex",
+	deviceMeta: {
+		marginTop: 4,
+		fontSize: 12,
+		lineHeight: "18px",
+		color: muted
+	},
+	deviceActions: {
+		display: "flex",
 		alignItems: "center",
-		justifyContent: "center",
-		height: 36,
-		padding: "0 14px",
-		border: "0.5px solid var(--dsw-alias-border-l3)",
-		borderRadius: "var(--dsw-radius-md, 8px)",
-		background: "transparent",
-		color: "var(--dsw-alias-label-primary)",
-		cursor: "pointer",
+		gap: 6,
+		marginLeft: "auto"
+	},
+	input: {
+		boxSizing: "border-box",
+		width: "100%",
+		minWidth: 0,
+		height: 34,
+		border,
+		borderRadius: 8,
+		padding: "0 10px",
+		background: "var(--dsw-alias-bg-base)",
+		color: text,
 		font: "inherit",
-		fontSize: 14,
-		lineHeight: "22px"
+		fontSize: 13
 	},
 	dialogMask: {
 		position: "fixed",
@@ -405,17 +517,19 @@ const styles = {
 		alignItems: "center",
 		justifyContent: "center",
 		pointerEvents: "auto",
-		background: "rgba(0, 0, 0, 0.45)",
+		background: "rgba(0,0,0,.45)",
 		padding: 24
 	},
 	dialogCard: {
-		width: "min(400px, calc(100vw - 48px))",
-		borderRadius: "var(--dsw-radius-panel, 12px)",
-		border: "0.5px solid var(--dsw-alias-border-l2)",
+		width: "min(560px, calc(100vw - 48px))",
+		maxHeight: "80vh",
+		overflow: "auto",
+		borderRadius: 14,
+		border,
 		background: "var(--dsw-alias-bg-base)",
-		color: "var(--dsw-alias-label-primary)",
-		boxShadow: "var(--dsw-elevation-prominent, 0 12px 40px rgba(0,0,0,0.25))",
-		padding: "20px 22px 18px",
+		color: text,
+		boxShadow: "0 12px 40px rgba(0,0,0,.2)",
+		padding: 24,
 		display: "flex",
 		flexDirection: "column",
 		gap: 12
@@ -423,14 +537,14 @@ const styles = {
 	dialogTitle: {
 		margin: 0,
 		fontSize: 16,
-		fontWeight: 500,
+		fontWeight: 600,
 		lineHeight: "24px"
 	},
 	dialogBody: {
 		margin: 0,
 		fontSize: 14,
 		lineHeight: "22px",
-		color: "var(--dsw-alias-label-secondary)"
+		color: muted
 	},
 	dialogActions: {
 		display: "flex",
@@ -438,75 +552,24 @@ const styles = {
 		gap: 8,
 		marginTop: 8
 	},
-	code: {
-		fontFamily: "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace",
-		fontSize: 28,
-		letterSpacing: "0.16em",
-		fontWeight: 600,
-		textAlign: "center",
-		color: "var(--dsw-alias-label-primary)",
-		padding: "12px 0 4px"
-	},
-	qrWrap: {
-		display: "flex",
-		justifyContent: "center",
-		padding: "12px 0 4px"
-	},
-	qrBox: {
-		padding: 10,
-		borderRadius: "var(--dsw-radius-md, 8px)",
-		background: "#fff",
-		border: "0.5px solid var(--dsw-alias-border-l3)",
-		lineHeight: 0
-	},
-	actionRow: {
-		display: "flex",
-		flexWrap: "wrap",
-		gap: 8,
-		marginTop: 12
-	},
-	deviceRow: {
-		display: "flex",
-		alignItems: "center",
-		gap: 12,
-		padding: "16px 0",
-		borderBottom: "0.5px solid var(--dsw-alias-border-l2)"
-	},
-	deviceName: {
-		fontSize: 14,
-		lineHeight: "20px",
-		color: "var(--dsw-alias-label-primary)",
-		overflow: "hidden",
-		textOverflow: "ellipsis",
-		whiteSpace: "nowrap"
-	},
-	deviceMeta: {
-		marginTop: 4,
+	report: {
+		margin: 0,
+		whiteSpace: "pre-wrap",
+		overflowWrap: "anywhere",
 		fontSize: 12,
-		lineHeight: "18px",
-		color: "var(--dsw-alias-label-secondary)"
-	},
-	deviceActions: {
-		display: "flex",
-		alignItems: "center",
-		gap: 8,
-		flex: "none"
-	},
-	input: {
-		boxSizing: "border-box",
-		flex: 1,
-		minWidth: 0,
-		height: 34,
-		border: "0.5px solid var(--dsw-alias-border-l4)",
-		borderRadius: "var(--dsw-radius-md, 8px)",
-		padding: "0 12px",
-		background: "var(--dsw-alias-bg-layer-3, var(--dsw-alias-bg-base))",
-		color: "var(--dsw-alias-label-primary)",
-		font: "inherit",
-		fontSize: 13,
-		lineHeight: "1.5"
+		lineHeight: "20px",
+		color: muted
 	}
 };
+const panelCss = `
+[data-pocket-panel] button:disabled { opacity: .45; cursor: not-allowed !important; }
+[data-pocket-panel] button:not(:disabled):hover { filter: brightness(.94); }
+[data-pocket-panel] button:focus-visible { outline: 2px solid var(--dsw-alias-label-secondary); outline-offset: 3px; }
+@container (max-width: 440px) {
+  [data-pocket-panel] .pocket-illustration { display: none; }
+  [data-pocket-panel] .pocket-device-actions { width: 100%; justify-content: flex-end; }
+}
+`;
 
 //#endregion
 //#region src/client/ConfirmDialog.tsx
@@ -1264,29 +1327,29 @@ function makeNumeric(digits) {
 	}
 	return new QrSegment(MODE_NUMERIC, digits.length, bb);
 }
-function makeAlphanumeric(text) {
-	if (!isAlphanumeric(text)) throw new RangeError("String contains unencodable characters in alphanumeric mode");
+function makeAlphanumeric(text$1) {
+	if (!isAlphanumeric(text$1)) throw new RangeError("String contains unencodable characters in alphanumeric mode");
 	const bb = [];
 	let i;
-	for (i = 0; i + 2 <= text.length; i += 2) {
-		let temp = ALPHANUMERIC_CHARSET.indexOf(text.charAt(i)) * 45;
-		temp += ALPHANUMERIC_CHARSET.indexOf(text.charAt(i + 1));
+	for (i = 0; i + 2 <= text$1.length; i += 2) {
+		let temp = ALPHANUMERIC_CHARSET.indexOf(text$1.charAt(i)) * 45;
+		temp += ALPHANUMERIC_CHARSET.indexOf(text$1.charAt(i + 1));
 		appendBits(temp, 11, bb);
 	}
-	if (i < text.length) appendBits(ALPHANUMERIC_CHARSET.indexOf(text.charAt(i)), 6, bb);
-	return new QrSegment(MODE_ALPHANUMERIC, text.length, bb);
+	if (i < text$1.length) appendBits(ALPHANUMERIC_CHARSET.indexOf(text$1.charAt(i)), 6, bb);
+	return new QrSegment(MODE_ALPHANUMERIC, text$1.length, bb);
 }
-function makeSegments(text) {
-	if (text === "") return [];
-	else if (isNumeric(text)) return [makeNumeric(text)];
-	else if (isAlphanumeric(text)) return [makeAlphanumeric(text)];
-	else return [makeBytes(toUtf8ByteArray(text))];
+function makeSegments(text$1) {
+	if (text$1 === "") return [];
+	else if (isNumeric(text$1)) return [makeNumeric(text$1)];
+	else if (isAlphanumeric(text$1)) return [makeAlphanumeric(text$1)];
+	else return [makeBytes(toUtf8ByteArray(text$1))];
 }
-function isNumeric(text) {
-	return NUMERIC_REGEX.test(text);
+function isNumeric(text$1) {
+	return NUMERIC_REGEX.test(text$1);
 }
-function isAlphanumeric(text) {
-	return ALPHANUMERIC_REGEX.test(text);
+function isAlphanumeric(text$1) {
+	return ALPHANUMERIC_REGEX.test(text$1);
 }
 function getTotalBits(segs, version) {
 	let result = 0;
@@ -1386,7 +1449,7 @@ function encodeSegments(segs, ecl, minVersion = 1, maxVersion = 40, mask = -1, b
 	return new QrCode(version, ecl, dataCodewords, mask);
 }
 function encode(data, options) {
-	const { ecc = "L", boostEcc = false, minVersion = 1, maxVersion = 40, maskPattern = -1, border = 1 } = options || {};
+	const { ecc = "L", boostEcc = false, minVersion = 1, maxVersion = 40, maskPattern = -1, border: border$1 = 1 } = options || {};
 	const segment = typeof data === "string" ? makeSegments(data) : Array.isArray(data) ? [makeBytes(data)] : void 0;
 	if (!segment) throw new Error(`uqr only supports encoding string and binary data, but got: ${typeof data}`);
 	const qr = encodeSegments(segment, EccMap[ecc], minVersion, maxVersion, maskPattern, boostEcc);
@@ -1396,34 +1459,34 @@ function encode(data, options) {
 		size: qr.size,
 		data: qr.modules,
 		types: qr.types
-	}, border);
+	}, border$1);
 	if (options?.invert) result.data = result.data.map((row) => row.map((mod) => !mod));
 	options?.onEncoded?.(result);
 	return result;
 }
-function addBorder(input, border = 1) {
-	if (!border) return input;
+function addBorder(input, border$1 = 1) {
+	if (!border$1) return input;
 	const { size } = input;
-	const newSize = size + border * 2;
+	const newSize = size + border$1 * 2;
 	input.size = newSize;
 	input.data.forEach((row) => {
-		for (let i = 0; i < border; i++) {
+		for (let i = 0; i < border$1; i++) {
 			row.unshift(false);
 			row.push(false);
 		}
 	});
-	for (let i = 0; i < border; i++) {
+	for (let i = 0; i < border$1; i++) {
 		input.data.unshift(Array.from({ length: newSize }, (_) => false));
 		input.data.push(Array.from({ length: newSize }, (_) => false));
 	}
 	const b = QrCodeDataType.Border;
 	input.types.forEach((row) => {
-		for (let i = 0; i < border; i++) {
+		for (let i = 0; i < border$1; i++) {
 			row.unshift(b);
 			row.push(b);
 		}
 	});
-	for (let i = 0; i < border; i++) {
+	for (let i = 0; i < border$1; i++) {
 		input.types.unshift(Array.from({ length: newSize }, (_) => b));
 		input.types.push(Array.from({ length: newSize }, (_) => b));
 	}
@@ -1453,8 +1516,8 @@ function renderSVG(data, options = {}) {
 //#endregion
 //#region src/client/qr.ts
 /** Render a pairing URI as an SVG QR string. */
-function qrSvg(text, size = 180) {
-	return renderSVG(text, {
+function qrSvg(text$1, size = 180) {
+	return renderSVG(text$1, {
 		ecc: "M",
 		pixelSize: 8,
 		border: 2,
@@ -1465,22 +1528,39 @@ function qrSvg(text, size = 180) {
 
 //#endregion
 //#region src/client/ManagePanel.tsx
-function formatLastSeen(t, at) {
-	if (at == null) return t("neverSeen");
-	try {
-		return new Date(at).toLocaleString();
-	} catch {
-		return t("neverSeen");
-	}
+function Icon({ name, size = 18 }) {
+	const paths = {
+		phone: /* @__PURE__ */ (0, react_jsx_runtime.jsxs)(react_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)("rect", {
+			x: "6",
+			y: "2",
+			width: "12",
+			height: "20",
+			rx: "3"
+		}), /* @__PURE__ */ (0, react_jsx_runtime.jsx)("path", { d: "M11 18h2" })] }),
+		copy: /* @__PURE__ */ (0, react_jsx_runtime.jsxs)(react_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)("rect", {
+			x: "8",
+			y: "8",
+			width: "12",
+			height: "14",
+			rx: "2"
+		}), /* @__PURE__ */ (0, react_jsx_runtime.jsx)("path", { d: "M15 4V2H4v14h1" })] }),
+		refresh: /* @__PURE__ */ (0, react_jsx_runtime.jsx)(react_jsx_runtime.Fragment, { children: /* @__PURE__ */ (0, react_jsx_runtime.jsx)("path", { d: "M20 7a9 9 0 1 0 0 10M20 2v5h-5" }) }),
+		plus: /* @__PURE__ */ (0, react_jsx_runtime.jsx)("path", { d: "M12 4v16M4 12h16" }),
+		check: /* @__PURE__ */ (0, react_jsx_runtime.jsx)("path", { d: "m5 12 4 4L19 6" })
+	};
+	return /* @__PURE__ */ (0, react_jsx_runtime.jsx)("svg", {
+		width: size,
+		height: size,
+		viewBox: "0 0 24 24",
+		fill: "none",
+		stroke: "currentColor",
+		strokeWidth: "1.6",
+		strokeLinecap: "round",
+		strokeLinejoin: "round",
+		"aria-hidden": "true",
+		children: paths[name]
+	});
 }
-/** Prefer framework interpolation; fall back to `{name}` replacement. */
-function tr(t, key, vars) {
-	const out = t(key, vars);
-	if (out !== key && !/\{name\}/.test(out)) return out;
-	return Object.entries(vars).reduce((s, [k, v]) => s.replaceAll(`{${k}}`, String(v)), out === key ? String(zhFallback[key] ?? key) : out);
-}
-const zhFallback = { revokeBody: "将撤销「{name}」。之后该手机需重新配对才能连接。" };
-/** Visual twin of primitives `StateDot` (10px slot / 6px core); no package require. */
 function StatusDot({ state }) {
 	return /* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
 		style: styles.stateDotSlot(state),
@@ -1488,7 +1568,7 @@ function StatusDot({ state }) {
 		children: /* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", { style: styles.stateDotCore })
 	});
 }
-function DeviceItem({ device, t, api, onChanged }) {
+function DeviceItem({ device, t, api, onChanged, onError }) {
 	const [editing, setEditing] = (0, react.useState)(false);
 	const [name, setName] = (0, react.useState)(device.name);
 	const [confirmOpen, setConfirmOpen] = (0, react.useState)(false);
@@ -1506,56 +1586,77 @@ function DeviceItem({ device, t, api, onChanged }) {
 		try {
 			onChanged((await api.rename(device.id, trimmed)).devices);
 			setEditing(false);
+		} catch (e) {
+			onError(String(e?.message ?? e));
 		} finally {
 			setBusy(false);
 		}
 	};
-	const confirmRevoke = async () => {
+	const revoke = async () => {
 		setBusy(true);
 		try {
 			onChanged((await api.revoke(device.id)).devices);
 			setConfirmOpen(false);
+		} catch (e) {
+			onError(String(e?.message ?? e));
 		} finally {
 			setBusy(false);
 		}
 	};
+	const lastSeen = device.lastSeenAt == null ? t("neverSeen") : new Date(device.lastSeenAt).toLocaleString(void 0, {
+		month: "2-digit",
+		day: "2-digit",
+		hour: "2-digit",
+		minute: "2-digit",
+		hour12: false
+	});
 	return /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
 		style: styles.deviceRow,
 		children: [
-			/* @__PURE__ */ (0, react_jsx_runtime.jsx)(StatusDot, { state: device.online ? "done" : "idle" }),
+			/* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
+				style: styles.deviceIcon,
+				children: /* @__PURE__ */ (0, react_jsx_runtime.jsx)(Icon, {
+					name: "phone",
+					size: 28
+				})
+			}),
 			/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
-				style: {
-					flex: 1,
-					minWidth: 0
-				},
+				style: styles.deviceInfo,
 				children: [editing ? /* @__PURE__ */ (0, react_jsx_runtime.jsx)("input", {
 					style: styles.input,
+					"aria-label": t("rename"),
 					value: name,
 					disabled: busy,
 					onChange: (e) => setName(e.target.value),
+					autoFocus: true,
 					onKeyDown: (e) => {
 						if (e.key === "Enter") save();
 						if (e.key === "Escape") {
 							setEditing(false);
 							setName(device.name);
 						}
-					},
-					autoFocus: true
-				}) : /* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
-					style: styles.deviceName,
-					children: device.name
+					}
+				}) : /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
+					style: styles.deviceHeading,
+					children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
+						style: styles.deviceName,
+						title: device.name,
+						children: device.name
+					}), /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("span", {
+						style: styles.service,
+						children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)(StatusDot, { state: device.online ? "done" : "idle" }), device.online ? t("online") : t("offline")]
+					})]
 				}), /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
 					style: styles.deviceMeta,
 					children: [
-						device.online ? t("online") : t("offline"),
-						" · ",
 						t("lastSeen"),
-						": ",
-						formatLastSeen(t, device.lastSeenAt)
+						" ",
+						lastSeen
 					]
 				})]
 			}),
 			/* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
+				className: "pocket-device-actions",
 				style: styles.deviceActions,
 				children: editing ? /* @__PURE__ */ (0, react_jsx_runtime.jsxs)(react_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
 					type: "button",
@@ -1565,38 +1666,42 @@ function DeviceItem({ device, t, api, onChanged }) {
 					children: t("renameSave")
 				}), /* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
 					type: "button",
-					style: styles.outlineBtnSm,
+					style: styles.textBtn,
 					disabled: busy,
 					onClick: () => {
 						setEditing(false);
 						setName(device.name);
 					},
 					children: t("renameCancel")
-				})] }) : /* @__PURE__ */ (0, react_jsx_runtime.jsxs)(react_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
-					type: "button",
-					style: styles.outlineBtnSm,
-					disabled: busy,
-					onClick: () => setEditing(true),
-					children: t("rename")
-				}), /* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
-					type: "button",
-					style: styles.dangerBtn,
-					disabled: busy,
-					onClick: () => setConfirmOpen(true),
-					children: t("revoke")
-				})] })
+				})] }) : /* @__PURE__ */ (0, react_jsx_runtime.jsxs)(react_jsx_runtime.Fragment, { children: [
+					/* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
+						type: "button",
+						style: styles.textBtn,
+						disabled: busy,
+						onClick: () => setEditing(true),
+						children: t("rename")
+					}),
+					/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", { style: styles.divider }),
+					/* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
+						type: "button",
+						style: styles.textBtn,
+						disabled: busy,
+						onClick: () => setConfirmOpen(true),
+						children: t("revoke")
+					})
+				] })
 			}),
 			/* @__PURE__ */ (0, react_jsx_runtime.jsx)(ConfirmDialog, {
 				open: confirmOpen,
 				title: t("revokeTitle"),
-				body: tr(t, "revokeBody", { name: device.name }),
+				body: t("revokeBody", { name: device.name }).replaceAll("{name}", device.name),
 				cancelLabel: t("cancel"),
 				confirmLabel: t("revoke"),
 				busy,
 				onCancel: () => {
 					if (!busy) setConfirmOpen(false);
 				},
-				onConfirm: () => void confirmRevoke()
+				onConfirm: () => void revoke()
 			})
 		]
 	});
@@ -1605,66 +1710,87 @@ function ManagePanel({ t, api }) {
 	const [status, setStatus] = (0, react.useState)(null);
 	const [error, setError] = (0, react.useState)(null);
 	const [loading, setLoading] = (0, react.useState)(true);
-	const [copied, setCopied] = (0, react.useState)(false);
-	const [diagCopied, setDiagCopied] = (0, react.useState)(false);
+	const [busy, setBusy] = (0, react.useState)(false);
+	const [copied, setCopied] = (0, react.useState)(null);
+	const [diagnostics, setDiagnostics] = (0, react.useState)(null);
 	const [diagBusy, setDiagBusy] = (0, react.useState)(false);
-	const [tick, setTick] = (0, react.useState)(0);
-	const refresh = (0, react.useCallback)(async () => {
-		setError(null);
+	const network = (0, react.useRef)(void 0);
+	const request = (0, react.useRef)(0);
+	const copyTimer = (0, react.useRef)(void 0);
+	const refresh = (0, react.useCallback)(async (background = false) => {
+		const id = ++request.current;
+		if (!background) setLoading(true);
 		try {
-			setStatus(await api.status());
+			const s = await api.status(network.current);
+			if (id !== request.current) return;
+			setStatus(s);
+			setError(null);
 		} catch (e) {
+			if (id !== request.current) return;
+			setStatus(null);
 			setError(String(e?.message ?? e));
 		} finally {
-			setLoading(false);
+			if (id === request.current) setLoading(false);
 		}
 	}, [api]);
 	(0, react.useEffect)(() => {
 		refresh();
+		return () => {
+			request.current++;
+			clearTimeout(copyTimer.current);
+		};
 	}, [refresh]);
 	(0, react.useEffect)(() => {
 		if (!status?.pairing.open) return;
-		const id = setInterval(() => {
-			setTick((n) => n + 1);
-			refresh();
+		const timer = setInterval(() => {
+			refresh(true);
 		}, 1e3);
-		return () => clearInterval(id);
+		return () => clearInterval(timer);
 	}, [status?.pairing.open, refresh]);
-	const openPair = async () => {
-		setLoading(true);
+	(0, react.useEffect)(() => {
+		if (!diagnostics) return;
+		const onKey = (e) => {
+			if (e.key === "Escape") setDiagnostics(null);
+		};
+		document.addEventListener("keydown", onKey);
+		return () => document.removeEventListener("keydown", onKey);
+	}, [diagnostics]);
+	const changeNetwork = (next) => {
+		network.current = next;
+		setCopied(null);
+		setStatus((s) => s ? {
+			...s,
+			pairing: { open: false }
+		} : s);
+		refresh();
+	};
+	const updatePairing = async (open) => {
+		setBusy(true);
+		setError(null);
 		try {
-			await api.openPair();
+			if (open) await api.openPair(network.current);
+			else await api.closePair();
 			await refresh();
 		} catch (e) {
 			setError(String(e?.message ?? e));
 		} finally {
-			setLoading(false);
+			setBusy(false);
 		}
 	};
-	const closePair = async () => {
+	const copy = async (text$1, key) => {
 		try {
-			await api.closePair();
-			await refresh();
+			await navigator.clipboard.writeText(text$1);
+			clearTimeout(copyTimer.current);
+			setCopied(key);
+			copyTimer.current = window.setTimeout(() => setCopied(null), 1500);
 		} catch (e) {
 			setError(String(e?.message ?? e));
 		}
 	};
-	const copyPairing = async () => {
-		const line = status?.pairing.pairingString || status?.pairing.uri;
-		if (!line) return;
-		try {
-			await navigator.clipboard.writeText(line);
-			setCopied(true);
-			setTimeout(() => setCopied(false), 1500);
-		} catch {}
-	};
-	const copyDiagnostics = async () => {
+	const diagnose = async () => {
 		setDiagBusy(true);
 		try {
-			const d = await api.diagnostics();
-			await navigator.clipboard.writeText(d.report);
-			setDiagCopied(true);
-			setTimeout(() => setDiagCopied(false), 1500);
+			setDiagnostics(await api.diagnostics());
 		} catch (e) {
 			setError(String(e?.message ?? e));
 		} finally {
@@ -1672,206 +1798,253 @@ function ManagePanel({ t, api }) {
 		}
 	};
 	const pairing = status?.pairing;
-	const expires = pairing?.open ? Math.max(0, pairing.expiresInSec ?? 0) : 0;
-	const pairReady = Boolean(status?.listen?.length);
-	const connectorOk = pairReady && !error;
+	const selected = status?.connectionType;
+	const pairReady = Boolean(status?.running && status.networks.length && status.host);
+	const pairingOpen = Boolean(pairReady && pairing?.open && pairing.code && pairing.uri);
+	const address = status?.host ? `${status.host}:${status.port}` : "";
+	const disabled = loading || busy;
 	return /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
+		"data-pocket-panel": true,
 		style: styles.settingsRoot,
 		children: [
-			loading && !status ? /* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
-				style: styles.hint,
-				children: t("loading")
-			}) : null,
-			error ? /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
+			/* @__PURE__ */ (0, react_jsx_runtime.jsx)("style", { children: panelCss }),
+			/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("header", {
+				style: styles.header,
+				children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)("h2", {
+					style: styles.title,
+					children: t("title")
+				}), /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("span", {
+					style: styles.service,
+					children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)(StatusDot, { state: pairReady ? "done" : "idle" }), loading && !status ? t("loading") : t(pairReady ? "statusRunning" : "statusStopped")]
+				})]
+			}),
+			error ? /* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
+				role: "alert",
 				style: styles.errorText,
-				children: [
-					t("loadFailed"),
-					": ",
-					error
-				]
+				children: error
 			}) : null,
-			status ? /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
-				style: {
-					...styles.settingsRow,
-					alignItems: "flex-start"
-				},
-				children: [/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
-					style: {
-						flex: 1,
-						minWidth: 0
-					},
-					children: [
-						/* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
-							style: styles.rowTitle,
-							children: t("statusTitle")
-						}),
-						/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
-							style: {
-								...styles.valueLine,
-								marginTop: 6
-							},
-							children: [t("wsReady"), /* @__PURE__ */ (0, react_jsx_runtime.jsx)(StatusDot, { state: connectorOk ? "done" : "error" })]
-						}),
-						/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
-							style: styles.metaStack,
+			/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("section", {
+				style: styles.pairingCard,
+				"aria-label": t("newDevice"),
+				children: [
+					/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
+						style: {
+							...styles.pairingTop,
+							...pairingOpen ? { minHeight: 0 } : {}
+						},
+						children: [/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
+							style: styles.pairControls,
 							children: [
-								/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
-									style: styles.metaLine,
-									children: [
-										t("advertise"),
-										": ",
-										status.host,
-										":",
-										status.port
-									]
+								/* @__PURE__ */ (0, react_jsx_runtime.jsx)("h3", {
+									style: styles.rowTitle,
+									children: t("newDevice")
 								}),
-								/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
-									style: styles.metaLine,
-									children: [
-										t("version"),
-										": ",
-										status.version
-									]
+								status && status.networks.length > 1 ? /* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
+									style: styles.segments,
+									role: "group",
+									"aria-label": t("network"),
+									children: status.networks.map((n) => /* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
+										type: "button",
+										"aria-pressed": selected === n.type,
+										style: {
+											...styles.segment,
+											...selected === n.type ? styles.segmentActive : {}
+										},
+										disabled,
+										onClick: () => changeNetwork(n.type),
+										children: t(n.type)
+									}, n.type))
+								}) : null,
+								!pairingOpen ? /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("button", {
+									type: "button",
+									style: styles.primaryBtn,
+									disabled: disabled || !pairReady,
+									onClick: () => void updatePairing(true),
+									children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)(Icon, { name: "plus" }), t("pair")]
+								}) : null
+							]
+						}), !pairingOpen ? /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("svg", {
+							className: "pocket-illustration",
+							style: styles.illustration,
+							viewBox: "0 0 180 130",
+							fill: "none",
+							stroke: "currentColor",
+							strokeWidth: "2",
+							strokeLinecap: "round",
+							strokeLinejoin: "round",
+							"aria-hidden": "true",
+							children: [
+								/* @__PURE__ */ (0, react_jsx_runtime.jsx)("path", { d: "M20 94V22a8 8 0 0 1 8-8h105a8 8 0 0 1 8 8v11M121 94H7v8h114" }),
+								/* @__PURE__ */ (0, react_jsx_runtime.jsx)("rect", {
+									x: "132",
+									y: "43",
+									width: "40",
+									height: "75",
+									rx: "8"
 								}),
-								/* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
-									style: styles.metaLine,
-									children: t("wsHint")
+								/* @__PURE__ */ (0, react_jsx_runtime.jsx)("path", { d: "M148 50h9m-8 59h7" })
+							]
+						}) : null]
+					}),
+					pairingOpen ? /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
+						style: styles.pairingContent,
+						children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
+							style: styles.qrBox,
+							role: "img",
+							"aria-label": t("code"),
+							dangerouslySetInnerHTML: { __html: qrSvg(pairing.uri, 168) }
+						}), /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", { children: [
+							/* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
+								style: styles.code,
+								children: pairing.code
+							}),
+							/* @__PURE__ */ (0, react_jsx_runtime.jsx)("p", {
+								style: styles.hint,
+								children: t("expiresIn", { n: Math.max(0, pairing.expiresInSec ?? 0) })
+							}),
+							/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
+								style: styles.actionRow,
+								children: [
+									/* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
+										type: "button",
+										style: styles.outlineBtn,
+										onClick: () => void copy(pairing.pairingString || pairing.uri, "pair"),
+										children: t(copied === "pair" ? "copied" : "copy")
+									}),
+									/* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
+										type: "button",
+										style: styles.textBtn,
+										disabled,
+										onClick: () => void updatePairing(false),
+										children: t("pairClose")
+									}),
+									/* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
+										type: "button",
+										style: styles.textBtn,
+										disabled,
+										onClick: () => void updatePairing(true),
+										children: t("pairAgain")
+									})
+								]
+							})
+						] })]
+					}) : null,
+					/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("footer", {
+						style: styles.footer,
+						children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
+							style: styles.address,
+							children: address ? /* @__PURE__ */ (0, react_jsx_runtime.jsxs)(react_jsx_runtime.Fragment, { children: [
+								/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", { children: t(selected === "tailscale" ? "tailscaleAddress" : "lanAddress") }),
+								/* @__PURE__ */ (0, react_jsx_runtime.jsx)("code", {
+									style: styles.addressValue,
+									children: address
+								}),
+								/* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
+									type: "button",
+									style: styles.iconBtn,
+									title: t(copied === "address" ? "copied" : "copyAddress"),
+									"aria-label": t(copied === "address" ? "copied" : "copyAddress"),
+									onClick: () => void copy(address, "address"),
+									children: /* @__PURE__ */ (0, react_jsx_runtime.jsx)(Icon, {
+										name: copied === "address" ? "check" : "copy",
+										size: 16
+									})
+								})
+							] }) : /* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", { children: t(loading ? "loading" : "noNetwork") })
+						}), /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
+							style: styles.footerActions,
+							children: [
+								/* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
+									type: "button",
+									style: styles.iconBtn,
+									disabled,
+									title: t("refresh"),
+									"aria-label": t("refresh"),
+									onClick: () => {
+										if (!status) network.current = void 0;
+										refresh();
+									},
+									children: /* @__PURE__ */ (0, react_jsx_runtime.jsx)(Icon, { name: "refresh" })
+								}),
+								/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", { style: styles.divider }),
+								/* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
+									type: "button",
+									style: styles.textBtn,
+									disabled: diagBusy,
+									onClick: () => void diagnose(),
+									children: t("diagnostics")
 								})
 							]
-						})
-					]
-				}), /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
-					style: {
-						display: "flex",
-						flexDirection: "column",
-						gap: 6
-					},
-					children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
-						type: "button",
-						style: styles.outlineBtnSm,
-						onClick: () => void refresh(),
-						children: t("refresh")
-					}), /* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
-						type: "button",
-						style: styles.outlineBtnSm,
-						disabled: diagBusy,
-						onClick: () => void copyDiagnostics(),
-						"aria-label": t("openDiagnostics"),
-						children: diagCopied ? t("diagnosticsCopied") : t("diagnostics")
-					})]
-				})]
-			}) : null,
-			/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
-				style: styles.settingsBlock,
-				children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
-					style: styles.rowTitle,
-					children: t("code")
-				}), pairing?.open && pairing.code && pairing.uri ? /* @__PURE__ */ (0, react_jsx_runtime.jsxs)(react_jsx_runtime.Fragment, { children: [
-					/* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
-						style: styles.code,
-						children: pairing.code
-					}),
-					/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
-						style: {
-							...styles.hint,
-							textAlign: "center"
-						},
-						children: [
-							t("expiresIn", { n: expires }),
-							" · ",
-							t("expiresMin", { n: Math.max(1, Math.round(expires / 60)) })
-						]
-					}),
-					/* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
-						style: styles.qrWrap,
-						children: /* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
-							style: styles.qrBox,
-							dangerouslySetInnerHTML: { __html: qrSvg(pairing.uri, 168) }
-						})
-					}),
-					/* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
-						style: {
-							...styles.rowDescription,
-							textAlign: "center"
-						},
-						children: t("scanHint")
-					}),
-					pairing.pairingString ? /* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
-						style: {
-							...styles.metaLine,
-							textAlign: "center",
-							wordBreak: "break-all",
-							marginTop: 8
-						},
-						children: pairing.pairingString
-					}) : null,
-					/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
-						style: {
-							...styles.actionRow,
-							justifyContent: "center"
-						},
-						children: [
-							/* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
-								type: "button",
-								style: styles.outlineBtn,
-								onClick: () => void copyPairing(),
-								children: copied ? t("copied") : t("copy")
-							}),
-							/* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
-								type: "button",
-								style: styles.outlineBtn,
-								onClick: () => void closePair(),
-								children: t("pairClose")
-							}),
-							/* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
-								type: "button",
-								style: styles.primaryBtn,
-								onClick: () => void openPair(),
-								children: t("pairAgain")
-							})
-						]
+						})]
 					})
-				] }) : /* @__PURE__ */ (0, react_jsx_runtime.jsxs)(react_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
-					style: {
-						...styles.rowDescription,
-						marginTop: 4
-					},
-					children: pairReady ? t("noCode") : t("wsHint")
-				}), /* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
-					style: styles.actionRow,
-					children: /* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
-						type: "button",
-						style: styles.primaryBtn,
-						disabled: !pairReady,
-						onClick: () => void openPair(),
-						children: t("pair")
-					})
-				})] })]
+				]
 			}),
-			/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
-				style: styles.settingsBlock,
-				children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
-					style: styles.rowTitle,
-					children: t("devices")
-				}), (status?.devices.length ?? 0) === 0 ? /* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
-					style: {
-						...styles.rowDescription,
-						marginTop: 8
-					},
-					children: t("empty")
-				}) : /* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
-					style: { marginTop: 4 },
-					children: status.devices.map((d) => /* @__PURE__ */ (0, react_jsx_runtime.jsx)(DeviceItem, {
-						device: d,
+			/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("section", {
+				style: styles.devicesSection,
+				"aria-label": t("devices"),
+				children: [/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
+					style: styles.devicesHeader,
+					children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)("h3", {
+						style: styles.rowTitle,
+						children: t("devices")
+					}), /* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
+						style: styles.count,
+						children: status?.devices.length ?? 0
+					})]
+				}), /* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
+					style: styles.deviceList,
+					children: status?.devices.length ? status.devices.map((device) => /* @__PURE__ */ (0, react_jsx_runtime.jsx)(DeviceItem, {
+						device,
 						t,
 						api,
+						onError: setError,
 						onChanged: (devices) => setStatus((s) => s ? {
 							...s,
 							devices
 						} : s)
-					}, d.id))
+					}, device.id)) : /* @__PURE__ */ (0, react_jsx_runtime.jsx)("p", {
+						style: styles.hint,
+						children: t(loading ? "loading" : "empty")
+					})
 				})]
-			})
+			}),
+			diagnostics ? /* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
+				style: styles.dialogMask,
+				onClick: (e) => {
+					if (e.target === e.currentTarget) setDiagnostics(null);
+				},
+				children: /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
+					role: "dialog",
+					"aria-modal": "true",
+					"aria-label": t("diagnostics"),
+					style: styles.dialogCard,
+					children: [
+						/* @__PURE__ */ (0, react_jsx_runtime.jsx)("h3", {
+							style: styles.dialogTitle,
+							children: t("diagnostics")
+						}),
+						/* @__PURE__ */ (0, react_jsx_runtime.jsx)("pre", {
+							style: styles.report,
+							children: diagnostics.report
+						}),
+						/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
+							style: styles.dialogActions,
+							children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
+								type: "button",
+								style: styles.outlineBtn,
+								onClick: () => void copy(diagnostics.report, "diagnostics"),
+								children: t(copied === "diagnostics" ? "copied" : "diagnosticsCopy")
+							}), /* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
+								type: "button",
+								style: styles.primaryBtn,
+								autoFocus: true,
+								onClick: () => setDiagnostics(null),
+								children: t("close")
+							})]
+						})
+					]
+				})
+			}) : null
 		]
 	});
 }

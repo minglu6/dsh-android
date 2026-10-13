@@ -25,8 +25,11 @@ class LiveDshTest {
         val cat = c.modelCatalog()
         cat.groups.firstOrNull()?.models?.firstOrNull()?.let { m -> c.selectModel(id, m.provider, m.id, m.defaultEffort) }
         val perms = c.permissionCatalog()
-        assertTrue("workspace-write" in perms)
-        assertEquals("read-only", c.setPermission(id, "read-only"))
+        assertTrue(perms.options.isNotEmpty())
+        assertTrue(perms.allowsDefault(perms.defaultPreset))
+        val selectedPermission = perms.defaultOptions.first { it.value == perms.defaultPreset }
+        assertEquals(selectedPermission.value, c.setPermission(id, selectedPermission.value))
+        assertEquals(selectedPermission.value, c.permission(id))
         assertTrue(c.presets().contains("standard"))
         c.call("sessions.rename", jsonOf("sessionId" to id, "title" to "kotlin live"))
         val firstFollow = async(start = CoroutineStart.UNDISPATCHED) { withTimeout(10_000) { c.events.first { it["ev"].str() == "follow" } } }

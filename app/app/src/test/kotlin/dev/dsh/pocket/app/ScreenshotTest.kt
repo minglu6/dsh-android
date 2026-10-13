@@ -45,6 +45,13 @@ class ScreenshotTest {
       "groups":[{"id":"deepseek","name":"DeepSeek","models":[
         {"id":"deepseek-v4.1-flash","name":"DeepSeek-V4.1-Flash","reasoning":{"defaultEffort":"high","efforts":[{"id":"off","name":"Off","description":"Use for simple tasks that do not need reasoning."},{"id":"low","name":"Low","description":"Prefer for routine or latency-sensitive tasks."},{"id":"high","name":"High","description":"The default balance for most tasks."},{"id":"max","name":"Max","description":"Reserve for the hardest quality-first tasks."}]}},
         {"id":"deepseek-v4-pro","name":"DeepSeek-V4-Pro","description":"Stronger agentic coding, knowledge, and difficult reasoning; suited to complex or quality-critical tasks at higher cost."}]}]}"""))
+    private val permissionOptions = listOf(
+        PermissionOption("read-only", "Read Only", "只读取文件，不修改内容"),
+        PermissionOption("workspace-write", "Workspace Write", "在工作区内读写文件并执行命令"),
+        PermissionOption("danger-full-access", "Full access", "不受沙箱限制"),
+        PermissionOption("auto", "Auto"),
+    )
+    private val permissions = PermissionCatalog(permissionOptions, permissionOptions.take(3), "workspace-write")
 
     @Before fun state() {
         // Skip NEARBY_WIFI in-panel CTA so connection screenshots show empty/nearby chrome.
@@ -55,8 +62,18 @@ class ScreenshotTest {
         Pocket.active.value = "p1"
         Pocket.status.value = mapOf("p1" to Dot.Online, "p2" to Dot.Offline)
         Pocket.catalog.value = catalog
+        Pocket.permission.value = mapOf("s1" to "workspace-write")
+        Pocket.permissionCatalog.value = permissions
+        Pocket.permissionCatalogLoading.value = false
+        Pocket.permissionCatalogError.value = null
+        Pocket.permissionChanging.value = false
+        Pocket.prefs.performanceUsage = PerformanceUsage.Compact
+        Pocket.prefs.language = AppLanguage.Zh
+        Pocket.prefs.sessionGroupBy = SessionGroupBy.Workspace
+        Pocket.prefs.sessionOrderBy = SessionOrderBy.Updated
+        Pocket.prefs.archivedFilter = ArchivedFilter.Default
         Pocket.ops.value = setOf(
-            "permissions.set", "presets.list",
+            "permissions.catalog", "permissions.set", "presets.list",
             "plugins.list", "schedule.catalog", "sessions.search", "workspace.state",
         )
         Pocket.presets.value = listOf("standard", "ptc", "minimal", "cordis")
@@ -75,6 +92,12 @@ class ScreenshotTest {
     ) = ChatState(
         "s1", title = "问候", running = true, loaded = true, runStartedAt = System.currentTimeMillis() - 42_000,
         usage = Usage(3, 11, 10_000, 9_600, 800),
+        composerMetrics = ComposerMetrics(
+            activity = ComposerActivity(3, 11, 42000.0, 2000.0, 800.0, 1, 10000.0, 690),
+            tokens = ComposerTokenUsage(10000, 0, 0, 690),
+            context = ComposerContext(9000.0, 100000.0),
+            activityIsWholeSession = true,
+        ),
         hasMore = hasMore,
         firstSeq = if (hasMore) 40L else -1L,
         loadingOlder = loadingOlder,
@@ -162,7 +185,9 @@ class ScreenshotTest {
         CredentialsSettingsScreen {}
     }
     @Test fun s10_modelSheet() = showWithDialogs("10-model-sheet") { ModelSheet(catalog, ModelChoice("deepseek", "deepseek-v4.1-flash", "DeepSeek-V4.1-Flash", "high"), {}) {} }
-    @Test fun s11_permissionSheet() = showWithDialogs("11-permission-sheet") { PermissionSheet("workspace-write", {}) {} }
+    @Test fun s11_permissionSheet() = showWithDialogs("11-permission-sheet") {
+        PermissionPickerSheet("workspace-write", permissions, false, null, {}, {}, {})
+    }
     @Test fun s12_plusSheet() = showWithDialogs("12-plus-sheet") {
         PlusSheet({}, {}, {}, {}, {}, {}, {}, {}, {})
     }
@@ -227,9 +252,9 @@ class ScreenshotTest {
     @Test fun s14c_kindSubtool() = shotKind("14c-kind-subtool", TrajL.kindSubtool)
     @Test fun s15_generalWired() = show("15-general-settings") { GeneralSettingsScreen {} }
     @Test fun s16_panelWithTerminal() {
-        Pocket.ops.value = setOf("files.list", "terminal.create", "jobs.list")
+        Pocket.ops.value = setOf("files.list", "terminal.create", "terminal.follow", "jobs.list")
         showWithDialogs("16-panel-terminal") {
-            PanelSheet(cwd = "/tmp/ws", onDismiss = {}, onFiles = {}, onTerminal = {}, onJobs = {})
+            PanelSheet(onDismiss = {}, onFiles = {}, onTerminal = {})
         }
     }
     @Test fun s17_profileManageSheet() = showWithDialogs("17-profile-manage") {
@@ -256,22 +281,30 @@ class ScreenshotTest {
             ),
         ) {}
     }
-    @Test fun s21_panelWithTodo() {
-        Pocket.ops.value = setOf("files.list", "jobs.list")
-        showWithDialogs("21-panel-todo") {
-            PanelSheet(
-                cwd = "/tmp/ws",
-                todos = listOf(TodoItem("读配置", "completed"), TodoItem("改代码", "in_progress")),
-                onDismiss = {},
-                onFiles = {},
-                onTerminal = {},
-                onJobs = {},
-            )
+    @Test fun s21_panelWithoutSession() {
+        Pocket.ops.value = setOf("files.list", "terminal.create", "terminal.follow")
+        showWithDialogs("21-panel-no-session") {
+            PanelSheet(hasSession = false, onDismiss = {}, onFiles = {}, onTerminal = {})
+        }
+    }
+    @Test
+    @Config(qualifiers = "w915dp-h412dp-xxhdpi")
+    fun s22_panelLandscape() {
+        Pocket.ops.value = setOf("files.list", "terminal.create", "terminal.follow")
+        showWithDialogs("22-panel-landscape") {
+            PanelSheet(onDismiss = {}, onFiles = {}, onTerminal = {})
+        }
+    }
+    @Test fun s23_panelDark() {
+        Pocket.prefs.appearance = Appearance.Dark
+        Pocket.ops.value = setOf("files.list", "terminal.create", "terminal.follow")
+        showWithDialogs("23-panel-dark") {
+            PanelSheet(onDismiss = {}, onFiles = {}, onTerminal = {})
         }
     }
     @Test fun s19_terminalSheet() {
         Pocket.ops.value = setOf("terminal.create", "terminal.follow")
-        Pocket.terminalMeta.value = TerminalMeta("s1", "t1", "a1", title = "zsh", state = "running")
+        // Render the real terminal surface with a deterministic display fixture (no Host attachment).
         Pocket.terminal.resize(48, 16)
         Pocket.terminal.clear()
         // Powerlevel10k-ish prompt: Nerd Font icons (PUA) + ANSI colors.
@@ -285,7 +318,9 @@ class ScreenshotTest {
         )
         Pocket.terminalRevision.value = Pocket.terminal.revision
         showWithDialogs("19-terminal-sheet") {
-            TerminalSheet("s1") {}
+            RightPanelFrame("zsh", onDismiss = {}, onBack = {}) {
+                TerminalView(Pocket.terminal, Pocket.terminalRevision.value, Modifier.fillMaxSize(), onResize = { _, _ -> }, onInput = {})
+            }
         }
     }
 }

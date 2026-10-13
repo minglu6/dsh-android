@@ -8,7 +8,6 @@ import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
@@ -68,7 +67,7 @@ private val TermStyle = TextStyle(
 )
 
 /**
- * Fixed-grid Tokyo Night terminal surface.
+ * Fixed-grid Tokyo Night terminal surface, sized by the caller's bounded modifier.
  * Keystrokes go straight to the PTY (no local echo); soft keyboard via a hidden field.
  */
 @Composable
@@ -107,7 +106,6 @@ fun TerminalView(
     Box(
         modifier
             .fillMaxWidth()
-            .heightIn(min = 220.dp, max = 420.dp)
             .clip(T.R12)
             .background(TokyoNight.Bg)
             .onSizeChanged { size = it }

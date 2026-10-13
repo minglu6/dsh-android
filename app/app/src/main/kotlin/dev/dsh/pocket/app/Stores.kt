@@ -190,7 +190,7 @@ class AppPrefs(ctx: Context) {
         get() = runCatching { CollapseTiming.valueOf(p.getString("collapseTiming", null) ?: "Completion") }.getOrDefault(CollapseTiming.Completion)
         set(v) = p.edit().putString("collapseTiming", v.name).apply()
     var performanceUsage: PerformanceUsage
-        get() = runCatching { PerformanceUsage.valueOf(p.getString("performanceUsage", null) ?: "Detailed") }.getOrDefault(PerformanceUsage.Detailed)
+        get() = runCatching { PerformanceUsage.valueOf(p.getString("performanceUsage", null) ?: "Compact") }.getOrDefault(PerformanceUsage.Compact)
         set(v) = p.edit().putString("performanceUsage", v.name).apply()
     var layoutMode: LayoutMode
         get() = runCatching { LayoutMode.valueOf(p.getString("layoutMode", null) ?: "Auto") }.getOrDefault(LayoutMode.Auto)
