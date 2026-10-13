@@ -12,7 +12,7 @@ class SmokeTest {
     @get:Rule val rule = createAndroidComposeRule<MainActivity>()
 
     @Test fun launchesToConnectionsAndOpensPairSheet() {
-        rule.onNodeWithText("连接到桌面端 dsh").assertIsDisplayed()
+        rule.onNodeWithText("连接").assertIsDisplayed()
         rule.onNodeWithText("局域网").assertIsDisplayed()
         rule.onNodeWithText("Tailscale").assertIsDisplayed()
         rule.onNodeWithText("输入地址").performClick()

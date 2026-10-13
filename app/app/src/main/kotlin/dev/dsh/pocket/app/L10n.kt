@@ -121,80 +121,24 @@ object L {
     fun offline() = if (en) "Offline" else "离线"
     fun revoked() = if (en) "Revoked" else "已撤销"
 
-    // Termux sidecar (APK is controller-only; dsh runs in Termux)
-    fun termuxMode() = if (en) "On-device Termux" else "本机 Termux"
-    fun termuxModeHint() = if (en)
-        "Connect to dsh + pocket listening on 127.0.0.1 in Termux. This app never embeds Node/dsh and never runs su."
-    else
-        "连接 Termux 里监听在 127.0.0.1 的 dsh + pocket。本 App 不内嵌 Node/dsh，也不会执行 su。"
-    fun termuxPort() = if (en) "Port" else "端口"
-    fun termuxName() = if (en) "Name" else "名称"
-    fun termuxDefaultName() = if (en) "Termux" else "本机 Termux"
-    fun termuxPaste() = if (en) "Pairing URI or token" else "配对串或 token"
-    fun termuxPairCode() = if (en) "Pairing code" else "配对码"
-    fun termuxConnect() = if (en) "Connect" else "连接"
-    fun termuxShowHelp() = if (en) "Termux not running? Show install commands" else "端口未开？查看 Termux 安装命令"
-    fun termuxPortDead() = if (en)
-        "Nothing is listening on loopback. Start dsh in Termux, then retry."
-    else
-        "本机回环端口无响应。请在 Termux 启动 dsh 后再试。"
-    fun termuxHelpTitle() = if (en) "Termux sidecar" else "Termux sidecar"
-    fun termuxHelpBody() = if (en)
-        "The APK is a controller only. Install Termux from community releases (not Play Store), run dsh + pocket there, bind 127.0.0.1, then pair with dshpocket:// or paste the owner token."
-    else
-        "APK 只做控制器。请从社区渠道安装 Termux（勿用 Play 商店旧包），在其中运行 dsh + pocket，绑定 127.0.0.1，再用 dshpocket:// 或粘贴 owner token 配对。"
-    fun termuxInstallers() = if (en)
-        "Installers: GitHub termux-app releases · F-Droid com.termux (this repo does not vendor Termux)."
-    else
-        "安装来源：GitHub termux-app releases · F-Droid com.termux（本仓库不内置 Termux）。"
-    fun termuxBootstrap() = if (en) "Install / run commands" else "安装与启动命令"
-    fun termuxPrivilegeLabel() = if (en) "Elevated via su/tsu (reminder)" else "经 su/tsu 提权（提醒）"
-    fun termuxPrivilegeHint() = if (en)
-        "If tools need root, start dsh under tsu/su inside Termux yourself. This app never runs su."
-    else
-        "若工具需要 root，请在 Termux 内自行用 tsu/su 启动 dsh。本 App 从不执行 su。"
-
-    // Connection screen (LAN / Tailscale / 本机 Termux as equal peer tabs)
+    // Connection screen — minimal labels (desktop settings density)
     fun connections() = if (en) "Connections" else "连接"
-    fun connectDesktop() = if (en) "Connect to desktop dsh" else "连接到桌面端 dsh"
-    fun connectDesktopHint() =
-        if (en) "Scan, enter an address, or connect a nearby device"
-        else "扫码、输入地址，或连接附近设备"
     fun scanQr() = if (en) "Scan" else "扫码"
     fun enterAddress() = if (en) "Enter address" else "输入地址"
-    fun connectNearby() = if (en) "Connect nearby" else "连接附近设备"
     fun moreActions() = if (en) "More" else "更多"
-    fun pairedDevices() = if (en) "Paired devices" else "已配对设备"
-    fun lanTab() = if (en) "LAN" else "局域网"
-    fun tailscaleTab() = "Tailscale"
-    fun localTab() = if (en) "This device" else "本机"
-    fun nearbyScanning() = if (en) "Looking for nearby computers…" else "正在搜索附近的电脑…"
-    fun nearbyEmpty() =
-        if (en) "No nearby computers yet. Keep the desktop «Phone connection» page open on the same Wi‑Fi."
-        else "暂未发现附近电脑。请在同一 Wi‑Fi 打开电脑端「手机连接」。"
-    fun nearbyNeedPermission() =
-        if (en) "Allow nearby Wi‑Fi devices to discover computers on this LAN."
-        else "允许附近的 Wi‑Fi 设备权限以发现同一局域网内的电脑。"
+    fun pairedDevices() = if (en) "Paired" else "已配对"
     fun allowNearby() = if (en) "Allow" else "允许"
-    fun tailscaleHint() =
-        if (en) "Use a Tailscale IP (100.x) or MagicDNS name (*.ts.net). Same account as the desktop."
-        else "使用 Tailscale IP（100.x）或 MagicDNS 名称（*.ts.net），与电脑同一账号。"
     fun pairSheetTitle() = if (en) "Pair" else "配对"
     fun addressField() = if (en) "Address" else "地址"
     fun nameField() = if (en) "Name" else "名称"
-    fun nameHint() = if (en) "e.g. Mac mini" else "例如 Mac mini"
+    fun nameHint() = if (en) "Name" else "名称"
     fun pairAction() = if (en) "Pair" else "配对"
     fun currentDevice() = if (en) "Current" else "当前"
     fun connecting() = if (en) "Connecting" else "连接中"
     fun unknownStatus() = if (en) "Unknown" else "未知"
     fun rename() = if (en) "Rename" else "重命名"
     fun connectAction() = if (en) "Connect" else "连接"
-    fun repairNeeded() =
-        if (en) "Connection info incomplete — pair again."
-        else "连接信息不完整，请重新配对。"
-    fun nearbyPermissionBody() =
-        if (en) "Used to discover computers on the same LAN (not for location)."
-        else "用于发现同一局域网内的电脑（不会用于定位）。"
+    fun repairNeeded() = if (en) "Pair again" else "请重新配对"
     // Task notifications (desktop-aligned; adapted from saya-ch/dsh-mobile labels)
     fun taskFinished() = if (en) "Task finished" else "任务已完成"
     fun taskFinishedBody() = if (en) "Your DSH task finished" else "你的 DSH 任务已完成"

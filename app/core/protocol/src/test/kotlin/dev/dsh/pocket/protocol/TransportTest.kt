@@ -58,7 +58,7 @@ class TransportTest {
     }
 
     @Test fun routeLabels() {
-        assertEquals("本机", Route.WsLocal.label)
+        assertEquals("local", Route.WsLocal.label)
         assertEquals("Tailscale", Route.WsTailscale.label)
         assertEquals("LAN", Route.WsLan.label)
     }

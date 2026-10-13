@@ -393,7 +393,7 @@ private fun DrawerItem(icon: ImageVector, text: String, enabled: Boolean = true,
     }
 }
 
-// ---------- Connections (Tokyo Night · equal peer transports) ----------
+// ---------- Connections (Tokyo Night · compact LAN / Tailscale) ----------
 
 @Composable
 fun ConnectionsScreen(pairLink: PairingLink?, onPairLinkConsumed: () -> Unit, canBack: Boolean, onBack: () -> Unit, onConnected: () -> Unit) {
@@ -406,17 +406,13 @@ fun ConnectionsScreen(pairLink: PairingLink?, onPairLinkConsumed: () -> Unit, ca
     var addressHintTab by remember { mutableStateOf(PeerTransport.Lan) }
     var showPair by remember { mutableStateOf(false) }
     var showScan by remember { mutableStateOf(false) }
-    var showTermux by remember { mutableStateOf(false) }
-    var termuxPaste by remember { mutableStateOf("") }
     var showOverflow by remember { mutableStateOf(false) }
     var showDiagnostics by remember { mutableStateOf(false) }
     var manageId by remember { mutableStateOf<String?>(null) }
     var repairTarget by remember { mutableStateOf<Profile?>(null) }
     var nearby by remember { mutableStateOf<List<DiscoveredHost>>(emptyList()) }
-    var nearbyScanning by remember { mutableStateOf(true) }
     var showNearbyPerm by remember { mutableStateOf(false) }
-    // 本机 Termux is always a first-class peer tab (#47); not gated on package install.
-    val tabs = remember { peerTransportTabs(includeLocal = true) }
+    val tabs = remember { peerTransportTabs() }
     var transport by remember { mutableStateOf(PeerTransport.Lan) }
     val manage = manageId?.let { id -> profiles.firstOrNull { it.id == id } }
     val routes by Pocket.routes.collectAsState()
@@ -447,63 +443,30 @@ fun ConnectionsScreen(pairLink: PairingLink?, onPairLinkConsumed: () -> Unit, ca
     val nearbyGranted = Build.VERSION.SDK_INT < 33 ||
         ContextCompat.checkSelfPermission(ctx, Manifest.permission.NEARBY_WIFI_DEVICES) == PackageManager.PERMISSION_GRANTED
     LaunchedEffect(Unit) {
-        // Permission is requested from the always-visible LAN panel /「连接附近设备」
-        // (LocalSend-style in-panel CTA) — not an auto-popup AlertDialog.
         while (true) {
-            nearbyScanning = true
             val canceled = AtomicBoolean(false)
             val found = withContext(Dispatchers.IO) { LanDiscovery.scan(ctx, canceled = canceled) }
             nearby = found.filter { disc -> profiles.none { it.instanceId == disc.instanceId && it.instanceId.isNotBlank() } }
             Pocket.applyDiscoveredHosts(found)
-            nearbyScanning = false
             kotlinx.coroutines.delay(8_000)
         }
     }
     LaunchedEffect(pairLink) {
-        val link = pairLink ?: return@LaunchedEffect
-        onPairLinkConsumed()
-        if (dev.dsh.pocket.protocol.isLoopbackHost(link.host)) {
-            transport = PeerTransport.Local
-            termuxPaste = "dshpocket://pair?h=${link.host}:${link.port}&c=${link.code}"
-            showTermux = true
-        } else {
-            pairing = link
-            addressHintTab = when (classifyWsRoute(link.host)) {
+        if (pairLink != null) {
+            pairing = pairLink
+            addressHintTab = when (classifyWsRoute(pairLink.host)) {
                 Route.WsTailscale -> PeerTransport.Tailscale
-                Route.WsLocal -> PeerTransport.Local
-                Route.WsLan -> PeerTransport.Lan
+                else -> PeerTransport.Lan
             }
             showPair = true
+            onPairLinkConsumed()
         }
     }
 
     fun openAddressSheet(seed: PairingLink? = null, tab: PeerTransport = transport) {
-        if (tab == PeerTransport.Local) {
-            transport = PeerTransport.Local
-            termuxPaste = seed?.takeIf { it.host.isNotBlank() }?.let { "${it.host}:${it.port}" }.orEmpty()
-            showTermux = true
-            return
-        }
         addressHintTab = tab
-        pairing = seed ?: peerAddressSeed(tab).takeIf { it.isNotBlank() }?.let { raw ->
-            parseHostPort(raw)?.let { (h, p) -> PairingLink(h, p, "") }
-        }
+        pairing = seed
         showPair = true
-    }
-
-    fun openNearbyConnect() {
-        transport = PeerTransport.Lan
-        when (val action = resolveNearbyConnect(nearby)) {
-            is NearbyConnectAction.OpenPair -> {
-                val h = action.host
-                openAddressSheet(PairingLink(h.host, h.port, ""), PeerTransport.Lan)
-            }
-            NearbyConnectAction.ShowLanTab -> {
-                if (!nearbyGranted && Build.VERSION.SDK_INT >= 33 && !Pocket.prefs.nearbyWifiDeclined) {
-                    showNearbyPerm = true
-                }
-            }
-        }
     }
 
     Column(Modifier.fillMaxSize().background(Conn.Bg).systemBarsPadding().verticalScroll(rememberScrollState())) {
@@ -512,28 +475,14 @@ fun ConnectionsScreen(pairLink: PairingLink?, onPairLinkConsumed: () -> Unit, ca
             onBack = if (canBack) onBack else null,
             onOverflow = { showOverflow = true },
         )
-        if (sorted.isEmpty()) {
-            ConnCard {
-                Row(Modifier.fillMaxWidth().padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Box(
-                        Modifier.size(40.dp).clip(CircleShape).background(Conn.Elevated),
-                        contentAlignment = Alignment.Center,
-                    ) { Icon(Icons.Outlined.Devices, null, tint = Conn.FgMute, modifier = Modifier.size(20.dp)) }
-                    Spacer(Modifier.width(14.dp))
-                    Column {
-                        Text(L.connectDesktop(), fontSize = 16.sp, color = Conn.Fg)
-                        Text(L.connectDesktopHint(), fontSize = 13.sp, color = Conn.FgMute, modifier = Modifier.padding(top = 2.dp))
-                    }
-                }
-            }
-        } else {
-            Text(L.pairedDevices(), fontSize = 13.sp, color = Conn.FgMute, modifier = Modifier.padding(start = 22.dp, top = 4.dp, bottom = 2.dp))
+        if (sorted.isNotEmpty()) {
+            Text(L.pairedDevices(), fontSize = 12.sp, color = Conn.FgMute, modifier = Modifier.padding(start = 22.dp, top = 2.dp, bottom = 4.dp))
             ConnCard {
                 sorted.forEachIndexed { i, p ->
                     val d = status[p.id]
                     val route = routes[p.id]
                     ConnProfileRow(
-                        name = p.name + if (p.id == active) "  · ${L.currentDevice()}" else "",
+                        name = p.name + if (p.id == active) " · ${L.currentDevice()}" else "",
                         subtitle = "${p.subtitle} · ${dotLabel(d)}",
                         chip = route?.label ?: p.kind,
                         warn = p.needsRepair,
@@ -545,66 +494,43 @@ fun ConnectionsScreen(pairLink: PairingLink?, onPairLinkConsumed: () -> Unit, ca
             }
         }
 
-        PeerTransportTabs(
-            tabs = tabs,
-            selected = transport,
-            en = en,
-            onSelect = { transport = it },
-        )
+        PeerTransportTabs(tabs = tabs, selected = transport, en = en, onSelect = { transport = it })
 
         when (transport) {
-            PeerTransport.Lan -> LanPeerPanel(
-                nearby = nearby,
-                scanning = nearbyScanning,
-                needPermission = NearbyDiscoveryPermissionPolicy.shouldRequest(
+            PeerTransport.Lan -> {
+                val needPerm = NearbyDiscoveryPermissionPolicy.shouldRequest(
                     apiLevel = Build.VERSION.SDK_INT,
                     granted = nearbyGranted,
                     previouslyDeclined = Pocket.prefs.nearbyWifiDeclined,
-                ),
-                onRequestPermission = { showNearbyPerm = true },
-                onPick = { h -> openAddressSheet(PairingLink(h.host, h.port, ""), PeerTransport.Lan) },
-            )
-            PeerTransport.Tailscale -> ConnCard {
-                Text(
-                    L.tailscaleHint(),
-                    fontSize = 14.sp,
-                    color = Conn.FgDim,
-                    lineHeight = 22.sp,
-                    modifier = Modifier.padding(16.dp),
                 )
-            }
-            PeerTransport.Local -> ConnCard {
-                Box(Modifier.testTag("termuxModeEntry")) {
-                    ConnProfileRow(
-                        name = L.termuxMode(),
-                        subtitle = L.termuxModeHint(),
-                        chip = "local",
-                        warn = false,
-                        divider = false,
-                        onClick = {
-                            transport = PeerTransport.Local
-                            termuxPaste = ""
-                            showTermux = true
-                        },
-                        leading = {
-                            Icon(Icons.Outlined.Terminal, null, tint = Conn.Accent, modifier = Modifier.size(18.dp))
-                        },
-                    )
+                if (needPerm || nearby.isNotEmpty()) {
+                    Text(L.nearbyComputers(), fontSize = 12.sp, color = Conn.FgMute, modifier = Modifier.padding(start = 22.dp, top = 2.dp, bottom = 4.dp))
+                    ConnCard {
+                        when {
+                            needPerm -> ConnOptionRow(L.allowNearby(), icon = D.link) { showNearbyPerm = true }
+                            else -> nearby.forEachIndexed { i, h ->
+                                ConnProfileRow(
+                                    name = h.deviceName,
+                                    subtitle = "${h.host}:${h.port}",
+                                    chip = "LAN",
+                                    warn = false,
+                                    divider = i < nearby.lastIndex,
+                                    onClick = { openAddressSheet(PairingLink(h.host, h.port, ""), PeerTransport.Lan) },
+                                    leading = { Icon(Icons.Outlined.Computer, null, tint = Conn.Accent, modifier = Modifier.size(18.dp)) },
+                                )
+                            }
+                        }
+                    }
                 }
-                Text(
-                    "${TermuxSidecar.DEFAULT_HOST}:${TermuxSidecar.DEFAULT_PORT}",
-                    style = Conn.Mono.copy(fontSize = 12.sp, color = Conn.FgMute),
-                    modifier = Modifier.padding(start = 16.dp, end = 16.dp, bottom = 14.dp),
-                )
             }
+            PeerTransport.Tailscale -> Unit
         }
 
-        Row(Modifier.padding(horizontal = 18.dp, vertical = 14.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        Row(Modifier.padding(horizontal = 18.dp, vertical = 12.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             ConnActionButton(L.scanQr(), Modifier.weight(1f)) { showScan = true }
             ConnActionButton(L.enterAddress(), Modifier.weight(1f)) { openAddressSheet() }
-            ConnActionButton(L.connectNearby(), Modifier.weight(1f)) { openNearbyConnect() }
         }
-        Spacer(Modifier.height(24.dp))
+        Spacer(Modifier.height(16.dp))
     }
 
     if (showNearbyPerm && Build.VERSION.SDK_INT >= 33) {
@@ -629,21 +555,8 @@ fun ConnectionsScreen(pairLink: PairingLink?, onPairLinkConsumed: () -> Unit, ca
         addressHint = peerAddressHint(addressHintTab, en),
         onDismiss = { showPair = false; repairTarget = null },
     ) { p -> showPair = false; repairTarget = null; Pocket.connect(p.id); onConnected() }
-    if (showTermux) TermuxConnectSheet(
-        initialPaste = termuxPaste,
-        onDismiss = { showTermux = false; termuxPaste = "" },
-    ) { p -> showTermux = false; termuxPaste = ""; Pocket.connect(p.id); onConnected() }
     if (showScan) ScanPairFlow(
-        onResult = { link ->
-            showScan = false
-            if (dev.dsh.pocket.protocol.isLoopbackHost(link.host)) {
-                termuxPaste = "dshpocket://pair?h=${link.host}:${link.port}&c=${link.code}"
-                showTermux = true
-            } else {
-                pairing = link
-                showPair = true
-            }
-        },
+        onResult = { link -> pairing = link; showScan = false; showPair = true },
         onDismiss = { showScan = false },
     )
     manage?.let { p ->
@@ -656,19 +569,9 @@ fun ConnectionsScreen(pairLink: PairingLink?, onPairLinkConsumed: () -> Unit, ca
             onRepair = {
                 manageId = null
                 repairTarget = p
-                if (!p.needsRepair && TermuxSidecar.isTermuxProfile(p.host)) {
-                    transport = PeerTransport.Local
-                    termuxPaste = "${p.host}:${p.port}"
-                    showTermux = true
-                } else {
-                    pairing = if (!p.needsRepair) PairingLink(p.host, p.port, "") else null
-                    addressHintTab = when {
-                        PeerTransport.Tailscale.matchesProfile(p) -> PeerTransport.Tailscale
-                        PeerTransport.Local.matchesProfile(p) -> PeerTransport.Local
-                        else -> PeerTransport.Lan
-                    }
-                    showPair = true
-                }
+                pairing = if (!p.needsRepair) PairingLink(p.host, p.port, "") else null
+                addressHintTab = if (PeerTransport.Tailscale.matchesProfile(p)) PeerTransport.Tailscale else PeerTransport.Lan
+                showPair = true
             },
         )
     }
@@ -676,18 +579,18 @@ fun ConnectionsScreen(pairLink: PairingLink?, onPairLinkConsumed: () -> Unit, ca
 
 @Composable
 private fun ConnHeader(title: String, onBack: (() -> Unit)?, onOverflow: () -> Unit) {
-    Row(Modifier.fillMaxWidth().height(56.dp).padding(horizontal = 6.dp), verticalAlignment = Alignment.CenterVertically) {
-        if (onBack != null) IconButton(onBack) { Icon(D.chevronLeft, "返回", tint = Conn.Fg) } else Spacer(Modifier.width(16.dp))
-        Text(title, fontSize = 20.sp, color = Conn.Fg, modifier = Modifier.weight(1f))
-        IconButton(onOverflow) { Icon(D.ellipsis, L.moreActions(), tint = Conn.FgDim, modifier = Modifier.size(20.dp)) }
+    Row(Modifier.fillMaxWidth().height(52.dp).padding(horizontal = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+        if (onBack != null) IconButton(onBack) { Icon(D.chevronLeft, null, tint = Conn.Fg) } else Spacer(Modifier.width(16.dp))
+        Text(title, fontSize = 18.sp, fontWeight = FontWeight.SemiBold, color = Conn.Fg, modifier = Modifier.weight(1f))
+        IconButton(onOverflow) { Icon(D.ellipsis, L.moreActions(), tint = Conn.FgDim, modifier = Modifier.size(18.dp)) }
     }
 }
 
 @Composable
 private fun ConnCard(content: @Composable ColumnScope.() -> Unit) =
     Column(
-        Modifier.padding(horizontal = 18.dp, vertical = 6.dp).fillMaxWidth()
-            .clip(Conn.R16).border(1.dp, Conn.Border, Conn.R16).background(Conn.Surface),
+        Modifier.padding(horizontal = 18.dp, vertical = 4.dp).fillMaxWidth()
+            .clip(Conn.R12).border(1.dp, Conn.Border, Conn.R12).background(Conn.Surface),
         content = content,
     )
 
@@ -695,12 +598,12 @@ private fun ConnCard(content: @Composable ColumnScope.() -> Unit) =
 private fun ConnActionButton(label: String, modifier: Modifier = Modifier, onClick: () -> Unit) {
     OutlinedButton(
         onClick,
-        modifier.height(52.dp),
+        modifier.height(48.dp),
         shape = Conn.R12,
         border = BorderStroke(1.dp, Conn.Border),
         colors = ButtonDefaults.outlinedButtonColors(contentColor = Conn.Fg, containerColor = Conn.Elevated),
-        contentPadding = PaddingValues(horizontal = 8.dp),
-    ) { Text(label, fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis) }
+        contentPadding = PaddingValues(horizontal = 10.dp),
+    ) { Text(label, fontSize = 14.sp, maxLines = 1, overflow = TextOverflow.Ellipsis) }
 }
 
 @Composable
@@ -711,71 +614,23 @@ private fun PeerTransportTabs(
     onSelect: (PeerTransport) -> Unit,
 ) {
     Row(
-        Modifier.padding(horizontal = 18.dp, vertical = 10.dp).fillMaxWidth()
-            .clip(Conn.R12).background(Conn.Elevated).padding(4.dp),
-        horizontalArrangement = Arrangement.spacedBy(4.dp),
+        Modifier.padding(horizontal = 18.dp, vertical = 8.dp).fillMaxWidth()
+            .clip(Conn.R12).background(Conn.Elevated).padding(3.dp),
+        horizontalArrangement = Arrangement.spacedBy(3.dp),
     ) {
         tabs.forEach { tab ->
             val on = tab == selected
             Box(
-                Modifier.weight(1f).height(40.dp).clip(Conn.R12)
-                    .background(if (on) Conn.Accent.copy(alpha = 0.22f) else Color.Transparent)
-                    .border(if (on) 1.dp else 0.dp, if (on) Conn.Accent else Color.Transparent, Conn.R12)
+                Modifier.weight(1f).height(36.dp).clip(Conn.R12)
+                    .background(if (on) Conn.Accent.copy(alpha = 0.2f) else Color.Transparent)
                     .clickable { onSelect(tab) },
                 contentAlignment = Alignment.Center,
             ) {
                 Text(
                     tab.label(en),
-                    fontSize = 14.sp,
+                    fontSize = 13.sp,
                     fontWeight = if (on) FontWeight.SemiBold else FontWeight.Normal,
                     color = if (on) Conn.Accent else Conn.FgDim,
-                )
-            }
-        }
-    }
-}
-
-@Composable
-private fun LanPeerPanel(
-    nearby: List<DiscoveredHost>,
-    scanning: Boolean,
-    needPermission: Boolean,
-    onRequestPermission: () -> Unit,
-    onPick: (DiscoveredHost) -> Unit,
-) {
-    Text(L.nearbyComputers(), fontSize = 13.sp, color = Conn.FgMute, modifier = Modifier.padding(start = 22.dp, top = 4.dp, bottom = 2.dp))
-    ConnCard {
-        when {
-            needPermission -> {
-                Column(Modifier.padding(16.dp)) {
-                    Text(L.nearbyNeedPermission(), fontSize = 14.sp, color = Conn.FgDim, lineHeight = 21.sp)
-                    Spacer(Modifier.height(12.dp))
-                    Button(
-                        onRequestPermission,
-                        Modifier.fillMaxWidth().height(44.dp),
-                        shape = Conn.R12,
-                        colors = ConnPrimaryColors(),
-                    ) { Text(L.allowNearby(), color = Conn.Bg) }
-                }
-            }
-            nearby.isEmpty() -> {
-                Text(
-                    if (scanning) L.nearbyScanning() else L.nearbyEmpty(),
-                    fontSize = 14.sp,
-                    color = Conn.FgMute,
-                    lineHeight = 21.sp,
-                    modifier = Modifier.padding(16.dp),
-                )
-            }
-            else -> nearby.forEachIndexed { i, h ->
-                ConnProfileRow(
-                    name = h.deviceName,
-                    subtitle = "${h.host}:${h.port}",
-                    chip = "LAN",
-                    warn = false,
-                    divider = i < nearby.lastIndex,
-                    onClick = { onPick(h) },
-                    leading = { Icon(Icons.Outlined.Computer, null, tint = Conn.Accent, modifier = Modifier.size(18.dp)) },
                 )
             }
         }
@@ -793,27 +648,29 @@ private fun ConnProfileRow(
     leading: @Composable () -> Unit,
 ) {
     Row(
-        Modifier.fillMaxWidth().clickable(onClick = onClick).padding(horizontal = 16.dp, vertical = 14.dp),
+        Modifier.fillMaxWidth().clickable(onClick = onClick).padding(horizontal = 14.dp, vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        leading(); Spacer(Modifier.width(12.dp))
+        leading(); Spacer(Modifier.width(10.dp))
         Column(Modifier.weight(1f)) {
-            Text(name, fontSize = 16.sp, color = Conn.Fg)
+            Text(name, fontSize = 15.sp, color = Conn.Fg, maxLines = 1, overflow = TextOverflow.Ellipsis)
             Text(
                 subtitle,
-                style = Conn.Mono.copy(fontSize = 12.sp, color = Conn.FgMute, lineHeight = 17.sp),
-                modifier = Modifier.padding(top = 2.dp),
+                style = Conn.Mono.copy(fontSize = 11.sp, color = Conn.FgMute, lineHeight = 15.sp),
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.padding(top = 1.dp),
             )
         }
         Text(
             chip,
-            fontSize = 12.sp,
+            fontSize = 11.sp,
             color = if (warn) Conn.Warn else Conn.FgDim,
-            modifier = Modifier.border(1.dp, Conn.Border, T.R8).padding(horizontal = 8.dp, vertical = 4.dp),
+            modifier = Modifier.border(1.dp, Conn.Border, T.R8).padding(horizontal = 6.dp, vertical = 2.dp),
         )
-        Icon(D.chevronRight, null, tint = Conn.FgMute, modifier = Modifier.padding(start = 8.dp).size(20.dp))
+        Icon(D.chevronRight, null, tint = Conn.FgMute, modifier = Modifier.padding(start = 6.dp).size(18.dp))
     }
-    if (divider) HorizontalDivider(Modifier.padding(horizontal = 16.dp), color = Conn.Border.copy(alpha = 0.45f))
+    if (divider) HorizontalDivider(Modifier.padding(horizontal = 14.dp), color = Conn.Border.copy(alpha = 0.4f))
 }
 
 @Composable
@@ -859,7 +716,7 @@ fun ProfileManageSheet(
             Row(Modifier.padding(horizontal = 22.dp, vertical = 16.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                 OutlinedButton(
                     { renaming = false },
-                    Modifier.weight(1f).height(50.dp),
+                    Modifier.weight(1f).height(48.dp),
                     shape = Conn.R12,
                     border = BorderStroke(1.dp, Conn.Border),
                     colors = ButtonDefaults.outlinedButtonColors(contentColor = Conn.Fg),
@@ -870,7 +727,7 @@ fun ProfileManageSheet(
                         if (trimmed.isNotEmpty() && trimmed != profile.name) Pocket.renameProfile(profile.id, trimmed)
                         renaming = false
                     },
-                    Modifier.weight(1f).height(50.dp),
+                    Modifier.weight(1f).height(48.dp),
                     enabled = editName.trim().isNotEmpty(),
                     shape = Conn.R12,
                     colors = ConnPrimaryColors(),
@@ -918,18 +775,13 @@ private fun dotLabel(d: Dot?) = when (d) {
 fun NearbyWifiPermissionSheet(onDismiss: () -> Unit, onAllow: () -> Unit) {
     ConnSheet(onDismiss) {
         ConnSheetTitle(L.nearbyComputers())
-        Text(
-            L.nearbyPermissionBody(),
-            fontSize = 14.sp, color = Conn.FgDim, lineHeight = 22.sp,
-            modifier = Modifier.padding(horizontal = 22.dp, vertical = 8.dp),
-        )
         Row(Modifier.padding(horizontal = 22.dp, vertical = 16.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
             OutlinedButton(
-                onDismiss, Modifier.weight(1f).height(50.dp), shape = Conn.R12,
+                onDismiss, Modifier.weight(1f).height(48.dp), shape = Conn.R12,
                 border = BorderStroke(1.dp, Conn.Border),
                 colors = ButtonDefaults.outlinedButtonColors(contentColor = Conn.Fg),
             ) { Text(L.cancel()) }
-            Button(onAllow, Modifier.weight(1f).height(50.dp), shape = Conn.R12, colors = ConnPrimaryColors()) {
+            Button(onAllow, Modifier.weight(1f).height(48.dp), shape = Conn.R12, colors = ConnPrimaryColors()) {
                 Text(L.allowNearby(), color = Conn.Bg)
             }
         }
@@ -977,7 +829,7 @@ fun PairSheet(
             }
         }
         ConnField(L.nameField(), name, L.nameHint()) { name = it }
-        Spacer(Modifier.height(14.dp))
+        Spacer(Modifier.height(12.dp))
         Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
             BasicTextField(
                 code,
@@ -985,20 +837,20 @@ fun PairSheet(
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword),
                 modifier = Modifier.focusRequester(focus),
                 cursorBrush = SolidColor(Color.Transparent),
-                textStyle = androidx.compose.ui.text.TextStyle(color = Color.Transparent),
+                textStyle = TextStyle(color = Color.Transparent),
                 decorationBox = {
-                    Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         repeat(6) { i ->
                             val cur = i == code.length
                             Box(
-                                Modifier.size(46.dp, 56.dp).clip(Conn.R12)
+                                Modifier.size(42.dp, 50.dp).clip(Conn.R12)
                                     .border(if (cur) 1.5.dp else 1.dp, if (cur) Conn.Accent else Conn.Border, Conn.R12)
                                     .background(Conn.Elevated),
                                 contentAlignment = Alignment.Center,
                             ) {
                                 Text(
                                     code.getOrNull(i)?.toString() ?: "",
-                                    style = Conn.Mono.copy(fontSize = 24.sp, color = Conn.Fg),
+                                    style = Conn.Mono.copy(fontSize = 22.sp, color = Conn.Fg),
                                     textAlign = TextAlign.Center,
                                 )
                             }
@@ -1021,13 +873,13 @@ fun PairSheet(
                     }
                 }
             },
-            Modifier.padding(horizontal = 18.dp, vertical = 16.dp).fillMaxWidth().height(52.dp),
+            Modifier.padding(horizontal = 18.dp, vertical = 14.dp).fillMaxWidth().height(48.dp),
             enabled = ready,
             shape = Conn.R12,
             colors = ConnPrimaryColors(),
         ) {
             if (busy) CircularProgressIndicator(Modifier.size(18.dp), color = Conn.Bg, strokeWidth = 2.dp)
-            else Text(L.pairAction(), fontSize = 16.sp, color = Conn.Bg)
+            else Text(L.pairAction(), fontSize = 15.sp, color = Conn.Bg)
         }
     }
     LaunchedEffect(Unit) { if (link != null) runCatching { focus.requestFocus() } }
@@ -1035,17 +887,17 @@ fun PairSheet(
 
 @Composable
 private fun ConnField(label: String, v: String, hint: String, mono: Boolean = false, onChange: (String) -> Unit) {
-    Column(Modifier.padding(horizontal = 18.dp, vertical = 5.dp)) {
-        Text(label, fontSize = 13.sp, color = Conn.FgMute, modifier = Modifier.padding(start = 4.dp, bottom = 4.dp))
-        Box(Modifier.fillMaxWidth().clip(Conn.R12).background(Conn.Elevated).padding(horizontal = 14.dp, vertical = 13.dp)) {
+    Column(Modifier.padding(horizontal = 18.dp, vertical = 4.dp)) {
+        Text(label, fontSize = 12.sp, color = Conn.FgMute, modifier = Modifier.padding(start = 4.dp, bottom = 4.dp))
+        Box(Modifier.fillMaxWidth().clip(Conn.R12).background(Conn.Elevated).padding(horizontal = 14.dp, vertical = 12.dp)) {
             if (v.isEmpty()) {
-                Text(hint, color = Conn.FgMute, style = if (mono) Conn.Mono.copy(fontSize = 15.sp, color = Conn.FgMute) else TextStyle.Default.copy(fontSize = 15.sp, color = Conn.FgMute))
+                Text(hint, color = Conn.FgMute, style = if (mono) Conn.Mono.copy(fontSize = 14.sp, color = Conn.FgMute) else TextStyle.Default.copy(fontSize = 14.sp, color = Conn.FgMute))
             }
             BasicTextField(
                 v,
                 onChange,
                 singleLine = true,
-                textStyle = if (mono) Conn.Mono.copy(fontSize = 15.sp, color = Conn.Fg) else TextStyle.Default.copy(fontSize = 15.sp, color = Conn.Fg),
+                textStyle = if (mono) Conn.Mono.copy(fontSize = 14.sp, color = Conn.Fg) else TextStyle.Default.copy(fontSize = 14.sp, color = Conn.Fg),
                 cursorBrush = SolidColor(Conn.Accent),
                 modifier = Modifier.fillMaxWidth(),
             )

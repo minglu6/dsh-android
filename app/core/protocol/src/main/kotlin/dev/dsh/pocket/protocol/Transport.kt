@@ -8,7 +8,7 @@ import java.util.concurrent.atomic.AtomicBoolean
 
 /** How the pocket frames are reaching the desktop. */
 enum class Route {
-    /** Loopback WebSocket — Termux sidecar on-device, or local-dev. */
+    /** Loopback / local-dev WebSocket only — not user-facing. */
     WsLocal,
     /** Remote WebSocket over Tailscale (MagicDNS or CGNAT 100.x). */
     WsTailscale,
@@ -18,7 +18,7 @@ enum class Route {
 
     /** Short label for the connections chip (no emoji). */
     val label: String get() = when (this) {
-        WsLocal -> "本机"
+        WsLocal -> "local"
         WsTailscale -> "Tailscale"
         WsLan -> "LAN"
     }

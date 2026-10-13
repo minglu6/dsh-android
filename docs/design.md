@@ -188,7 +188,7 @@ interface Transport { suspend fun connect(): Channel; val kind: Kind }   // Chan
 - **M1 (3–4 d) Approvals plus models plus pairing**: approval broker, model ops, device store, pairing window (code plus QR).
 - **M2 (1 wk) Android MVP**: design system, connections, drawer, chat with reducer, tool sheet, approval card plus notification, foreground service.
 - **M3** ✅: phone path is Tailscale / LAN `host:port` WebSocket. Pairing URI `dshpocket://pair?h=&c=`. APK no longer bundles `libpocket_iroh.so`. Optional legacy `pocket-host` remains behind `config.iroh=true`. Frame line cap `MAX_LINE` = 1 MiB; `sessions.list` slimmed.
-- **M4 Local mode (deferred)**: APK-embedded Node/dsh (tether `local.rs` style) is deferred. **On-device path now**: Termux sidecar — APK dials loopback pocket WS only; see [termux-sidecar.md](termux-sidecar.md).
+- **M4 (1 wk) Local mode**: port tether's runtime build script and local.rs. Bundle the plugin with `mode: local`. Lifecycle management.
 - **M5 Polish**: server-side transcript reducer, history paging, user-questions, image prompts, reconnect hardening, per-dsh-version CI matrix.
 
 ## 8. Risks
