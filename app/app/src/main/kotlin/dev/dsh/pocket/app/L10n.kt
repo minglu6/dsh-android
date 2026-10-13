@@ -178,6 +178,29 @@ object L {
     fun countUnit() = if (en) "plugins" else "个"
     fun modelsCatalog() = if (en) "Model catalog" else "模型目录"
     fun providerDetail() = if (en) "Provider" else "提供商"
+
+    fun collapse() = if (en) "Collapse" else "收起"
+    fun expand() = if (en) "Expand" else "展开"
+
+    // Document preview (sidebarDocumentPreview + image/pdf renderer locales)
+    fun docLoading() = if (en) "Rendering document..." else "文档渲染中..."
+    fun docLoadMore() = if (en) "Load more" else "加载更多"
+    fun docRetry() = if (en) "Retry" else "重试"
+    fun docUnsupported() = if (en) "Preview is not available for this file type yet." else "该格式文件暂时无法预览"
+    fun docErrorUnavailable(message: String) =
+        if (en) "Read failed: $message" else "读取失败：$message"
+    fun imagePreviewFailed() = if (en) "This image could not be displayed." else "无法显示这张图片"
+    fun pdfRendering() = if (en) "Rendering page…" else "正在绘制页面…"
+    fun pdfFailed(message: String) =
+        if (en) "Cannot display PDF: $message" else "无法显示 PDF：$message"
+    fun pdfPage(page: Int) = if (en) "PDF page $page" else "PDF 第 $page 页"
+    fun pdfUnsupported() = if (en) "PDF preview requires the complete file contents." else "PDF 预览需要完整文件内容"
+
+    // Layout (phone chrome; mirrors desktop always-on sidebar on wide screens)
+    fun layout() = if (en) "Layout" else "布局"
+    fun layoutAuto() = if (en) "Auto" else "自动"
+    fun layoutPhone() = if (en) "Phone" else "手机"
+    fun layoutDesktop() = if (en) "Desktop" else "桌面"
 }
 
 /** Composer primary-action label from running state + [BusySend] pref. */

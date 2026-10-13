@@ -961,7 +961,7 @@ private fun Seg(on: Boolean, label: String, onClick: () -> Unit) {
         modifier = Modifier
             .background(T.Fill, RoundedCornerShape(10.dp))
             .padding(3.dp)
-            .background(if (on) Color.White else Color.Transparent, RoundedCornerShape(8.dp))
+            .background(if (on) T.Surface else Color.Transparent, RoundedCornerShape(8.dp))
             .clickable(onClick = onClick)
             .padding(horizontal = 10.dp, vertical = 4.dp),
     )

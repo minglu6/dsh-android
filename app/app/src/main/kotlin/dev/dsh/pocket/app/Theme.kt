@@ -1,66 +1,159 @@
 package dev.dsh.pocket.app
 
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Typography
+import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.SideEffect
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
-/** dsh web UI design tokens (`--dsw-static-deepseek-*` / InputBar `.primary`). */
+/**
+ * Live theme mirror of desktop `body` / `body[data-ds-dark-theme]` alias sheets.
+ * Updated by [PocketTheme] so non-composable `T.*` getters stay in sync with Appearance.
+ */
+object ThemeState {
+    @Volatile
+    var dark: Boolean = false
+        private set
+
+    fun setDark(value: Boolean) {
+        dark = value
+    }
+
+    val colors: DswColors
+        get() = if (dark) DswColors.Dark else DswColors.Light
+}
+
+/**
+ * App chrome tokens mapped from desktop `--dsw-alias-*` / `--dsw-specific-*`
+ * (and `--dsw-radius-*` / `--ds-*` radii from base.css). Colors follow [ThemeState].
+ */
 object T {
-    val Ink = Color(0xFF0F1115)
-    /** Light `--dsw-alias-button-info-fill` / deepseek-500. */
-    val Accent = Color(0xFF4176E6)
-    /** Dark `--dsw-alias-button-info-fill` / deepseek-400. */
-    val AccentDark = Color(0xFF7AAAFF)
-    val Tint = Color(0xFFE4EDFD)
-    val Text2 = Color(0xFF61666B)
-    val Text3 = Color(0xFF81858C)
-    val Caption = Color(0xFFADB2B8)
-    val Fill = Color(0xFFF1F3F5)
-    val Fill2 = Color(0xFFF5F6F7)
-    val Drawer = Color(0xFFF8F9FB)
-    val Border = Color(0xFFE5E7EB)
-    val WarnBorder = Color(0xFFF7AD31)
-    val WarnTint = Color(0xFFFEF5E7)
-    val WarnText = Color(0xFFB7791F)
-    /** Sheet backdrop: ink at 28%, matches the mockups (not M3's flat 32% black). */
-    val Scrim = Color(0x470F1115)
-    val Bluish = Color(0xFF0E3074)          // --dsw-alias-label-primary-bluish (blue-900)
-    val HoverBg = Color(0x0F263148)         // --dsw-alias-interactive-bg-hover
-    val Ok = Color(0xFF22C55E)
-    val Err = Color(0xFFEC1313)
-    val R4 = RoundedCornerShape(4.dp); val R8 = RoundedCornerShape(8.dp); val R12 = RoundedCornerShape(12.dp)
-    val R16 = RoundedCornerShape(16.dp); val R20 = RoundedCornerShape(20.dp); val R28 = RoundedCornerShape(28.dp)
+    private val c get() = ThemeState.colors
+
+    /** `--dsw-alias-label-primary` */
+    val Ink get() = c.LabelPrimary
+    /** `--dsw-alias-button-info-fill` / business primary (theme-aware). */
+    val Accent get() = c.ButtonInfoFill
+    /** Dark-scheme info fill (deepseek-400); kept for callers that need the dark accent explicitly. */
+    val AccentDark get() = DswColors.Dark.ButtonInfoFill
+    /** `--dsw-alias-state-business-tertiary` */
+    val Tint get() = c.StateBusinessTertiary
+    /** `--dsw-alias-label-secondary` */
+    val Text2 get() = c.LabelSecondary
+    /** `--dsw-alias-label-tertiary` */
+    val Text3 get() = c.LabelTertiary
+    /** `--dsw-alias-label-caption` */
+    val Caption get() = c.LabelCaption
+    /** `--dsw-alias-interactive-bg-hover-solid` */
+    val Fill get() = c.InteractiveBgHoverSolid
+    /** `--dsw-alias-bg-module-platform` / selector fill */
+    val Fill2 get() = c.BgModulePlatform
+    /** `--dsw-specific-sidebar-fill` */
+    val Drawer get() = c.SpecificsidebarFill
+    /** `--dsw-alias-border-l2` */
+    val Border get() = c.BorderL2
+    /** `--dsw-alias-state-warn-secondary` */
+    val WarnBorder get() = c.StateWarnSecondary
+    /** `--dsw-alias-state-warn-tertiary` */
+    val WarnTint get() = c.StateWarnTertiary
+    /** `--dsw-alias-state-warn-label` */
+    val WarnText get() = c.StateWarnLabel
+    /** `--dsw-alias-bg-mask-1` */
+    val Scrim get() = c.BgMask1
+    /** `--dsw-alias-label-primary-bluish` */
+    val Bluish get() = c.LabelPrimaryBluish
+    /** `--dsw-alias-interactive-bg-hover` */
+    val HoverBg get() = c.InteractiveBgHover
+    /** `--dsw-alias-state-success-primary` */
+    val Ok get() = c.StateSuccessPrimary
+    /** `--dsw-alias-state-error-primary` */
+    val Err get() = c.StateErrorPrimary
+    /** `--dsw-alias-bg-base` */
+    val Bg get() = c.BgBase
+    /** `--dsw-alias-bg-layer-1` */
+    val Surface get() = c.BgLayer1
+    /** `--dsw-alias-bg-layer-2` */
+    val Surface2 get() = c.BgLayer2
+    /** `--dsw-alias-link` */
+    val Link get() = c.Link
+    /** `--dsw-specific-bubble` */
+    val Bubble get() = c.Specificbubble
+    /** `--dsw-alias-button-primary-fill` */
+    val PrimaryButton get() = c.ButtonPrimaryFill
+    /** `--dsw-alias-label-primary-foreground` */
+    val OnPrimary get() = c.LabelPrimaryForeground
+    /** `--dsw-alias-markdown-code-block` */
+    val CodeBlock get() = c.MarkdownCodeBlock
+    /** `--dsw-alias-bg-document-preview` */
+    val DocumentPreviewBg get() = c.BgDocumentPreview
+
+    // `--dsw-radius-*` / panel from base.css
+    val R4 = RoundedCornerShape(4.dp)
+    val R8 = RoundedCornerShape(8.dp)
+    val R12 = RoundedCornerShape(12.dp)
+    val R16 = RoundedCornerShape(16.dp)
+    val R20 = RoundedCornerShape(20.dp)
+    val R28 = RoundedCornerShape(28.dp)
     val Sheet = RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp)
+
     /** Meslo Nerd Font — same code face as desktop / terminal (Tokyo Night blocks). */
-    val Mono = TextStyle(fontFamily = MesloNerdFamily, fontSize = 13.sp, color = Ink)
+    val Mono get() = TextStyle(fontFamily = MesloNerdFamily, fontSize = 13.sp, color = Ink)
+}
+
+/** Resolve Appearance pref + system setting into a dark flag. */
+fun resolveDarkAppearance(appearance: Appearance, systemDark: Boolean): Boolean = when (appearance) {
+    Appearance.Dark -> true
+    Appearance.System -> systemDark
+    Appearance.Light -> false
 }
 
 @Composable
 fun PocketTheme(content: @Composable () -> Unit) {
-    // Appearance is phone-local (Host `ui-theme.preference`). Custom T.* tokens stay light so Roborazzi
-    // and the current layout chrome keep official light surfaces; Material scheme follows preference.
     val appearance = runCatching { Pocket.prefs.appearance }.getOrDefault(Appearance.Light)
-    val dark = when (appearance) {
-        Appearance.Dark -> true
-        Appearance.System -> androidx.compose.foundation.isSystemInDarkTheme()
-        Appearance.Light -> false
-    }
+    val dark = resolveDarkAppearance(appearance, isSystemInDarkTheme())
+    SideEffect { ThemeState.setDark(dark) }
+    // Also set immediately so the first frame's T.* reads are correct (SideEffect runs after).
+    ThemeState.setDark(dark)
+    val colors = if (dark) DswColors.Dark else DswColors.Light
     MaterialTheme(
-        colorScheme = if (dark) androidx.compose.material3.darkColorScheme(
-            primary = T.AccentDark, onPrimary = Color.White, background = Color(0xFF151517), surface = Color(0xFF232324),
-            onSurface = Color(0xFFF9FAFB), onBackground = Color(0xFFF9FAFB), error = T.Err,
+        colorScheme = if (dark) darkColorScheme(
+            primary = colors.ButtonInfoFill,
+            onPrimary = colors.LabelPrimaryForeground,
+            background = colors.BgBase,
+            surface = colors.BgLayer1,
+            onSurface = colors.LabelPrimary,
+            onBackground = colors.LabelPrimary,
+            surfaceVariant = colors.InteractiveBgHoverSolid,
+            onSurfaceVariant = colors.LabelSecondary,
+            outline = colors.BorderL2,
+            outlineVariant = colors.BorderL3,
+            error = colors.StateErrorPrimary,
+            surfaceContainerLow = colors.BgLayer1,
+            surfaceContainer = colors.BgLayer2,
+            surfaceContainerHigh = colors.BgLayer3,
         ) else lightColorScheme(
-            primary = T.Accent, onPrimary = Color.White, background = Color.White, surface = Color.White,
-            onSurface = T.Ink, onBackground = T.Ink, surfaceVariant = T.Fill, onSurfaceVariant = T.Text2,
-            outline = T.Border, outlineVariant = T.Border, error = T.Err, surfaceContainerLow = Color.White,
-            surfaceContainer = Color.White, surfaceContainerHigh = Color.White,
+            primary = colors.ButtonInfoFill,
+            onPrimary = colors.LabelPrimaryForeground,
+            background = colors.BgBase,
+            surface = colors.BgLayer1,
+            onSurface = colors.LabelPrimary,
+            onBackground = colors.LabelPrimary,
+            surfaceVariant = colors.InteractiveBgHoverSolid,
+            onSurfaceVariant = colors.LabelSecondary,
+            outline = colors.BorderL2,
+            outlineVariant = colors.BorderL3,
+            error = colors.StateErrorPrimary,
+            surfaceContainerLow = colors.BgBase,
+            surfaceContainer = colors.BgBase,
+            surfaceContainerHigh = colors.BgBase,
         ),
         typography = Typography(
             bodyLarge = TextStyle(fontSize = 16.sp, lineHeight = 26.sp),
@@ -69,8 +162,6 @@ fun PocketTheme(content: @Composable () -> Unit) {
             titleMedium = TextStyle(fontSize = 17.sp, fontWeight = FontWeight.SemiBold),
             labelMedium = TextStyle(fontSize = 13.sp),
         ),
-        // Typography carries no colors: a color here leaks into LocalTextStyle and beats Button content colors
-        // (that made the black primary buttons render black-on-black).
         content = content,
     )
 }

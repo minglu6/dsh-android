@@ -92,7 +92,7 @@ fun TrajectoryDetailSheet(
         ScrollableTabRow(
             selectedTabIndex = tabs.indexOf(tab).coerceAtLeast(0),
             edgePadding = 22.dp,
-            containerColor = Color.White,
+            containerColor = T.Surface,
             contentColor = T.Ink,
             divider = { HorizontalDivider(color = T.Fill) },
             indicator = { positions ->
@@ -493,7 +493,13 @@ private fun TrajPayload(value: String?, missing: String, error: Boolean = false)
         }
         return
     }
+    val paths = remember(value) { extractWorkspacePaths(value) }
     val shown = runCatching { prettyJson(value) }.getOrDefault(value).breakAnywhere()
+    if (paths.isNotEmpty()) {
+        Column(Modifier.padding(horizontal = 22.dp, vertical = 4.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            paths.forEach { FileLinkChip(it) }
+        }
+    }
     SelectableOutput {
         Text(
             shown,
@@ -507,6 +513,18 @@ private fun TrajPayload(value: String?, missing: String, error: Boolean = false)
                 .padding(14.dp),
         )
     }
+}
+
+/** Pull likely workspace file paths from tool JSON / previews for preview chips. */
+internal fun extractWorkspacePaths(source: String): List<String> {
+    val keys = Regex(""""(?:path|file_path|filePath|target_file|targetFile|filename)"\s*:\s*"([^"]+)"""")
+    val fromKeys = keys.findAll(source).map { it.groupValues[1] }.toList()
+    val bare = Regex("""(?<![\\w./-])((?:[.]{0,2}/)?[\w./-]+\.[A-Za-z0-9]{1,12})""")
+        .findAll(source)
+        .map { it.groupValues[1] }
+        .filter { it.contains('/') || it.contains('.') }
+        .toList()
+    return (fromKeys + bare).distinct().filter { parseFileLink(it) != null || it.contains('/') }.take(8)
 }
 
 @Composable

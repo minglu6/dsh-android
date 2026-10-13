@@ -82,7 +82,7 @@ fun TrajectoryRequestSheet(
         ScrollableTabRow(
             selectedTabIndex = tabs.indexOf(tab).coerceAtLeast(0),
             edgePadding = 22.dp,
-            containerColor = Color.White,
+            containerColor = T.Surface,
             contentColor = T.Ink,
             divider = { HorizontalDivider(color = T.Fill) },
             indicator = { positions ->

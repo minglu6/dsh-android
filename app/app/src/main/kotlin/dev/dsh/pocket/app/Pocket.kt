@@ -742,7 +742,9 @@ object Pocket {
 
     suspend fun listFiles(sessionId: String, path: String) = client?.listFiles(sessionId, path)
         ?: throw PocketError("transport", "未连接")
-    suspend fun readFile(sessionId: String, path: String) = client?.readFile(sessionId, path)
+    suspend fun readFile(sessionId: String, path: String, offset: Int? = null, limit: Int? = null) =
+        client?.readFile(sessionId, path, offset, limit)
+    suspend fun readFileBytes(sessionId: String, path: String) = client?.readFileBytes(sessionId, path)
         ?: throw PocketError("transport", "未连接")
     suspend fun listJobs(sessionId: String) = client?.listJobs(sessionId)
         ?: throw PocketError("transport", "未连接")

@@ -156,8 +156,17 @@ class PocketClient(
         call("session.export", jsonOf("sessionId" to sessionId, "includeDescendants" to includeDescendants), timeoutMs = 180_000)
     suspend fun listFiles(sessionId: String, path: String = "."): JsonElement =
         call("files.list", jsonOf("sessionId" to sessionId, "path" to path))
-    suspend fun readFile(sessionId: String, path: String): JsonElement =
-        call("files.read", jsonOf("sessionId" to sessionId, "path" to path))
+    suspend fun readFile(sessionId: String, path: String, offset: Int? = null, limit: Int? = null): JsonElement {
+        val range = if (offset != null || limit != null) {
+            buildJsonObject {
+                offset?.let { put("offset", it) }
+                limit?.let { put("limit", it) }
+            }
+        } else null
+        return call("files.read", jsonOf("sessionId" to sessionId, "path" to path, "range" to range))
+    }
+    suspend fun readFileBytes(sessionId: String, path: String): JsonElement =
+        call("files.readBytes", jsonOf("sessionId" to sessionId, "path" to path))
     suspend fun listJobs(sessionId: String): JsonElement =
         call("jobs.list", jsonOf("sessionId" to sessionId))
     suspend fun killJob(sessionId: String, jobId: String): JsonElement =

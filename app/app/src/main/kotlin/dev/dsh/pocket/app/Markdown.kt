@@ -575,16 +575,18 @@ private fun InlineCodeChip(text: String, surrounding: TextUnit) {
 
 @Composable
 fun FileLinkChip(path: String, label: String = path.substringAfterLast('/').substringAfterLast('\\')) {
+    val open = LocalOpenFilePreview.current
     Row(
         verticalAlignment = Alignment.CenterVertically,
         modifier = Modifier
             .clip(T.R8)
             .background(T.Fill)
+            .then(if (open != null) Modifier.clickable { open(path) } else Modifier)
             .padding(horizontal = 8.dp, vertical = 2.dp),
     ) {
-        Text("</>", color = T.Accent, fontFamily = MesloNerdFamily, fontSize = 12.sp, fontWeight = FontWeight.Medium)
+        Text("</>", color = T.Link, fontFamily = MesloNerdFamily, fontSize = 12.sp, fontWeight = FontWeight.Medium)
         Spacer(Modifier.width(5.dp))
-        Text(label, color = T.Accent, fontSize = 13.sp, fontWeight = FontWeight.Medium, maxLines = 1)
+        Text(label, color = T.Link, fontSize = 13.sp, fontWeight = FontWeight.Medium, maxLines = 1)
     }
 }
 

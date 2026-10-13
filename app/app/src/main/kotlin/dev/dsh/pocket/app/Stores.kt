@@ -142,6 +142,9 @@ enum class PerformanceUsage(val label: String) { Compact("简洁"), Detailed("�
 
 enum class AppLanguage(val label: String) { Zh("中文"), En("English") }
 
+/** Wide-screen chrome: auto follows ≥600dp like desktop sidebar; phone/desktop force a mode. */
+enum class LayoutMode { Auto, Phone, Desktop }
+
 class AppPrefs(ctx: Context) {
     private val p = ctx.getSharedPreferences("app", Context.MODE_PRIVATE)
     private val json = Json { ignoreUnknownKeys = true }
@@ -184,4 +187,7 @@ class AppPrefs(ctx: Context) {
     var performanceUsage: PerformanceUsage
         get() = runCatching { PerformanceUsage.valueOf(p.getString("performanceUsage", null) ?: "Detailed") }.getOrDefault(PerformanceUsage.Detailed)
         set(v) = p.edit().putString("performanceUsage", v.name).apply()
+    var layoutMode: LayoutMode
+        get() = runCatching { LayoutMode.valueOf(p.getString("layoutMode", null) ?: "Auto") }.getOrDefault(LayoutMode.Auto)
+        set(v) = p.edit().putString("layoutMode", v.name).apply()
 }

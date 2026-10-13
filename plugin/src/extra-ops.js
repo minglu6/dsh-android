@@ -78,6 +78,27 @@ export function filesOps(workspaceFiles, sessions, sandboxPolicy) {
       const scope = await scopeOf(a.sessionId)
       return workspaceFiles.read(scope, a.path, a.range, signal)
     },
+    /**
+     * Binary preview for images / PDF. Host `readBytes` returns a Uint8Array;
+     * JSON transport base64-encodes it as `{encoding:'base64', data}`.
+     */
+    'files.readBytes': async (a, signal) => {
+      if (!str(a.path)) throw bad('path required')
+      const scope = await scopeOf(a.sessionId)
+      const options = a.options && typeof a.options === 'object' ? a.options : undefined
+      const r = await workspaceFiles.readBytes(scope, a.path, options, signal)
+      const raw = r?.data
+      const buf = Buffer.isBuffer(raw) ? raw : Buffer.from(raw ?? [])
+      return {
+        absolutePath: r.absolutePath,
+        version: r.version,
+        bytes: r.bytes,
+        offset: r.offset,
+        eof: r.eof,
+        encoding: 'base64',
+        data: buf.toString('base64'),
+      }
+    },
   }
 }
 

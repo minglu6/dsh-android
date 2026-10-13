@@ -55,11 +55,11 @@ data class PendingAttach(
 
 enum class Sheet {
     None, Model, Permission, FullAccess, Preset, Plus, More, Panel, Team, Workspace, Goal, Feedback,
-    Files, Jobs, Terminal, Todo, Commands, Mentions, FeedbackCategory,
+    Files, Jobs, Terminal, Todo, Commands, Mentions, FeedbackCategory, FilePreview,
 }
 
 @Composable
-fun ChatRoot(onMenu: () -> Unit) {
+fun ChatRoot(onMenu: () -> Unit, showMenuButton: Boolean = true) {
     val chat by Pocket.chat.collectAsState()
     val approvals by Pocket.approvals.collectAsState()
     val catalog by Pocket.catalog.collectAsState()
@@ -79,6 +79,7 @@ fun ChatRoot(onMenu: () -> Unit) {
     var pendingImages by remember { mutableStateOf<List<PromptImage>>(emptyList()) }
     var pendingFiles by remember { mutableStateOf<List<PendingAttach>>(emptyList()) }
     var feedbackTarget by remember { mutableStateOf<String?>(null) }
+    var previewPath by remember { mutableStateOf<String?>(null) }
     val questions by Pocket.userQuestions.collectAsState()
     val feedbackMap by Pocket.feedback.collectAsState()
     val ctx = androidx.compose.ui.platform.LocalContext.current
@@ -150,11 +151,19 @@ fun ChatRoot(onMenu: () -> Unit) {
     val workspaces = sessions.mapNotNull { it.cwd }.distinct()
     val showPanel = "files.list" in ops || "jobs.list" in ops || "terminal.create" in ops || (chat?.todos?.isNotEmpty() == true)
 
-    Column(Modifier.fillMaxSize().background(Color.White).systemBarsPadding().imePadding()) {
-        // Connection status lives in the drawer only (desktop session header has no pocket status dot).
-        TopBar(summary?.title ?: chat?.title, sid != null, onMenu, onMore = { sheet = Sheet.More },
+    // Connection status lives in the drawer only (desktop session header has no pocket status dot).
+    CompositionLocalProvider(LocalOpenFilePreview provides { path ->
+        previewPath = path
+        sheet = Sheet.FilePreview
+    }) {
+    Column(Modifier.fillMaxSize().background(T.Bg).then(if (showMenuButton) Modifier.systemBarsPadding() else Modifier).imePadding()) {
+        TopBar(
+            summary?.title ?: chat?.title, sid != null,
+            onMenu = if (showMenuButton) onMenu else null,
+            onMore = { sheet = Sheet.More },
             onPanel = if (showPanel) ({ sheet = Sheet.Panel }) else null,
-            onTeam = { sheet = Sheet.Team }, onPreset = { sheet = Sheet.Preset }, preset = "standard", onNew = { Pocket.closeChat() })
+            onTeam = { sheet = Sheet.Team }, onPreset = { sheet = Sheet.Preset }, preset = "standard", onNew = { Pocket.closeChat() },
+        )
         if (chat == null) {
             Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) { Hero() }
             Row(Modifier.padding(horizontal = 16.dp, vertical = 6.dp), horizontalArrangement = Arrangement.spacedBy(14.dp)) {
@@ -305,14 +314,24 @@ fun ChatRoot(onMenu: () -> Unit) {
         Sheet.Jobs -> sid?.let { JobsSheet(it, onDismiss = { sheet = Sheet.None }) } ?: run { sheet = Sheet.None }
         Sheet.Terminal -> sid?.let { TerminalSheet(it, onDismiss = { sheet = Sheet.None }) } ?: run { sheet = Sheet.None }
         Sheet.Todo -> TodoSheet(chat?.todos.orEmpty(), onDismiss = { sheet = Sheet.None })
+        Sheet.FilePreview -> {
+            val p = previewPath
+            if (sid != null && p != null) {
+                FilePreviewSheet(sid, p, onDismiss = { sheet = Sheet.None; previewPath = null })
+            } else {
+                sheet = Sheet.None; previewPath = null
+            }
+        }
         Sheet.None -> {}
     }
+    } // CompositionLocalProvider
 }
 
 @Composable
-private fun TopBar(title: String?, inChat: Boolean, onMenu: () -> Unit, onMore: () -> Unit, onPanel: (() -> Unit)?, onTeam: () -> Unit, onPreset: () -> Unit, preset: String, onNew: () -> Unit = {}) {
+private fun TopBar(title: String?, inChat: Boolean, onMenu: (() -> Unit)?, onMore: () -> Unit, onPanel: (() -> Unit)?, onTeam: () -> Unit, onPreset: () -> Unit, preset: String, onNew: () -> Unit = {}) {
     Row(Modifier.fillMaxWidth().height(56.dp).padding(horizontal = 6.dp), verticalAlignment = Alignment.CenterVertically) {
-        IconButton(onMenu) { Icon(D.panelLeft, L.menu(), tint = T.Ink, modifier = Modifier.size(20.dp)) }
+        if (onMenu != null) IconButton(onMenu) { Icon(D.panelLeft, L.menu(), tint = T.Ink, modifier = Modifier.size(20.dp)) }
+        else Spacer(Modifier.width(12.dp))
         // One weighted region: the title takes what the gray links leave (no competing spacer).
         Row(Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically) {
             if (inChat) {
@@ -807,13 +826,13 @@ private fun DeliverableCard(item: Item.Deliverable) {
                 Spacer(Modifier.weight(1f))
                 Text(L.delivered(), fontSize = 12.sp, color = T.Ok)
             }
-            item.files.forEach { f ->
-                Spacer(Modifier.height(8.dp))
-                Text(f.path.substringAfterLast('/'), style = T.Mono.copy(fontSize = 13.sp, color = T.Ink), maxLines = 1, overflow = TextOverflow.Ellipsis)
-                f.description?.takeIf { it.isNotBlank() }?.let {
-                    Text(it, fontSize = 12.sp, color = T.Text3, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                }
+        item.files.forEach { f ->
+            Spacer(Modifier.height(8.dp))
+            FileLinkChip(f.path, f.path.substringAfterLast('/'))
+            f.description?.takeIf { it.isNotBlank() }?.let {
+                Text(it, fontSize = 12.sp, color = T.Text3, maxLines = 2, overflow = TextOverflow.Ellipsis)
             }
+        }
         }
     }
 }
