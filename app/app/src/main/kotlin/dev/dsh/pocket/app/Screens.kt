@@ -4,6 +4,7 @@ import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.*
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
@@ -629,7 +630,7 @@ private fun DrawerItem(icon: ImageVector, text: String, enabled: Boolean = true,
     }
 }
 
-// ---------- Connections (Tokyo Night · compact LAN / Tailscale) ----------
+// ---------- Connections (desktop settings list rows · Tokyo Night) ----------
 
 @Composable
 fun ConnectionsScreen(pairLink: PairingLink?, onPairLinkConsumed: () -> Unit, canBack: Boolean, onBack: () -> Unit, onConnected: () -> Unit) {
@@ -648,8 +649,6 @@ fun ConnectionsScreen(pairLink: PairingLink?, onPairLinkConsumed: () -> Unit, ca
     var repairTarget by remember { mutableStateOf<Profile?>(null) }
     var nearby by remember { mutableStateOf<List<DiscoveredHost>>(emptyList()) }
     var showNearbyPerm by remember { mutableStateOf(false) }
-    val tabs = remember { peerTransportTabs() }
-    var transport by remember { mutableStateOf(PeerTransport.Lan) }
     val manage = manageId?.let { id -> profiles.firstOrNull { it.id == id } }
     val routes by Pocket.routes.collectAsState()
     val sorted = remember(profiles) { Pocket.profilesSorted() }
@@ -699,13 +698,18 @@ fun ConnectionsScreen(pairLink: PairingLink?, onPairLinkConsumed: () -> Unit, ca
         }
     }
 
-    fun openAddressSheet(seed: PairingLink? = null, tab: PeerTransport = transport) {
+    fun openAddressSheet(seed: PairingLink? = null, tab: PeerTransport = PeerTransport.Lan) {
         addressHintTab = tab
         pairing = seed
         showPair = true
     }
 
     val compatibility by Pocket.compatibility.collectAsState()
+    val needNearbyPerm = NearbyDiscoveryPermissionPolicy.shouldRequest(
+        apiLevel = Build.VERSION.SDK_INT,
+        granted = nearbyGranted,
+        previouslyDeclined = Pocket.prefs.nearbyWifiDeclined,
+    )
     Column(Modifier.fillMaxSize().background(Conn.Bg).systemBarsPadding().verticalScroll(rememberScrollState())) {
         ConnHeader(
             title = L.connections(),
@@ -713,62 +717,62 @@ fun ConnectionsScreen(pairLink: PairingLink?, onPairLinkConsumed: () -> Unit, ca
             onOverflow = { showOverflow = true },
         )
         CompatibilityBanner(compatibility)
+
         if (sorted.isNotEmpty()) {
-            Text(L.pairedDevices(), fontSize = 12.sp, color = Conn.FgMute, modifier = Modifier.padding(start = 22.dp, top = 2.dp, bottom = 4.dp))
-            ConnCard {
-                sorted.forEachIndexed { i, p ->
-                    val d = status[p.id]
-                    val route = routes[p.id]
-                    ConnProfileRow(
-                        name = p.name + if (p.id == active) " · ${L.currentDevice()}" else "",
-                        subtitle = "${p.subtitle} · ${dotLabel(d)}",
-                        chip = route?.label ?: p.kind,
-                        warn = p.needsRepair,
-                        divider = i < sorted.lastIndex,
-                        onClick = { manageId = p.id },
-                        leading = { StatusDot(d) },
+            ConnSectionTitle(L.pairedDevices())
+            sorted.forEachIndexed { i, p ->
+                val d = status[p.id]
+                val routeLabel = routes[p.id]?.label ?: p.kind
+                ConnDeviceRow(
+                    name = p.name,
+                    statusLine = buildConnStatusLine(d, routeLabel, isCurrent = p.id == active, warn = p.needsRepair),
+                    detail = p.subtitle.takeIf { !p.needsRepair },
+                    warn = p.needsRepair,
+                    divider = i < sorted.lastIndex,
+                    onClick = { manageId = p.id },
+                    leading = { StatusDot(d) },
+                )
+            }
+            ConnHairline()
+        }
+
+        if (needNearbyPerm || nearby.isNotEmpty()) {
+            ConnSectionTitle(L.nearbyComputers())
+            when {
+                needNearbyPerm -> ConnActionRow(
+                    title = L.allowNearby(),
+                    icon = D.link,
+                    divider = false,
+                    onClick = { showNearbyPerm = true },
+                )
+                else -> nearby.forEachIndexed { i, h ->
+                    ConnDeviceRow(
+                        name = h.deviceName,
+                        statusLine = "LAN",
+                        detail = "${h.host}:${h.port}",
+                        warn = false,
+                        divider = i < nearby.lastIndex,
+                        onClick = { openAddressSheet(PairingLink(h.host, h.port, ""), PeerTransport.Lan) },
+                        leading = { Icon(Icons.Outlined.Computer, null, tint = Conn.Accent, modifier = Modifier.size(18.dp)) },
                     )
                 }
             }
+            ConnHairline()
         }
 
-        PeerTransportTabs(tabs = tabs, selected = transport, en = en, onSelect = { transport = it })
-
-        when (transport) {
-            PeerTransport.Lan -> {
-                val needPerm = NearbyDiscoveryPermissionPolicy.shouldRequest(
-                    apiLevel = Build.VERSION.SDK_INT,
-                    granted = nearbyGranted,
-                    previouslyDeclined = Pocket.prefs.nearbyWifiDeclined,
-                )
-                if (needPerm || nearby.isNotEmpty()) {
-                    Text(L.nearbyComputers(), fontSize = 12.sp, color = Conn.FgMute, modifier = Modifier.padding(start = 22.dp, top = 2.dp, bottom = 4.dp))
-                    ConnCard {
-                        when {
-                            needPerm -> ConnOptionRow(L.allowNearby(), icon = D.link) { showNearbyPerm = true }
-                            else -> nearby.forEachIndexed { i, h ->
-                                ConnProfileRow(
-                                    name = h.deviceName,
-                                    subtitle = "${h.host}:${h.port}",
-                                    chip = "LAN",
-                                    warn = false,
-                                    divider = i < nearby.lastIndex,
-                                    onClick = { openAddressSheet(PairingLink(h.host, h.port, ""), PeerTransport.Lan) },
-                                    leading = { Icon(Icons.Outlined.Computer, null, tint = Conn.Accent, modifier = Modifier.size(18.dp)) },
-                                )
-                            }
-                        }
-                    }
-                }
-            }
-            PeerTransport.Tailscale -> Unit
-        }
-
-        Row(Modifier.padding(horizontal = 18.dp, vertical = 12.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            ConnActionButton(L.scanQr(), Modifier.weight(1f)) { showScan = true }
-            ConnActionButton(L.enterAddress(), Modifier.weight(1f)) { openAddressSheet() }
-        }
-        Spacer(Modifier.height(16.dp))
+        ConnActionRow(
+            title = L.scanQr(),
+            icon = Icons.Outlined.QrCodeScanner,
+            divider = true,
+            onClick = { showScan = true },
+        )
+        ConnActionRow(
+            title = L.enterAddress(),
+            icon = D.link,
+            divider = false,
+            onClick = { openAddressSheet() },
+        )
+        Spacer(Modifier.height(24.dp))
     }
 
     if (showNearbyPerm && Build.VERSION.SDK_INT >= 33) {
@@ -824,91 +828,134 @@ private fun ConnHeader(title: String, onBack: (() -> Unit)?, onOverflow: () -> U
     }
 }
 
+/** Desktop settingsRow / deviceRow section head (14 / 20). */
 @Composable
-private fun ConnCard(content: @Composable ColumnScope.() -> Unit) =
-    Column(
-        Modifier.padding(horizontal = 18.dp, vertical = 4.dp).fillMaxWidth()
-            .clip(Conn.R12).border(1.dp, Conn.Border, Conn.R12).background(Conn.Surface),
-        content = content,
+private fun ConnSectionTitle(title: String) {
+    Text(
+        title,
+        fontSize = 14.sp,
+        lineHeight = 20.sp,
+        color = Conn.Fg,
+        modifier = Modifier.padding(start = 22.dp, end = 22.dp, top = 16.dp, bottom = 4.dp),
     )
-
-@Composable
-private fun ConnActionButton(label: String, modifier: Modifier = Modifier, onClick: () -> Unit) {
-    OutlinedButton(
-        onClick,
-        modifier.height(48.dp),
-        shape = Conn.R12,
-        border = BorderStroke(1.dp, Conn.Border),
-        colors = ButtonDefaults.outlinedButtonColors(contentColor = Conn.Fg, containerColor = Conn.Elevated),
-        contentPadding = PaddingValues(horizontal = 10.dp),
-    ) { Text(label, fontSize = 14.sp, maxLines = 1, overflow = TextOverflow.Ellipsis) }
 }
 
 @Composable
-private fun PeerTransportTabs(
-    tabs: List<PeerTransport>,
-    selected: PeerTransport,
-    en: Boolean,
-    onSelect: (PeerTransport) -> Unit,
-) {
-    Row(
-        Modifier.padding(horizontal = 18.dp, vertical = 8.dp).fillMaxWidth()
-            .clip(Conn.R12).background(Conn.Elevated).padding(3.dp),
-        horizontalArrangement = Arrangement.spacedBy(3.dp),
-    ) {
-        tabs.forEach { tab ->
-            val on = tab == selected
-            Box(
-                Modifier.weight(1f).height(36.dp).clip(Conn.R12)
-                    .background(if (on) Conn.Accent.copy(alpha = 0.2f) else Color.Transparent)
-                    .clickable { onSelect(tab) },
-                contentAlignment = Alignment.Center,
-            ) {
-                Text(
-                    tab.label(en),
-                    fontSize = 13.sp,
-                    fontWeight = if (on) FontWeight.SemiBold else FontWeight.Normal,
-                    color = if (on) Conn.Accent else Conn.FgDim,
-                )
-            }
-        }
-    }
+private fun ConnHairline() {
+    HorizontalDivider(
+        Modifier.padding(horizontal = 22.dp),
+        thickness = 0.5.dp,
+        color = Conn.Border.copy(alpha = 0.55f),
+    )
 }
 
+/**
+ * Desktop deviceRow twin: status dot + name + status line (online · route), no boxed chip.
+ */
 @Composable
-private fun ConnProfileRow(
+private fun ConnDeviceRow(
     name: String,
-    subtitle: String,
-    chip: String,
+    statusLine: String,
+    detail: String?,
     warn: Boolean,
     divider: Boolean,
     onClick: () -> Unit,
     leading: @Composable () -> Unit,
 ) {
     Row(
-        Modifier.fillMaxWidth().clickable(onClick = onClick).padding(horizontal = 14.dp, vertical = 12.dp),
+        Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick)
+            .padding(horizontal = 22.dp, vertical = 16.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        leading(); Spacer(Modifier.width(10.dp))
-        Column(Modifier.weight(1f)) {
-            Text(name, fontSize = 15.sp, color = Conn.Fg, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        leading()
+        Spacer(Modifier.width(12.dp))
+        Column(Modifier.weight(1f).fillMaxWidth()) {
             Text(
-                subtitle,
-                style = Conn.Mono.copy(fontSize = 11.sp, color = Conn.FgMute, lineHeight = 15.sp),
+                name,
+                fontSize = 14.sp,
+                lineHeight = 20.sp,
+                color = if (warn) Conn.Warn else Conn.Fg,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.padding(top = 1.dp),
             )
+            Text(
+                statusLine,
+                fontSize = 12.sp,
+                lineHeight = 18.sp,
+                color = Conn.FgDim,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.padding(top = 4.dp),
+            )
+            detail?.let {
+                Text(
+                    it,
+                    style = Conn.Mono.copy(fontSize = 12.sp, color = Conn.FgMute, lineHeight = 18.sp),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.padding(top = 2.dp),
+                )
+            }
         }
-        Text(
-            chip,
-            fontSize = 11.sp,
-            color = if (warn) Conn.Warn else Conn.FgDim,
-            modifier = Modifier.border(1.dp, Conn.Border, T.R8).padding(horizontal = 6.dp, vertical = 2.dp),
-        )
-        Icon(D.chevronRight, null, tint = Conn.FgMute, modifier = Modifier.padding(start = 6.dp).size(18.dp))
+        Icon(D.chevronRight, null, tint = Conn.FgMute, modifier = Modifier.size(18.dp))
     }
-    if (divider) HorizontalDivider(Modifier.padding(horizontal = 14.dp), color = Conn.Border.copy(alpha = 0.4f))
+    if (divider) {
+        HorizontalDivider(
+            Modifier.padding(horizontal = 22.dp),
+            thickness = 0.5.dp,
+            color = Conn.Border.copy(alpha = 0.55f),
+        )
+    }
+}
+
+/** Desktop settingsRow action: icon + title + chevron. */
+@Composable
+private fun ConnActionRow(
+    title: String,
+    icon: ImageVector,
+    divider: Boolean,
+    onClick: () -> Unit,
+) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick)
+            .padding(horizontal = 22.dp, vertical = 16.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(icon, null, tint = Conn.Fg, modifier = Modifier.size(18.dp))
+        Spacer(Modifier.width(12.dp))
+        Text(title, fontSize = 14.sp, lineHeight = 20.sp, color = Conn.Fg, modifier = Modifier.weight(1f))
+        Icon(D.chevronRight, null, tint = Conn.FgMute, modifier = Modifier.size(18.dp))
+    }
+    if (divider) {
+        HorizontalDivider(
+            Modifier.padding(horizontal = 22.dp),
+            thickness = 0.5.dp,
+            color = Conn.Border.copy(alpha = 0.55f),
+        )
+    }
+}
+
+/** Clear status line: `在线 · Tailscale · 当前` (desktop deviceMeta pattern). */
+private fun buildConnStatusLine(dot: Dot?, routeLabel: String, isCurrent: Boolean, warn: Boolean): String {
+    val status = when {
+        warn -> L.repairNeeded()
+        else -> dotLabel(dot)
+    }
+    return buildString {
+        append(status)
+        if (routeLabel.isNotBlank()) {
+            append(" · ")
+            append(routeLabel)
+        }
+        if (isCurrent) {
+            append(" · ")
+            append(L.currentDevice())
+        }
+    }
 }
 
 @Composable
@@ -974,21 +1021,24 @@ fun ProfileManageSheet(
             return@ConnSheet
         }
         Row(Modifier.padding(horizontal = 22.dp), verticalAlignment = Alignment.CenterVertically) {
-            StatusDot(status); Spacer(Modifier.width(10.dp)); ConnSheetTitle(profile.name)
-            if (isActive) {
-                Text(
-                    L.currentDevice(),
-                    fontSize = 12.sp,
-                    color = Conn.Accent,
-                    modifier = Modifier.background(Conn.Accent.copy(alpha = 0.15f), T.R4).padding(horizontal = 6.dp, vertical = 2.dp),
-                )
-            }
+            StatusDot(status)
+            Spacer(Modifier.width(10.dp))
+            ConnSheetTitle(profile.name)
         }
         Text(
-            "${profile.subtitle} · ${dotLabel(status)}",
-            style = Conn.Mono.copy(color = Conn.FgMute),
+            buildConnStatusLine(status, profile.kind, isCurrent = isActive, warn = profile.needsRepair),
+            fontSize = 12.sp,
+            lineHeight = 18.sp,
+            color = Conn.FgDim,
             modifier = Modifier.padding(horizontal = 22.dp, vertical = 4.dp),
         )
+        if (!profile.needsRepair) {
+            Text(
+                profile.subtitle,
+                style = Conn.Mono.copy(color = Conn.FgMute),
+                modifier = Modifier.padding(start = 22.dp, end = 22.dp, bottom = 4.dp),
+            )
+        }
         Spacer(Modifier.height(8.dp))
         if (profile.needsRepair) {
             Text(L.repairNeeded(), fontSize = 13.sp, color = Conn.FgMute, modifier = Modifier.padding(start = 22.dp, end = 22.dp, bottom = 8.dp))
@@ -1097,27 +1147,55 @@ fun PairSheet(
                 },
             )
         }
-        err?.let { Text(it, color = Conn.Err, fontSize = 13.sp, modifier = Modifier.padding(horizontal = 22.dp, vertical = 8.dp)) }
-        val ready = parsed != null && !busy
+        err?.let {
+            Text(
+                it,
+                color = Conn.Err,
+                fontSize = 12.sp,
+                lineHeight = 18.sp,
+                modifier = Modifier
+                    .padding(horizontal = 22.dp, vertical = 8.dp)
+                    .testTag("pairError"),
+            )
+        }
+        val canSubmit = parsed != null && !busy
         Button(
             {
                 val generation = gate.begin() ?: return@Button
                 busy = true
+                err = null
                 scope.launch {
                     val result = Pocket.pair(name.trim(), parsed!!)
                     if (gate.complete(generation)) {
-                        result.onSuccess(onPaired).onFailure { err = it.message }
+                        result.onSuccess(onPaired).onFailure { err = it.message ?: L.pairFailed() }
                         busy = false
                     }
                 }
             },
-            Modifier.padding(horizontal = 18.dp, vertical = 14.dp).fillMaxWidth().height(48.dp),
-            enabled = ready,
-            shape = Conn.R12,
+            Modifier.padding(horizontal = 22.dp, vertical = 14.dp).fillMaxWidth().height(40.dp),
+            enabled = canSubmit,
+            shape = RoundedCornerShape(8.dp),
             colors = ConnPrimaryColors(),
         ) {
-            if (busy) CircularProgressIndicator(Modifier.size(18.dp), color = Conn.Bg, strokeWidth = 2.dp)
-            else Text(L.pairAction(), fontSize = 15.sp, color = Conn.Bg)
+            // Always keep the desktop primary label visible — never a bare spinner.
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                if (busy) {
+                    CircularProgressIndicator(
+                        Modifier.size(16.dp).testTag("pairBusy"),
+                        color = Conn.Bg,
+                        strokeWidth = 2.dp,
+                    )
+                }
+                Text(
+                    if (busy) L.pairingBusy() else L.pairAction(),
+                    fontSize = 14.sp,
+                    lineHeight = 22.sp,
+                    color = Conn.Bg,
+                )
+            }
         }
     }
     LaunchedEffect(Unit) { if (link != null) runCatching { focus.requestFocus() } }
