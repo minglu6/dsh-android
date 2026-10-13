@@ -106,6 +106,18 @@ object L {
     fun dark() = if (en) "Dark" else "深色"
     fun followSystem() = if (en) "System" else "跟随系统"
 
+    // Connection diagnostics (desktop pocket locales)
+    fun diagnostics() = if (en) "Connection diagnostics" else "连接诊断"
+    fun openDiagnostics() = if (en) "Open connection diagnostics" else "打开连接诊断"
+    fun diagnosticsCopy() = if (en) "Copy redacted report" else "复制脱敏报告"
+    fun diagnosticsCopied() = if (en) "Copied" else "已复制"
+    fun diagnosticsChecking() = if (en) "Checking…" else "正在检查…"
+    fun diagnosticsUnavailable() = if (en) "Diagnostics unavailable" else "诊断服务暂不可用"
+    fun nearbyComputers() = if (en) "Nearby computers" else "附近的电脑"
+    fun repairPair() = if (en) "Pair again" else "重新配对"
+    fun online() = if (en) "Online" else "在线"
+    fun offline() = if (en) "Offline" else "离线"
+    fun revoked() = if (en) "Revoked" else "已撤销"
     // Task notifications (desktop-aligned; adapted from saya-ch/dsh-mobile labels)
     fun taskFinished() = if (en) "Task finished" else "任务已完成"
     fun taskFinishedBody() = if (en) "Your DSH task finished" else "你的 DSH 任务已完成"

@@ -135,6 +135,8 @@ export function ManagePanel({
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
   const [copied, setCopied] = useState(false)
+  const [diagCopied, setDiagCopied] = useState(false)
+  const [diagBusy, setDiagBusy] = useState(false)
   const [tick, setTick] = useState(0)
 
   const refresh = useCallback(async () => {
@@ -191,6 +193,20 @@ export function ManagePanel({
     } catch { /* ignore */ }
   }
 
+  const copyDiagnostics = async () => {
+    setDiagBusy(true)
+    try {
+      const d = await api.diagnostics()
+      await navigator.clipboard.writeText(d.report)
+      setDiagCopied(true)
+      setTimeout(() => setDiagCopied(false), 1500)
+    } catch (e) {
+      setError(String((e as Error)?.message ?? e))
+    } finally {
+      setDiagBusy(false)
+    }
+  }
+
   const pairing = status?.pairing
   const expires = pairing?.open ? Math.max(0, pairing.expiresInSec ?? 0) : 0
   void tick
@@ -219,7 +235,12 @@ export function ManagePanel({
               <div style={styles.metaLine}>{t('wsHint')}</div>
             </div>
           </div>
-          <button type="button" style={styles.outlineBtnSm} onClick={() => void refresh()}>{t('refresh')}</button>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+            <button type="button" style={styles.outlineBtnSm} onClick={() => void refresh()}>{t('refresh')}</button>
+            <button type="button" style={styles.outlineBtnSm} disabled={diagBusy} onClick={() => void copyDiagnostics()} aria-label={t('openDiagnostics')}>
+              {diagCopied ? t('diagnosticsCopied') : t('diagnostics')}
+            </button>
+          </div>
         </div>
       ) : null}
 

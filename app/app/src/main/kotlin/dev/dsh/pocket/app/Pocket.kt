@@ -129,9 +129,41 @@ object Pocket {
     fun init(ctx: Context) {
         if (::prefs.isInitialized) return
         prefs = AppPrefs(ctx); tokens = SecureTokenStore(ctx)
-        profiles.value = prefs.profiles
+        val loaded = prefs.profiles
+        val migrated = if (prefs.profilesMigratedV1) loaded else migrateLegacyProfiles(loaded).also {
+            prefs.profiles = it
+            prefs.profilesMigratedV1 = true
+        }
+        profiles.value = migrated
         active.value = prefs.activeProfile?.takeIf { id -> profiles.value.any { it.id == id } }
         active.value?.let { connect(it) }
+    }
+
+    /** Profiles sorted by last used (active first-ish via timestamp). */
+    fun profilesSorted(): List<Profile> =
+        profiles.value.sortedWith(compareByDescending<Profile> { it.lastUsedAt }.thenBy { it.name })
+
+    fun touchLastUsed(id: String, at: Long = System.currentTimeMillis()) {
+        profiles.value = profiles.value.map { if (it.id == id) it.copy(lastUsedAt = at) else it }
+        prefs.profiles = profiles.value
+    }
+
+    /** Apply LAN discovery address updates for paired instance ids. */
+    fun applyDiscoveredHosts(found: List<DiscoveredHost>) {
+        if (found.isEmpty()) return
+        var reconnectId: String? = null
+        val next = profiles.value.map { p ->
+            val match = found.firstOrNull { it.instanceId == p.instanceId && p.instanceId.isNotBlank() }
+                ?: return@map p
+            val updated = LanDiscovery.applyAddressUpdate(p, match) ?: return@map p
+            if (p.id == active.value) reconnectId = p.id
+            updated
+        }
+        if (next != profiles.value) {
+            profiles.value = next
+            prefs.profiles = next
+            reconnectId?.let { connect(it) }
+        }
     }
 
     val activeProfile get() = profiles.value.firstOrNull { it.id == active.value }
@@ -178,6 +210,14 @@ object Pocket {
                 client = c; ops.value = hello.ops
                 setRoute(p.id, c.route ?: hello.route)
                 setDot(p.id, Dot.Online); backoffMs.set(1_000L)
+                val remoteInstance = hello.raw["instanceId"].str()
+                if (!remoteInstance.isNullOrBlank() && remoteInstance != p.instanceId) {
+                    profiles.value = profiles.value.map {
+                        if (it.id == p.id) it.copy(instanceId = remoteInstance) else it
+                    }
+                    prefs.profiles = profiles.value
+                }
+                touchLastUsed(p.id)
                 coroutineScope {
                     launch {
                         while (isActive) {
@@ -759,10 +799,18 @@ object Pocket {
                 host = host,
                 port = port,
                 deviceId = hello.deviceId,
+                instanceId = hello.raw["instanceId"].str().orEmpty(),
+                lastUsedAt = System.currentTimeMillis(),
             )
             tokens.put(p.id, token)
             withContext(main.coroutineContext) {
-                profiles.value = profiles.value + p
+                // Re-pair replaces an existing row with the same instanceId when present.
+                val withoutDup = if (p.instanceId.isNotBlank()) {
+                    profiles.value.filterNot { it.instanceId == p.instanceId }
+                } else profiles.value
+                // Drop replaced tokens for superseded rows.
+                profiles.value.filter { old -> withoutDup.none { it.id == old.id } }.forEach { tokens.remove(it.id) }
+                profiles.value = withoutDup + p
                 prefs.profiles = profiles.value
             }
             Result.success(p)
@@ -795,7 +843,35 @@ object Pocket {
         prefs.profiles = profiles.value
     }
 
-    /** Soft probe: TCP check for inactive host:port profiles. */
+    /**
+     * Soft probe for one inactive profile: TCP reachability, then treat missing token as revoked.
+     * Used by [DeviceStatusPoller] (max 2 concurrent, deduped).
+     */
+    fun probeOne(p: Profile): DeviceStatusPoller.ProbeOutcome {
+        if (p.needsRepair || tokens.get(p.id) == null) {
+            return DeviceStatusPoller.ProbeOutcome(reachable = false, revoked = true)
+        }
+        val ok = runCatching {
+            java.net.Socket().use { it.connect(java.net.InetSocketAddress(p.host, p.port), 2500) }
+        }.isSuccess
+        return DeviceStatusPoller.ProbeOutcome(reachable = ok, revoked = false)
+    }
+
+    fun applyProbeResult(requested: Profile, outcome: Result<DeviceStatusPoller.ProbeOutcome>) {
+        val current = profiles.value.firstOrNull { it.id == requested.id } ?: return
+        if (current.id == active.value) return
+        val result = outcome.getOrNull()
+        val next = PairedDeviceStatusPolicy.applyProbe(
+            currentDot = status.value[current.id],
+            current = current,
+            requested = requested,
+            reachable = result?.reachable == true,
+            revoked = result?.revoked == true || outcome.isFailure && outcome.exceptionOrNull()?.message?.contains("4403") == true,
+        )
+        setDot(current.id, next)
+    }
+
+    /** Soft probe: TCP check for inactive host:port profiles (legacy entry; prefer poller). */
     fun probe() = main.launch {
         profiles.value.filter { it.id != active.value }.forEach { p ->
             if (p.needsRepair || tokens.get(p.id) == null) {
@@ -803,13 +879,40 @@ object Pocket {
                 return@forEach
             }
             launch(Dispatchers.IO) {
-                val ok = runCatching {
-                    java.net.Socket().use { it.connect(java.net.InetSocketAddress(p.host, p.port), 2500) }
-                }.isSuccess
+                val outcome = probeOne(p)
                 if (p.id != active.value) {
-                    setDot(p.id, if (ok) Dot.Online else Dot.Offline)
+                    setDot(p.id, when {
+                        outcome.revoked -> Dot.Unauthorized
+                        outcome.reachable -> Dot.Online
+                        else -> Dot.Offline
+                    })
                 }
             }
+        }
+    }
+
+    /** Fetch redacted diagnostics from the active (or given) host:port HTTP endpoint. */
+    suspend fun fetchDiagnostics(host: String? = null, port: Int? = null): String = withContext(Dispatchers.IO) {
+        val p = activeProfile
+        val h = host ?: p?.host ?: error("未连接")
+        val pt = port ?: p?.port ?: error("未连接")
+        val url = java.net.URL("http://$h:$pt/diagnostics")
+        val conn = (url.openConnection() as java.net.HttpURLConnection).apply {
+            connectTimeout = 4_000
+            readTimeout = 8_000
+            requestMethod = "GET"
+        }
+        try {
+            val code = conn.responseCode
+            val body = (if (code in 200..299) conn.inputStream else conn.errorStream)
+                ?.bufferedReader()?.use { it.readText() }.orEmpty()
+            if (code !in 200..299) error("诊断失败 HTTP $code")
+            val report = runCatching {
+                org.json.JSONObject(body).optString("report").takeIf { it.isNotBlank() }
+            }.getOrNull()
+            report ?: body
+        } finally {
+            conn.disconnect()
         }
     }
 }

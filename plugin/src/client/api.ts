@@ -79,6 +79,14 @@ export function createPocketApi(base = '') {
         body: JSON.stringify({ id, name }),
       },
     ),
+    diagnostics: () => get<{
+      version: number
+      generatedAt: number
+      overall: string
+      summary: string
+      report: string
+      checks: Array<{ id: string, status: string, label: string, detail: string }>
+    }>('/pocket/diagnostics'),
   }
 }
 

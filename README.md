@@ -33,4 +33,10 @@ dsh web
 - [x] M1.5：dsh 内管理 UI（设置「手机连接」分区）
 - [x] M2：Android App。最新调试包：[dsh-android-debug.apk](https://github.com/minglu6/dsh-android/releases/download/dsh-android-latest/dsh-android-debug.apk)
 - [x] M3：远程连接 — Tailscale / 局域网 host:port（APK 不再含 iroh `.so`）
+- [x] LAN mDNS 自动发现（`_dshpocket._tcp`）、设备状态探测、连接诊断
 - [ ] M4：手机本地模式
+
+## 第三方致谢
+
+局域网发现、设备状态轮询与连接诊断部分逻辑改编自
+[dsh-mobile](https://github.com/saya-ch/dsh-mobile)（Apache-2.0）；改编文件头部含归属说明。

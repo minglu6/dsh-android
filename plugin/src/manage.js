@@ -54,6 +54,7 @@ export function connectionTypeForHost(host) {
  */
 export function createManageApi({
   host, port, devices, pairing, server, openPairing, getTransport, setTransport,
+  instanceId, getDiagnostics, getMdns,
 }) {
   const transport = () => getTransport()
   const withOnline = () => {
@@ -89,6 +90,10 @@ export function createManageApi({
       if (typeof setTransport !== 'function') throw new Error('setTransport unavailable')
       return { transport: setTransport(mode) }
     },
+    getDiagnostics: () => {
+      if (typeof getDiagnostics !== 'function') throw new Error('diagnostics unavailable')
+      return getDiagnostics()
+    },
     getStatus: () => {
       const addr = server.address()
       const listening = addr !== null
@@ -102,6 +107,8 @@ export function createManageApi({
         transport: mode,
         host,
         port: listenPort,
+        instanceId: typeof instanceId === 'string' ? instanceId : undefined,
+        mdns: typeof getMdns === 'function' ? Boolean(getMdns()) : false,
         /** Phone path: `tailscale` | `lan` from the advertised pairing host. */
         connectionType: connectionTypeForHost(host),
         listen: listening
