@@ -120,6 +120,39 @@ object L {
     fun online() = if (en) "Online" else "在线"
     fun offline() = if (en) "Offline" else "离线"
     fun revoked() = if (en) "Revoked" else "已撤销"
+
+    // Termux sidecar (APK is controller-only; dsh runs in Termux)
+    fun termuxMode() = if (en) "On-device Termux" else "本机 Termux"
+    fun termuxModeHint() = if (en)
+        "Connect to dsh + pocket listening on 127.0.0.1 in Termux. This app never embeds Node/dsh and never runs su."
+    else
+        "连接 Termux 里监听在 127.0.0.1 的 dsh + pocket。本 App 不内嵌 Node/dsh，也不会执行 su。"
+    fun termuxPort() = if (en) "Port" else "端口"
+    fun termuxName() = if (en) "Name" else "名称"
+    fun termuxDefaultName() = if (en) "Termux" else "本机 Termux"
+    fun termuxPaste() = if (en) "Pairing URI or token" else "配对串或 token"
+    fun termuxPairCode() = if (en) "Pairing code" else "配对码"
+    fun termuxConnect() = if (en) "Connect" else "连接"
+    fun termuxShowHelp() = if (en) "Termux not running? Show install commands" else "端口未开？查看 Termux 安装命令"
+    fun termuxPortDead() = if (en)
+        "Nothing is listening on loopback. Start dsh in Termux, then retry."
+    else
+        "本机回环端口无响应。请在 Termux 启动 dsh 后再试。"
+    fun termuxHelpTitle() = if (en) "Termux sidecar" else "Termux sidecar"
+    fun termuxHelpBody() = if (en)
+        "The APK is a controller only. Install Termux from community releases (not Play Store), run dsh + pocket there, bind 127.0.0.1, then pair with dshpocket:// or paste the owner token."
+    else
+        "APK 只做控制器。请从社区渠道安装 Termux（勿用 Play 商店旧包），在其中运行 dsh + pocket，绑定 127.0.0.1，再用 dshpocket:// 或粘贴 owner token 配对。"
+    fun termuxInstallers() = if (en)
+        "Installers: GitHub termux-app releases · F-Droid com.termux (this repo does not vendor Termux)."
+    else
+        "安装来源：GitHub termux-app releases · F-Droid com.termux（本仓库不内置 Termux）。"
+    fun termuxBootstrap() = if (en) "Install / run commands" else "安装与启动命令"
+    fun termuxPrivilegeLabel() = if (en) "Elevated via su/tsu (reminder)" else "经 su/tsu 提权（提醒）"
+    fun termuxPrivilegeHint() = if (en)
+        "If tools need root, start dsh under tsu/su inside Termux yourself. This app never runs su."
+    else
+        "若工具需要 root，请在 Termux 内自行用 tsu/su 启动 dsh。本 App 从不执行 su。"
     // Task notifications (desktop-aligned; adapted from saya-ch/dsh-mobile labels)
     fun taskFinished() = if (en) "Task finished" else "任务已完成"
     fun taskFinishedBody() = if (en) "Your DSH task finished" else "你的 DSH 任务已完成"

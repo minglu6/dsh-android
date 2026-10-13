@@ -71,7 +71,7 @@ object Pocket {
 
     val profiles = MutableStateFlow<List<Profile>>(emptyList())
     val status = MutableStateFlow<Map<String, Dot>>(emptyMap())
-    /** Active frame route per profile (Tailscale / LAN / local WS). */
+    /** Active frame route per profile (Tailscale / LAN / Termux loopback). */
     val routes = MutableStateFlow<Map<String, Route>>(emptyMap())
     val active = MutableStateFlow<String?>(null)
     val sessions = MutableStateFlow<List<SessionSummary>>(emptyList())
@@ -815,10 +815,10 @@ object Pocket {
     suspend fun pair(name: String, link: PairingLink): Result<Profile> =
         pairHost(name, link.host, link.port, link.code)
 
-    /** Pair over Tailscale / LAN WebSocket (host:port). */
+    /** Pair over Tailscale / LAN / Termux loopback WebSocket (host:port). */
     suspend fun pairHost(name: String, host: String, port: Int, code: String): Result<Profile> = withContext(Dispatchers.IO) {
         if (host.isBlank() || port !in 1..65535) {
-            return@withContext Result.failure(Exception("地址无效：需要 host:port（Tailscale IP 或局域网地址）"))
+            return@withContext Result.failure(Exception("地址无效：需要 host:port（Tailscale IP、局域网或 127.0.0.1）"))
         }
         val c = PocketClient()
         try {
@@ -837,27 +837,77 @@ object Pocket {
                 lastUsedAt = System.currentTimeMillis(),
             )
             tokens.put(p.id, token)
-            withContext(main.coroutineContext) {
-                // Re-pair replaces an existing row with the same instanceId when present.
-                val withoutDup = if (p.instanceId.isNotBlank()) {
-                    profiles.value.filterNot { it.instanceId == p.instanceId }
-                } else profiles.value
-                // Drop replaced tokens for superseded rows.
-                profiles.value.filter { old -> withoutDup.none { it.id == old.id } }.forEach { tokens.remove(it.id) }
-                profiles.value = withoutDup + p
-                prefs.profiles = profiles.value
-            }
+            withContext(main.coroutineContext) { upsertProfile(p) }
             Result.success(p)
         } catch (e: PocketError) {
-            Result.failure(Exception(when {
-                e.code.contains("expired") -> "配对码已过期"
-                e.code.startsWith("pair/") -> "配对码错误或未开启配对"
-                e.code == "transport" -> "无法连上桌面端，请确认电脑已打开配对且手机可达该 host:port（同一 Tailscale 或局域网）"
-                else -> e.message
-            }))
+            Result.failure(Exception(pairTransportMessage(host, e)))
         } catch (e: Exception) {
             Result.failure(Exception(e.message ?: "配对失败"))
         } finally { c.close() }
+    }
+
+    /**
+     * Connect with a pasted owner / device token over host:port (Termux loopback or remote).
+     * Uses `hello` auth — no pairing window required.
+     */
+    suspend fun connectWithToken(name: String, host: String, port: Int, token: String): Result<Profile> =
+        withContext(Dispatchers.IO) {
+            if (host.isBlank() || port !in 1..65535) {
+                return@withContext Result.failure(Exception("地址无效：需要 host:port"))
+            }
+            if (token.isBlank()) return@withContext Result.failure(Exception("token 为空"))
+            val c = PocketClient()
+            try {
+                val draft = Profile("", name.ifBlank { "本机" }, host = host, port = port)
+                val factories = factoriesFor(draft)
+                if (factories.isEmpty()) return@withContext Result.failure(Exception("无法建立 WebSocket 连接"))
+                val hello = c.connect(factories, Auth.Token(token))
+                val p = Profile(
+                    id = UUID.randomUUID().toString(),
+                    name = name.ifBlank {
+                        if (isLoopbackHost(host)) L.termuxDefaultName() else host
+                    },
+                    host = host,
+                    port = port,
+                    deviceId = hello.deviceId,
+                    instanceId = hello.raw["instanceId"].str().orEmpty(),
+                    lastUsedAt = System.currentTimeMillis(),
+                )
+                tokens.put(p.id, token)
+                withContext(main.coroutineContext) { upsertProfile(p) }
+                Result.success(p)
+            } catch (e: PocketError) {
+                Result.failure(Exception(when {
+                    e.code.startsWith("auth/") || "4401" in (e.message ?: "") -> "token 无效或已撤销"
+                    e.code == "transport" -> pairTransportMessage(host, e)
+                    else -> e.message
+                }))
+            } catch (e: Exception) {
+                Result.failure(Exception(e.message ?: "连接失败"))
+            } finally {
+                c.close()
+            }
+        }
+
+    private fun upsertProfile(p: Profile) {
+        val withoutDup = when {
+            p.instanceId.isNotBlank() -> profiles.value.filterNot { it.instanceId == p.instanceId }
+            isLoopbackHost(p.host) -> profiles.value.filterNot { isLoopbackHost(it.host) && it.port == p.port }
+            else -> profiles.value
+        }
+        profiles.value.filter { old -> withoutDup.none { it.id == old.id } }.forEach { tokens.remove(it.id) }
+        profiles.value = withoutDup + p
+        prefs.profiles = profiles.value
+    }
+
+    private fun pairTransportMessage(host: String, e: PocketError): String = when {
+        e.code.contains("expired") -> "配对码已过期"
+        e.code.startsWith("pair/") -> "配对码错误或未开启配对"
+        e.code == "transport" && isLoopbackHost(host) ->
+            "无法连上本机 Termux 端口，请确认 Termux 里 dsh web / pocket 已启动（127.0.0.1）"
+        e.code == "transport" ->
+            "无法连上桌面端，请确认电脑已打开配对且手机可达该 host:port（同一 Tailscale 或局域网）"
+        else -> e.message ?: "配对失败"
     }
 
     fun removeProfile(id: String) = main.launch {
