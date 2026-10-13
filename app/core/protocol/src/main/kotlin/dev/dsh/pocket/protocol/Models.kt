@@ -36,9 +36,16 @@ data class SessionSummary(
 }
 
 data class ReasoningLevel(val id: String, val name: String, val description: String?)
-data class ModelInfo(val provider: String, val id: String, val name: String, val description: String?, val efforts: List<ReasoningLevel>, val defaultEffort: String?)
+data class ModelInfo(val provider: String, val id: String, val name: String, val description: String?, val efforts: List<ReasoningLevel>, val defaultEffort: String?, val hasReasoning: Boolean = efforts.isNotEmpty() || defaultEffort != null)
 data class ModelGroup(val id: String, val name: String, val models: List<ModelInfo>)
-data class ModelCatalog(val groups: List<ModelGroup>, val defaultProvider: String?, val defaultModel: String?) {
+data class ModelCatalogFailure(val id: String, val name: String, val message: String)
+data class ModelCatalog(
+    val groups: List<ModelGroup>,
+    val defaultProvider: String?,
+    val defaultModel: String?,
+    val failures: List<ModelCatalogFailure> = emptyList(),
+    val defaultEffort: String? = null,
+) {
     fun find(provider: String?, model: String?) = groups.flatMap { it.models }.firstOrNull { it.provider == provider && it.id == model }
     companion object {
         fun parse(e: JsonElement?): ModelCatalog = ModelCatalog(
@@ -50,11 +57,17 @@ data class ModelCatalog(val groups: List<ModelGroup>, val defaultProvider: Strin
                         description = m["description"].str(),
                         efforts = m["reasoning"]["efforts"].arr().orEmpty().map { r -> ReasoningLevel(r["id"].str() ?: "", r["name"].str() ?: r["id"].str() ?: "", r["description"].str()) },
                         defaultEffort = m["reasoning"]["defaultEffort"].str(),
+                        hasReasoning = m["reasoning"] is JsonObject,
                     )
                 })
             },
             defaultProvider = e["default"]["provider"].str(),
             defaultModel = e["default"]["model"].str(),
+            failures = e["failures"].arr().orEmpty().map { failure ->
+                val id = failure["id"].str().orEmpty()
+                ModelCatalogFailure(id, failure["name"].str() ?: id, failure["message"].str().orEmpty())
+            },
+            defaultEffort = e["default"]["reasoningEffort"].str(),
         )
     }
 }

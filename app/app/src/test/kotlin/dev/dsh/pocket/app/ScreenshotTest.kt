@@ -2,6 +2,12 @@ package dev.dsh.pocket.app
 
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.padding
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.test.performKeyInput
+import androidx.compose.ui.test.pressKey
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.test.junit4.createComposeRule
@@ -184,7 +190,40 @@ class ScreenshotTest {
         Pocket.ops.value = setOf("credentials.list", "credentials.set")
         CredentialsSettingsScreen {}
     }
-    @Test fun s10_modelSheet() = showWithDialogs("10-model-sheet") { ModelSheet(catalog, ModelChoice("deepseek", "deepseek-v4.1-flash", "DeepSeek-V4.1-Flash", "high"), {}) {} }
+    @OptIn(androidx.compose.ui.test.ExperimentalTestApi::class)
+    @Test fun s10_modelPicker() {
+        // Native Back matches desktop Escape without adding submenu header chrome.
+        showWithDialogs("10-model-picker-root") {
+            Box(Modifier.fillMaxSize().padding(20.dp), contentAlignment = Alignment.BottomEnd) {
+                Box { ModelPicker(catalog, ModelChoice("deepseek", "deepseek-v4.1-flash", "DeepSeek-V4.1-Flash", "high"), {}, { _, _ -> }) }
+            }
+        }
+        rule.onNodeWithText("模型").performClick()
+        rule.waitForIdle()
+        captureScreenRoboImage(out("10b-model-picker-models"))
+        rule.onNodeWithTag("modelPicker").performKeyInput { pressKey(androidx.compose.ui.input.key.Key.Back) }
+        rule.onNodeWithText("推理等级").performClick()
+        rule.waitForIdle()
+        captureScreenRoboImage(out("10c-model-picker-efforts"))
+    }
+    @Test
+    @Config(qualifiers = "w915dp-h412dp-xxhdpi")
+    fun s10d_modelPickerLandscapeDark() {
+        Pocket.prefs.appearance = Appearance.Dark
+        val many = catalog.copy(groups = catalog.groups + ModelGroup("qoder", "Qoder CN", listOf(
+            ModelInfo("qoder", "glm", "GLM 5.1", null, emptyList(), null),
+            ModelInfo("qoder", "qwen", "Qwen 3.6 Flash", null, emptyList(), null),
+            ModelInfo("qoder", "long", "DeepSeek V4 Pro — Enterprise reasoning model", null, emptyList(), null),
+        )))
+        showWithDialogs("10d-model-picker-landscape-dark") {
+            Box(Modifier.fillMaxSize().padding(20.dp), contentAlignment = Alignment.BottomEnd) {
+                Box { ModelPicker(many, ModelChoice("deepseek", "deepseek-v4.1-flash", "DeepSeek-V4.1-Flash", "high"), {}, { _, _ -> }, openModels = true) }
+            }
+        }
+        val heading = rule.onNodeWithText("DeepSeek").fetchSemanticsNode().boundsInRoot
+        val selected = rule.onNodeWithText("DeepSeek-V4.1-Flash").fetchSemanticsNode().boundsInRoot
+        kotlin.test.assertTrue(selected.top >= heading.bottom, "Pinned provider must not cover the selected model")
+    }
     @Test fun s11_permissionSheet() = showWithDialogs("11-permission-sheet") {
         PermissionPickerSheet("workspace-write", permissions, false, null, {}, {}, {})
     }

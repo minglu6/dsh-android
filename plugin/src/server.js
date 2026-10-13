@@ -313,7 +313,7 @@ export function createPocketServer(opts) {
   const childSessions = new Set()
   const authedClients = () => [...clients].filter((c) => c.device)
   const broadcast = (m) => { for (const c of authedClients()) c.push(m) }
-  const projectionKeys = new Set(['sessionStats', 'tokenUsage', 'contextPressure', 'contextBreakdown', 'permissions'])
+  const projectionKeys = new Set(['sessionStats', 'tokenUsage', 'contextPressure', 'contextBreakdown', 'permissions', 'modelSelection'])
   // Follow's snapshot is the baseline. Hold newer projections until it is sent,
   // including while a reconnect snapshot is paged or trimmed for the wire.
   const followProjections = new WeakMap()

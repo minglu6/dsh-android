@@ -83,6 +83,16 @@ object Pocket {
     /** messageId → feedback for the open session. */
     val feedback = MutableStateFlow<Map<String, MessageFeedback>>(emptyMap())
     val catalog = MutableStateFlow<ModelCatalog?>(null)
+    private val _catalogLoading = MutableStateFlow(false)
+    val catalogLoading: StateFlow<Boolean> = _catalogLoading.asStateFlow()
+    private val _catalogError = MutableStateFlow<String?>(null)
+    val catalogError: StateFlow<String?> = _catalogError.asStateFlow()
+    private val _modelPending = MutableStateFlow<ModelChoice?>(null)
+    val modelPending: StateFlow<ModelChoice?> = _modelPending.asStateFlow()
+    private val modelCatalogEpoch = AtomicLong()
+    private val modelSelectionEpoch = AtomicLong()
+    private var modelProjectionSeq = -1L
+    private var modelUsesDefault = false
     val presets = MutableStateFlow<List<String>>(emptyList())
     val ops = MutableStateFlow<Set<String>>(emptySet())
     val chat = MutableStateFlow<ChatState?>(null)
@@ -211,6 +221,7 @@ object Pocket {
         userQuestions.value = emptyList(); archivedIds.value = emptySet(); pinnedIds.value = emptySet()
         feedback.value = emptyMap(); attachmentCache.clear()
         invalidatePermissionCatalog()
+        invalidateModelCatalog()
         permission.value = emptyMap()
         permissionChanging.value = false
         permissionProjectionSeq = -1L
@@ -249,6 +260,7 @@ object Pocket {
                 detachFollow()
                 reducer.clearComposerProjections()
                 permissionProjectionSeq = -1L
+                modelProjectionSeq = -1L
                 setRoute(p.id, c.route ?: hello.route)
                 setDot(p.id, Dot.Online); backoffMs.set(ReconnectBackoffPolicy.reset())
                 val remoteInstance = hello.raw["instanceId"].str()
@@ -278,6 +290,7 @@ object Pocket {
             followEpoch.incrementAndGet()
             detachFollow()
             invalidatePermissionCatalog()
+            invalidateModelCatalog()
             permissionChanging.value = false
             val reason = c.closeReason.orEmpty() + ""
             if ("4401" in reason || "4403" in reason || "auth/" in reason) { setDot(p.id, Dot.Unauthorized); return }
@@ -314,7 +327,7 @@ object Pocket {
     private suspend fun refreshAll(c: PocketClient) {
         runCatching { sessions.value = c.listSessions().sortedByDescending { it.updatedAt } }
         runCatching { approvals.value = c.call("approval.pending")["approvals"].arr().orEmpty().mapNotNull { (it as? JsonObject)?.let(Approval::parse) } }
-        runCatching { catalog.value = c.modelCatalog() }
+        loadModelCatalog(c)
         if ("permissions.catalog" in ops.value) loadPermissionCatalog(c)
         if ("presets.list" in ops.value) runCatching { presets.value = c.presets() }
         if ("workspace.state" in ops.value) runCatching { refreshWorkspaceState(c) }
@@ -322,6 +335,77 @@ object Pocket {
             refollow(c, st.sessionId, reducer.cursor.takeIf { s -> s >= 0 })
             if ("feedback.get" in ops.value) runCatching { loadFeedback(st.sessionId) }
         }
+    }
+
+    private fun invalidateModelCatalog() {
+        modelCatalogEpoch.incrementAndGet()
+        modelSelectionEpoch.incrementAndGet()
+        catalog.value = null
+        _catalogLoading.value = false
+        _catalogError.value = null
+        _modelPending.value = null
+        model.value = emptyMap()
+        modelProjectionSeq = -1L
+        modelUsesDefault = false
+    }
+
+    /** A refresh retains usable data; only a Host reset discards the directory. */
+    private suspend fun loadModelCatalog(c: PocketClient) {
+        if (client !== c) return
+        val epoch = modelCatalogEpoch.incrementAndGet()
+        _catalogLoading.value = true
+        _catalogError.value = null
+        try {
+            val value = c.modelCatalog()
+            if (client === c && modelCatalogEpoch.get() == epoch) {
+                catalog.value = value
+                model.value = model.value.mapValues { (_, choice) ->
+                    choice.copy(name = value.find(choice.provider, choice.model)?.name ?: choice.model)
+                }
+                if (modelUsesDefault) chat.value?.sessionId?.let { applyDefaultModel(it) }
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            if (client === c && modelCatalogEpoch.get() == epoch) {
+                _catalogError.value = e.message ?: "无法读取主机模型目录"
+            }
+        } finally {
+            if (client === c && modelCatalogEpoch.get() == epoch) _catalogLoading.value = false
+        }
+    }
+
+    fun reloadModelCatalog() = main.launch {
+        val c = client
+        if (c == null) {
+            invalidateModelCatalog()
+            _catalogError.value = "未连接到主机"
+        } else {
+            loadModelCatalog(c)
+        }
+    }
+
+    private fun modelChoice(value: kotlinx.serialization.json.JsonElement?): ModelChoice? {
+        val provider = value["provider"].str() ?: return null
+        val id = value["model"].str() ?: return null
+        return ModelChoice(provider, id, catalog.value?.find(provider, id)?.name ?: id, value["reasoningEffort"].str())
+    }
+
+    private fun applyDefaultModel(sessionId: String) {
+        val value = catalog.value
+        val provider = value?.defaultProvider
+        val id = value?.defaultModel
+        model.value = if (value == null || provider == null || id == null) model.value - sessionId else model.value +
+            (sessionId to ModelChoice(provider, id, value.find(provider, id)?.name ?: id, value.defaultEffort))
+    }
+
+    private fun applyModelProjection(sessionId: String, seq: Long, value: kotlinx.serialization.json.JsonElement?) {
+        if (seq < modelProjectionSeq) return
+        modelProjectionSeq = seq
+        val next = modelChoice(value["next"])
+        modelUsesDefault = next == null
+        if (next == null) applyDefaultModel(sessionId)
+        else model.value = model.value + (sessionId to next)
     }
 
     private fun invalidatePermissionCatalog() {
@@ -449,7 +533,9 @@ object Pocket {
 
     private fun applyFrame(f: kotlinx.serialization.json.JsonElement?) {
         val st = chat.value ?: return
-        if (f["type"].str() == "projection" && f["sessionId"].str() != st.sessionId) return
+        val frameSession = f["sessionId"].str()
+        if (frameSession != null && frameSession != st.sessionId) return
+        if (f["type"].str() == "projection" && frameSession == null) return
         val wasRunning = reducer.running
         reducer.apply(f)
         val projection = when (f["type"].str()) {
@@ -458,6 +544,9 @@ object Pocket {
         }
         if (projection != null) {
             val seq = projection["asOfSeq"].long() ?: -1L
+            if ((projection["values"] as? JsonObject)?.containsKey("modelSelection") == true) {
+                applyModelProjection(st.sessionId, seq, projection["values"]["modelSelection"])
+            }
             if (seq >= permissionProjectionSeq) {
                 permissionProjectionSeq = seq
                 val current = projection["values"]["permissions"]["currentValue"].str()
@@ -472,6 +561,9 @@ object Pocket {
                 permission.value = if (current == null) permission.value - st.sessionId
                     else permission.value + (st.sessionId to current)
             }
+        }
+        if (f["type"].str() == "projection" && f["key"].str() == "modelSelection") {
+            applyModelProjection(st.sessionId, f["seq"].long() ?: -1L, f["value"])
         }
         if (f["type"].str() == "snapshot") followAttempts.remove(st.sessionId)
         chat.value = st.copy(
@@ -550,6 +642,8 @@ object Pocket {
         followAttempts.remove(sessionId)
         reducer = TranscriptReducer()
         permissionProjectionSeq = -1L
+        modelProjectionSeq = -1L
+        modelUsesDefault = false
         feedback.value = emptyMap()
         chat.value = ChatState(sessionId, title = sessions.value.firstOrNull { it.sessionId == sessionId }?.title)
         val c = client ?: return@launch
@@ -639,7 +733,12 @@ object Pocket {
                 }
             }
             val id = c.createSession(cwd = cwd, agentPreset = preset)
-            pendingModel?.let { m -> c.selectModel(id, m.provider, m.model, m.effort); model.value = model.value + (id to m) }
+            pendingModel?.let { m ->
+                val selected = modelChoice(c.selectModel(id, m.provider, m.model, m.effort)["selected"])
+                    ?: error("主机未返回已应用的模型")
+                if (client !== c) return@launch
+                model.value = model.value + (id to selected)
+            }
             pendingPermission?.let { p ->
                 check("permissions.set" in ops.value) { "主机不支持切换权限" }
                 permission.value = permission.value + (id to c.setPermission(id, p))
@@ -675,10 +774,38 @@ object Pocket {
             .onFailure { errors.tryEmit(it.message ?: "终止失败") }
     }
 
-    fun selectModel(sessionId: String?, m: ModelChoice) = main.launch {
-        if (sessionId == null) return@launch
-        model.value = model.value + (sessionId to m)
-        runCatching { client?.selectModel(sessionId, m.provider, m.model, m.effort) }.onFailure { errors.tryEmit(it.message ?: "切换模型失败") }
+    fun selectModel(sessionId: String?, m: ModelChoice, onComplete: (Boolean) -> Unit = {}) = main.launch {
+        val c = client
+        if (sessionId == null || c == null || _modelPending.value != null) {
+            if (c == null) errors.tryEmit("未连接到主机")
+            onComplete(false)
+            return@launch
+        }
+        val epoch = modelSelectionEpoch.incrementAndGet()
+        val follow = followEpoch.get()
+        val projectionSeq = modelProjectionSeq
+        _modelPending.value = m
+        try {
+            val response = c.selectModel(sessionId, m.provider, m.model, m.effort)
+            val selected = modelChoice(response["selected"]) ?: error("主机未返回已应用的模型")
+            if (client === c && modelSelectionEpoch.get() == epoch) {
+                // A newer durable projection outranks a delayed selection acknowledgement.
+                if (followEpoch.get() == follow && modelProjectionSeq == projectionSeq) {
+                    model.value = model.value + (sessionId to selected)
+                    if (chat.value?.sessionId == sessionId) modelUsesDefault = false
+                }
+                onComplete(true)
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            if (client === c && modelSelectionEpoch.get() == epoch) {
+                errors.tryEmit(e.message ?: "切换模型失败")
+                onComplete(false)
+            }
+        } finally {
+            if (client === c && modelSelectionEpoch.get() == epoch) _modelPending.value = null
+        }
     }
 
     fun setPermission(sessionId: String?, name: String, onComplete: (Boolean) -> Unit = {}) = main.launch {
@@ -1120,6 +1247,7 @@ object Pocket {
             active.value = null; prefs.activeProfile = null
             sessions.value = emptyList(); chat.value = null
             invalidatePermissionCatalog()
+            invalidateModelCatalog()
             permission.value = emptyMap()
             permissionChanging.value = false
         }

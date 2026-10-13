@@ -24,7 +24,6 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.SecureFlagPolicy
 import dev.dsh.pocket.protocol.Item
-import dev.dsh.pocket.protocol.ModelCatalog
 import dev.dsh.pocket.protocol.ToolStatus
 import dev.dsh.pocket.protocol.arr
 import dev.dsh.pocket.protocol.get
@@ -135,37 +134,6 @@ private fun CodeBox(s: String, maxLines: Int = 20) {
         )
     }
 }
-
-@Composable
-fun ModelSheet(catalog: ModelCatalog?, cur: ModelChoice?, onDismiss: () -> Unit, onPick: (ModelChoice) -> Unit) {
-    var q by remember { mutableStateOf("") }
-    PocketSheet(onDismiss) {
-        SheetTitle("模型与推理等级")
-        Row(Modifier.padding(horizontal = 18.dp, vertical = 8.dp).fillMaxWidth().clip(T.R12).background(T.Fill2).padding(horizontal = 14.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
-            Icon(D.search, null, tint = T.Caption, modifier = Modifier.size(18.dp)); Spacer(Modifier.width(8.dp))
-            Box { if (q.isEmpty()) Text("搜索模型…", color = T.Caption, fontSize = 15.sp)
-                BasicTextField(q, { q = it }, singleLine = true, textStyle = MaterialTheme.typography.bodyMedium, cursorBrush = SolidColor(T.Accent), modifier = Modifier.fillMaxWidth()) }
-        }
-        if (catalog == null || catalog.groups.isEmpty()) { Text("暂无可用模型，请在桌面端配置提供方", color = T.Text3, fontSize = 14.sp, modifier = Modifier.padding(22.dp)); return@PocketSheet }
-        SectionLabel("模型")
-        catalog.groups.forEach { g ->
-            val ms = g.models.filter { q.isBlank() || it.name.contains(q, true) || it.id.contains(q, true) }
-            if (ms.isEmpty()) return@forEach
-            Text(g.name, fontSize = 13.sp, color = T.Text3, modifier = Modifier.padding(horizontal = 22.dp, vertical = 4.dp))
-            ms.forEach { m ->
-                OptionRow(m.name, m.description, D.data, selected = cur?.provider == m.provider && cur.model == m.id) {
-                    onPick(ModelChoice(m.provider, m.id, m.name, m.efforts.firstOrNull { it.id == cur?.effort }?.id ?: m.defaultEffort))
-                }
-            }
-        }
-        val m = cur?.let { catalog.find(it.provider, it.model) }
-        if (m != null && m.efforts.isNotEmpty()) {
-            SectionLabel("推理等级")
-            m.efforts.forEach { e -> OptionRow(e.name, e.description, selected = cur.effort == e.id) { onPick(cur.copy(effort = e.id)) } }
-        }
-    }
-}
-
 
 @Composable
 fun PresetSheet(cur: String, editable: Boolean, onDismiss: () -> Unit, onPick: (String) -> Unit) {

@@ -90,6 +90,9 @@ fun ChatRoot(onMenu: () -> Unit, showMenuButton: Boolean = true) {
     val approvals by Pocket.approvals.collectAsState()
     val catalog by Pocket.catalog.collectAsState()
     val models by Pocket.model.collectAsState()
+    val modelLoading by Pocket.catalogLoading.collectAsState()
+    val modelError by Pocket.catalogError.collectAsState()
+    val modelPending by Pocket.modelPending.collectAsState()
     val perms by Pocket.permission.collectAsState()
     val sessions by Pocket.sessions.collectAsState()
     val active by Pocket.active.collectAsState()
@@ -104,6 +107,7 @@ fun ChatRoot(onMenu: () -> Unit, showMenuButton: Boolean = true) {
     var tool by remember { mutableStateOf<Item.Tool?>(null) }
     var riskPermission by remember(active, chat?.sessionId) { mutableStateOf<String?>(null) }
     var permissionPickerAttempt by remember { mutableIntStateOf(0) }
+    var modelDirect by remember { mutableStateOf(false) }
     // New-chat drafts (applied when the session gets created).
     var draftPreset by remember { mutableStateOf("standard") }
     var draftPerm by remember(active, chat?.sessionId) { mutableStateOf(Pocket.prefs.defaultPermission) }
@@ -175,8 +179,8 @@ fun ChatRoot(onMenu: () -> Unit, showMenuButton: Boolean = true) {
     }
 
     val sid = chat?.sessionId
-    val defaultModel = catalog?.let { c -> c.find(c.defaultProvider, c.defaultModel) ?: c.groups.firstOrNull()?.models?.firstOrNull() }
-        ?.let { ModelChoice(it.provider, it.id, it.name, it.defaultEffort) }
+    val defaultModel = catalog?.let { c -> c.find(c.defaultProvider, c.defaultModel) }
+        ?.let { ModelChoice(it.provider, it.id, it.name, catalog?.defaultEffort ?: it.defaultEffort) }
     val curModel = (if (sid != null) models[sid] else draftModel) ?: defaultModel
     val curPerm = if (sid != null) perms[sid].orEmpty() else if ("permissions.catalog" in ops) draftPerm else ""
     val currentPermissionLabel = permissionLabel(curPerm, permissionDirectory?.find(curPerm))
@@ -184,8 +188,25 @@ fun ChatRoot(onMenu: () -> Unit, showMenuButton: Boolean = true) {
     val dot = status[active]
     val workspaces = sessions.mapNotNull { it.cwd }.distinct()
     val showPanel = "files.list" in ops || ("terminal.create" in ops && "terminal.follow" in ops)
+    val modelMenu: @Composable () -> Unit = {
+        if (sheet == Sheet.Model) {
+            ModelPicker(
+                catalog, curModel, onDismiss = { sheet = Sheet.None },
+                loading = modelLoading, error = modelError, pending = modelPending,
+                enabled = dot == Dot.Online, openModels = modelDirect,
+                onReload = { Pocket.reloadModelCatalog() },
+                onPick = { choice, complete ->
+                    if (sid == null) {
+                        draftModel = choice
+                        complete(true)
+                    } else Pocket.selectModel(sid, choice, complete)
+                },
+            )
+        }
+    }
     LaunchedEffect(sheet) {
         if (sheet == Sheet.Permission) Pocket.reloadPermissionCatalog()
+        if (sheet == Sheet.Model) Pocket.reloadModelCatalog()
     }
     LaunchedEffect(permissionDirectory, dot, sid) {
         val directory = permissionDirectory
@@ -241,7 +262,9 @@ fun ChatRoot(onMenu: () -> Unit, showMenuButton: Boolean = true) {
                     (!permissionLoading && permissionDirectory?.find(curPerm) != null)),
                 pendingImages = pendingImages, pendingFiles = pendingFiles,
                 permissionName = currentPermissionLabel,
-                onPlus = { sheet = Sheet.Plus }, onPerm = { sheet = Sheet.Permission }, onModel = { sheet = Sheet.Model },
+                onPlus = { sheet = Sheet.Plus }, onPerm = { sheet = Sheet.Permission }, onModel = { modelDirect = false; sheet = Sheet.Model },
+                modelMenu = modelMenu, modelEffort = modelEffortLabel(catalog, curModel),
+                modelBusy = modelPending != null, modelExpanded = sheet == Sheet.Model,
                 onRemoveImage = { i -> pendingImages = pendingImages.toMutableList().also { it.removeAt(i) } },
                 onRemoveFile = { i -> pendingFiles = pendingFiles.toMutableList().also { it.removeAt(i) } },
                 onRetryFile = { i ->
@@ -314,7 +337,9 @@ fun ChatRoot(onMenu: () -> Unit, showMenuButton: Boolean = true) {
                 planMode = st.planMode,
                 pendingImages = pendingImages, pendingFiles = pendingFiles,
                 permissionName = currentPermissionLabel,
-                onPlus = { sheet = Sheet.Plus }, onPerm = { sheet = Sheet.Permission }, onModel = { sheet = Sheet.Model },
+                onPlus = { sheet = Sheet.Plus }, onPerm = { sheet = Sheet.Permission }, onModel = { modelDirect = false; sheet = Sheet.Model },
+                modelMenu = modelMenu, modelEffort = modelEffortLabel(catalog, curModel),
+                modelBusy = modelPending != null, modelExpanded = sheet == Sheet.Model,
                 onRemoveImage = { i -> pendingImages = pendingImages.toMutableList().also { it.removeAt(i) } },
                 onRemoveFile = { i -> pendingFiles = pendingFiles.toMutableList().also { it.removeAt(i) } },
                 onRetryFile = { i ->
@@ -349,7 +374,7 @@ fun ChatRoot(onMenu: () -> Unit, showMenuButton: Boolean = true) {
 
     tool?.let { ToolSheet(it) { tool = null } }
     when (sheet) {
-        Sheet.Model -> ModelSheet(catalog, curModel, onDismiss = { sheet = Sheet.None }) { m -> if (sid == null) draftModel = m else Pocket.selectModel(sid, m) }
+        Sheet.Model -> Unit // The composer owns the anchored menu.
         Sheet.Permission -> key(permissionPickerAttempt) {
             PermissionPickerSheet(
                 current = curPerm, catalog = permissionDirectory, loading = permissionLoading, error = permissionError,
@@ -375,7 +400,7 @@ fun ChatRoot(onMenu: () -> Unit, showMenuButton: Boolean = true) {
         Sheet.Plus -> PlusSheet(
             onDismiss = { sheet = Sheet.None },
             onPerm = { sheet = Sheet.Permission },
-            onModel = { sheet = Sheet.Model },
+            onModel = { modelDirect = true; sheet = Sheet.Model },
             onFile = { pickFiles.launch("*/*") },
             onGoal = { sheet = Sheet.Goal },
             onPlan = { Pocket.executeCommand("/plan") },
@@ -409,7 +434,7 @@ fun ChatRoot(onMenu: () -> Unit, showMenuButton: Boolean = true) {
             onFeedback = { sheet = Sheet.Feedback },
             onCompact = { Pocket.executeCommand("/compact") },
             onPerm = { sheet = Sheet.Permission },
-            onModel = { sheet = Sheet.Model },
+            onModel = { modelDirect = true; sheet = Sheet.Model },
             onExport = { doExport() },
         )
         Sheet.Mentions -> MentionPopupSheet(onDismiss = { sheet = Sheet.None })
@@ -1083,6 +1108,10 @@ private fun Composer(
     onPlus: () -> Unit,
     onPerm: () -> Unit,
     onModel: () -> Unit,
+    modelMenu: @Composable () -> Unit = {},
+    modelEffort: String? = null,
+    modelBusy: Boolean = false,
+    modelExpanded: Boolean = false,
     onRemoveImage: (Int) -> Unit = {},
     onRemoveFile: (Int) -> Unit = {},
     onRetryFile: (Int) -> Unit = {},
@@ -1188,12 +1217,19 @@ private fun Composer(
                         Text(permissionName, fontSize = 12.sp, color = T.Text2, maxLines = 1, overflow = TextOverflow.Ellipsis)
                     }
                 }
-                Row(Modifier.weight(1f), horizontalArrangement = Arrangement.End) {
-                    Row(Modifier.clip(T.R8).clickable(onClick = onModel).padding(horizontal = 6.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+                Box(Modifier.weight(1f), contentAlignment = Alignment.CenterEnd) {
+                    Row(
+                        Modifier.clip(T.R8).clickable(onClick = onModel).testTag("composerModel")
+                            .semantics { contentDescription = listOfNotNull(model?.name ?: "选择模型", modelEffort).joinToString(" · ") }
+                            .padding(horizontal = 6.dp, vertical = 6.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
                         Text(model?.name ?: "选择模型", fontSize = 14.sp, color = T.Text2, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false).testTag("composerModelName"))
-                        model?.effort?.let { Spacer(Modifier.width(5.dp)); Text(it.replaceFirstChar(Char::uppercase), fontSize = 14.sp, color = T.Caption, maxLines = 1, softWrap = false) }
-                        Icon(D.chevronDown, null, tint = T.Text2, modifier = Modifier.size(16.dp))
+                        modelEffort?.let { Spacer(Modifier.width(4.dp)); Text(it, fontSize = 12.sp, color = T.Caption, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.widthIn(max = 48.dp)) }
+                        if (modelBusy) CircularProgressIndicator(Modifier.padding(start = 4.dp).size(14.dp), strokeWidth = 1.5.dp, color = T.Text3)
+                        else Icon(D.chevronDown, null, tint = T.Text2, modifier = Modifier.size(16.dp).rotate(if (modelExpanded) 180f else 0f))
                     }
+                    modelMenu()
                 }
             }
             Spacer(Modifier.width(8.dp))

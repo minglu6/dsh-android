@@ -4,6 +4,8 @@ import dev.dsh.pocket.protocol.*
 import kotlinx.coroutines.*
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.emptyFlow
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.serialization.json.*
 import org.junit.After
 import org.junit.Before
@@ -15,6 +17,8 @@ import org.robolectric.annotation.Config
 import java.util.concurrent.atomic.AtomicLong
 import kotlin.test.assertEquals
 import kotlin.test.assertNull
+import kotlin.test.assertFalse
+import kotlin.test.assertTrue
 
 /** Exercises the real Pocket actor while Host unsubscribe/follow replies are deliberately delayed. */
 @RunWith(RobolectricTestRunner::class)
@@ -32,7 +36,11 @@ class PocketFollowTest {
     @Suppress("UNCHECKED_CAST")
     @Before fun setUp() {
         Pocket.init(RuntimeEnvironment.getApplication())
-        val fields = listOf("client", "subId", "pendingFollowEpoch", "reducer", "permissionProjectionSeq").associateWith(::get)
+        val fields = listOf("client", "subId", "pendingFollowEpoch", "reducer", "permissionProjectionSeq",
+            "modelProjectionSeq", "modelUsesDefault").associateWith(::get)
+        val modelEpochs = listOf("modelCatalogEpoch", "modelSelectionEpoch").associateWith { (get(it) as AtomicLong).get() }
+        val modelFlows = listOf("catalog", "model", "_catalogLoading", "_catalogError", "_modelPending")
+            .associateWith { (get(it) as MutableStateFlow<Any?>).value }
         val epoch = get("followEpoch") as AtomicLong
         val originalEpoch = epoch.get()
         val attempts = get("followAttempts") as MutableMap<String, Int>
@@ -45,6 +53,8 @@ class PocketFollowTest {
         val ops = Pocket.ops.value
         restore = {
             fields.forEach { (name, value) -> put(name, value) }
+            modelEpochs.forEach { (name, value) -> (get(name) as AtomicLong).set(value) }
+            modelFlows.forEach { (name, value) -> (get(name) as MutableStateFlow<Any?>).value = value }
             epoch.set(originalEpoch)
             attempts.clear(); attempts.putAll(originalAttempts)
             stray.clear(); stray.putAll(originalStray)
@@ -67,6 +77,9 @@ class PocketFollowTest {
         put("pendingFollowEpoch", null)
         put("reducer", TranscriptReducer())
         put("permissionProjectionSeq", -1L)
+        put("modelProjectionSeq", -1L)
+        put("modelUsesDefault", false)
+        invalidateModels()
         epoch.set(0)
         attempts.clear(); stray.clear()
         Pocket.chat.value = ChatState("A")
@@ -98,6 +111,21 @@ class PocketFollowTest {
         """{"type":"snapshot","cursor":$seq,"records":[],"projections":{"asOfSeq":$seq,"values":{"permissions":{"currentValue":"workspace-write"}}}}""")
     private fun open(session: String) = Pocket.openSession(session).also { jobs += it }
     private suspend fun finish(job: Job) = withTimeout(5000) { job.join() }
+
+    private fun invalidateModels() {
+        Pocket.javaClass.getDeclaredMethod("invalidateModelCatalog").apply { isAccessible = true }.invoke(Pocket)
+    }
+
+    private fun reject(request: JsonObject, message: String = "writer held") {
+        val text = """{"id":${request["id"]},"ok":false,"error":{"code":"session/writer-held","message":"$message"}}"""
+        client.javaClass.getDeclaredMethod("onFrame", String::class.java).apply { isAccessible = true }.invoke(client, text)
+    }
+
+    private fun modelProjection(sub: String, session: String, seq: Int, next: String) = push(sub,
+        """{"type":"projection","sessionId":"$session","key":"modelSelection","seq":$seq,"value":{"next":$next,"lastUsed":{"provider":"p","model":"last-used"}}}""")
+
+    private fun modelCatalog(defaultModel: String = "default") = ModelCatalog.parse(PocketJson.parseToJsonElement(
+        """{"groups":[{"id":"p","models":[{"id":"default","name":"Default"},{"id":"next","name":"Next"},{"id":"desktop","name":"Desktop"}]}],"default":{"provider":"p","model":"$defaultModel","reasoningEffort":"high"}}"""))
 
     @Test fun detachedOldFramesCannotPoisonTheNewSessionBeforeUnsubscribeCompletes() = runBlocking {
         val opening = open("B")
@@ -156,5 +184,134 @@ class PocketFollowTest {
         projection("sub-B", "B", 11, "read-only")
         assertEquals("B", Pocket.chat.value?.sessionId)
         assertEquals("read-only", Pocket.permission.value["B"])
+    }
+
+    @Test fun modelSnapshotResumeAndLiveProjectionUseNextNotLastUsedAndRejectOldFrames() {
+        Pocket.catalog.value = modelCatalog()
+        push("sub-A", """{"type":"snapshot","cursor":10,"records":[],"projections":{"asOfSeq":10,"values":{"modelSelection":{"next":{"provider":"p","model":"next","reasoningEffort":"low"},"lastUsed":{"provider":"p","model":"last-used"}}}}}""")
+        assertEquals(ModelChoice("p", "next", "Next", "low"), Pocket.model.value["A"])
+        modelProjection("sub-A", "B", 100, """{"provider":"p","model":"desktop"}""")
+        modelProjection("sub-A", "A", 9, """{"provider":"p","model":"desktop"}""")
+        assertEquals("next", Pocket.model.value["A"]?.model)
+        push("sub-A", """{"type":"resume","cursor":11,"projections":{"asOfSeq":11,"values":{"modelSelection":{"next":null,"lastUsed":{"provider":"p","model":"last-used"}}}}}""")
+        assertEquals(ModelChoice("p", "default", "Default", "high"), Pocket.model.value["A"])
+        modelProjection("sub-A", "A", 12, """{"provider":"p","model":"desktop","reasoningEffort":"max"}""")
+        push("sub-A", """{"type":"snapshot","sessionId":"B","cursor":100,"records":[],"projections":{"asOfSeq":100,"values":{"modelSelection":{"next":null}}}}""")
+        push("sub-A", """{"type":"resume","cursor":10,"projections":{"asOfSeq":10,"values":{"modelSelection":{"next":null}}}}""")
+        assertEquals(ModelChoice("p", "desktop", "Desktop", "max"), Pocket.model.value["A"])
+    }
+
+    @Test fun modelSelectionWaitsForHostAndRejectsDuplicateWhileFailureKeepsOldSelection() = runBlocking {
+        val previous = ModelChoice("p", "default", "Default", null)
+        val desired = ModelChoice("p", "next", "Next", "high")
+        Pocket.model.value = mapOf("A" to previous)
+        val failure = async(start = CoroutineStart.UNDISPATCHED) { Pocket.errors.first() }
+        var completed: Boolean? = null
+        val selecting = Pocket.selectModel("A", desired) { completed = it }.also { jobs += it }
+        val selection = request("models.select")
+        assertEquals(desired, Pocket.modelPending.value)
+        assertEquals(previous, Pocket.model.value["A"])
+        assertNull(completed)
+        var duplicate: Boolean? = null
+        finish(Pocket.selectModel("A", desired) { duplicate = it }.also { jobs += it })
+        assertEquals(false, duplicate)
+        assertTrue(requests.tryReceive().isFailure)
+        reject(selection)
+        finish(selecting)
+        assertEquals(false, completed)
+        assertEquals(previous, Pocket.model.value["A"])
+        assertNull(Pocket.modelPending.value)
+        assertTrue(withTimeout(5000) { failure.await() }.contains("writer held"))
+    }
+
+    @Test fun successfulModelSelectionUsesHostNormalizedValue() = runBlocking {
+        Pocket.catalog.value = modelCatalog()
+        var completed = false
+        val selecting = Pocket.selectModel("A", ModelChoice("p", "next", "Next", null)) { completed = it }
+            .also { jobs += it }
+        reply(request("models.select"), """{"selected":{"provider":"p","model":"next","reasoningEffort":"high"}}""")
+        finish(selecting)
+        assertTrue(completed)
+        assertEquals(ModelChoice("p", "next", "Next", "high"), Pocket.model.value["A"])
+        assertNull(Pocket.modelPending.value)
+    }
+
+    @Test fun newerDesktopProjectionOutranksDelayedSelectionAcknowledgement() = runBlocking {
+        Pocket.catalog.value = modelCatalog()
+        val selecting = Pocket.selectModel("A", ModelChoice("p", "next", "Next", null)).also { jobs += it }
+        val selection = request("models.select")
+        modelProjection("sub-A", "A", 30, """{"provider":"p","model":"desktop","reasoningEffort":"max"}""")
+        reply(selection, """{"selected":{"provider":"p","model":"next"}}""")
+        finish(selecting)
+        assertEquals(ModelChoice("p", "desktop", "Desktop", "max"), Pocket.model.value["A"])
+    }
+
+    @Test fun connectionResetClearsPendingAndIgnoresLateSelectionCallback() = runBlocking {
+        Pocket.catalog.value = modelCatalog()
+        var completed: Boolean? = null
+        val selecting = Pocket.selectModel("A", ModelChoice("p", "next", "Next", null)) { completed = it }
+            .also { jobs += it }
+        val selection = request("models.select")
+        put("client", null)
+        invalidateModels()
+        assertNull(Pocket.catalog.value)
+        assertNull(Pocket.modelPending.value)
+        reply(selection, """{"selected":{"provider":"p","model":"next"}}""")
+        finish(selecting)
+        assertNull(completed)
+        assertEquals(emptyMap(), Pocket.model.value)
+    }
+
+    @Test fun catalogRefreshFailureRetainsDataAndRetryRestoresDefaultSelection() = runBlocking {
+        Pocket.catalog.value = modelCatalog()
+        modelProjection("sub-A", "A", 10, "null")
+        val loading = Pocket.reloadModelCatalog().also { jobs += it }
+        val catalogRequest = request("models.catalog")
+        assertTrue(Pocket.catalogLoading.value)
+        assertEquals("default", Pocket.catalog.value?.defaultModel)
+        reject(catalogRequest, "catalog offline")
+        finish(loading)
+        assertFalse(Pocket.catalogLoading.value)
+        assertTrue(Pocket.catalogError.value.orEmpty().contains("catalog offline"))
+        assertEquals("default", Pocket.model.value["A"]?.model)
+        val retry = Pocket.reloadModelCatalog().also { jobs += it }
+        reply(request("models.catalog"), """{"groups":[{"id":"p","models":[{"id":"next","name":"Next"}]}],"default":{"provider":"p","model":"next","reasoningEffort":"max"}}""")
+        finish(retry)
+        assertNull(Pocket.catalogError.value)
+        assertEquals(ModelChoice("p", "next", "Next", "max"), Pocket.model.value["A"])
+    }
+
+    @Test fun newestCatalogRequestWinsAndHostResetRejectsLateResponse() = runBlocking {
+        val first = Pocket.reloadModelCatalog().also { jobs += it }
+        val old = request("models.catalog")
+        val second = Pocket.reloadModelCatalog().also { jobs += it }
+        val fresh = request("models.catalog")
+        reply(fresh, """{"groups":[],"default":{"provider":"p","model":"new"}}""")
+        finish(second)
+        reply(old, """{"groups":[],"default":{"provider":"p","model":"old"}}""")
+        finish(first)
+        assertEquals("new", Pocket.catalog.value?.defaultModel)
+        val last = Pocket.reloadModelCatalog().also { jobs += it }
+        val stale = request("models.catalog")
+        put("client", null)
+        invalidateModels()
+        reply(stale, """{"groups":[],"default":{"provider":"p","model":"stale"}}""")
+        finish(last)
+        assertNull(Pocket.catalog.value)
+        assertFalse(Pocket.catalogLoading.value)
+        assertNull(Pocket.catalogError.value)
+    }
+
+    @Test fun currentSessionModelProjectionBufferedBeforeFollowAcknowledgementIsApplied() = runBlocking {
+        Pocket.catalog.value = modelCatalog()
+        val opening = open("B")
+        reply(request("unfollow"), """{"stopped":true}""")
+        val follow = request("follow")
+        modelProjection("sub-A", "A", 1000, """{"provider":"p","model":"desktop"}""")
+        modelProjection("sub-B", "B", 10, """{"provider":"p","model":"next"}""")
+        reply(follow, """{"subId":"sub-B"}""")
+        finish(opening)
+        assertEquals(ModelChoice("p", "next", "Next", null), Pocket.model.value["B"])
+        assertNull(Pocket.model.value["A"])
     }
 }
