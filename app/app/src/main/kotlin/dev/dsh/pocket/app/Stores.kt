@@ -145,6 +145,11 @@ enum class AppLanguage(val label: String) { Zh("中文"), En("English") }
 /** Wide-screen chrome: auto follows ≥600dp like desktop sidebar; phone/desktop force a mode. */
 enum class LayoutMode { Auto, Phone, Desktop }
 
+/** Desktop `ui-workspace` view store: groupBy / orderBy / archivedFilter. */
+enum class SessionGroupBy { Workspace, WorkspaceTree, Flat }
+enum class SessionOrderBy { Manual, Updated }
+enum class ArchivedFilter { Default, Show, Only }
+
 class AppPrefs(ctx: Context) {
     private val p = ctx.getSharedPreferences("app", Context.MODE_PRIVATE)
     private val json = Json { ignoreUnknownKeys = true }
@@ -190,4 +195,15 @@ class AppPrefs(ctx: Context) {
     var layoutMode: LayoutMode
         get() = runCatching { LayoutMode.valueOf(p.getString("layoutMode", null) ?: "Auto") }.getOrDefault(LayoutMode.Auto)
         set(v) = p.edit().putString("layoutMode", v.name).apply()
+
+    /** Persist drawer session list view options (desktop `dsh.workspace.view.v5`). */
+    var sessionGroupBy: SessionGroupBy
+        get() = runCatching { SessionGroupBy.valueOf(p.getString("sessionGroupBy", null) ?: "Workspace") }.getOrDefault(SessionGroupBy.Workspace)
+        set(v) = p.edit().putString("sessionGroupBy", v.name).apply()
+    var sessionOrderBy: SessionOrderBy
+        get() = runCatching { SessionOrderBy.valueOf(p.getString("sessionOrderBy", null) ?: "Updated") }.getOrDefault(SessionOrderBy.Updated)
+        set(v) = p.edit().putString("sessionOrderBy", v.name).apply()
+    var archivedFilter: ArchivedFilter
+        get() = runCatching { ArchivedFilter.valueOf(p.getString("archivedFilter", null) ?: "Default") }.getOrDefault(ArchivedFilter.Default)
+        set(v) = p.edit().putString("archivedFilter", v.name).apply()
 }

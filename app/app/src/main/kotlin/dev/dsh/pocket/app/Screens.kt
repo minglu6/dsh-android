@@ -101,6 +101,8 @@ fun SessionDrawer(
     onNew: () -> Unit,
     onSettings: () -> Unit,
     onConnections: () -> Unit,
+    onPlugins: () -> Unit = {},
+    onSchedule: () -> Unit = {},
     permanent: Boolean = false,
     onMenuOpenChange: (Boolean) -> Unit = {},
 ) {
@@ -111,6 +113,8 @@ fun SessionDrawer(
             onNew = onNew,
             onSettings = onSettings,
             onConnections = onConnections,
+            onPlugins = onPlugins,
+            onSchedule = onSchedule,
             onMenuOpenChange = onMenuOpenChange,
         )
     }
@@ -141,6 +145,8 @@ private fun SessionDrawerBody(
     onNew: () -> Unit,
     onSettings: () -> Unit,
     onConnections: () -> Unit,
+    onPlugins: () -> Unit,
+    onSchedule: () -> Unit,
     onMenuOpenChange: (Boolean) -> Unit,
 ) {
     val sessions by Pocket.sessions.collectAsState()
@@ -152,11 +158,17 @@ private fun SessionDrawerBody(
     val ops by Pocket.ops.collectAsState()
     val profile = Pocket.profiles.collectAsState().value.firstOrNull { it.id == active }
     var search by remember { mutableStateOf("") }
+    var searchExpanded by remember { mutableStateOf(false) }
     var searching by remember { mutableStateOf(false) }
     var searchHits by remember { mutableStateOf<List<dev.dsh.pocket.protocol.SessionSummary>?>(null) }
-    var showArchived by remember { mutableStateOf(false) }
+    var groupBy by remember { mutableStateOf(Pocket.prefs.sessionGroupBy) }
+    var orderBy by remember { mutableStateOf(Pocket.prefs.sessionOrderBy) }
+    var archivedFilter by remember { mutableStateOf(Pocket.prefs.archivedFilter) }
+    var viewOptionsOpen by remember { mutableStateOf(false) }
+    var addWorkspaceOpen by remember { mutableStateOf(false) }
     var menuSessionId by remember { mutableStateOf<String?>(null) }
     var collapsedWorkspaces by remember { mutableStateOf(setOf<String>()) }
+    val searchFocus = remember { FocusRequester() }
     LaunchedEffect(menuSessionId) { onMenuOpenChange(menuSessionId != null) }
     LaunchedEffect(search) {
         if (search.isBlank() || "sessions.search" !in ops) {
@@ -165,6 +177,9 @@ private fun SessionDrawerBody(
         searching = true
         kotlinx.coroutines.delay(250)
         Pocket.searchSessions(search) { searchHits = it; searching = false }
+    }
+    LaunchedEffect(searchExpanded) {
+        if (searchExpanded) searchFocus.requestFocus()
     }
     Column(Modifier.fillMaxHeight()) {
         Row(Modifier.padding(start = 18.dp, end = 18.dp, top = 18.dp, bottom = 12.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -180,49 +195,74 @@ private fun SessionDrawerBody(
             }
         }
         Row(
-            Modifier.padding(horizontal = 12.dp).fillMaxWidth().clip(T.R12).background(T.Surface).border(1.dp, T.Border, T.R12)
-                .clickable(onClick = onNew).padding(12.dp),
+            Modifier.padding(horizontal = 12.dp).fillMaxWidth().height(38.dp).clip(T.R12).background(T.Surface).border(1.dp, T.Border, T.R12)
+                .clickable(onClick = onNew).padding(horizontal = 12.dp),
             horizontalArrangement = Arrangement.Center,
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Icon(D.newChat, null, Modifier.size(16.dp), tint = T.Ink); Spacer(Modifier.width(6.dp)); Text("新会话", fontSize = 15.sp)
+            Icon(D.newChat, null, Modifier.size(16.dp), tint = T.Ink); Spacer(Modifier.width(6.dp)); Text("新会话", fontSize = 14.sp, fontWeight = FontWeight.Medium)
         }
-        Spacer(Modifier.height(8.dp))
-        Row(
-            Modifier.padding(horizontal = 12.dp).fillMaxWidth().clip(T.R12).background(T.Surface).border(1.dp, T.Border, T.R12)
-                .padding(horizontal = 12.dp, vertical = 10.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Icon(D.search, L.searchSessions(), Modifier.size(16.dp), tint = T.Text3)
-            Spacer(Modifier.width(8.dp))
-            BasicTextField(
-                search,
-                { search = it },
-                singleLine = true,
-                textStyle = androidx.compose.ui.text.TextStyle(fontSize = 14.sp, color = T.Ink),
-                cursorBrush = SolidColor(T.Accent),
-                modifier = Modifier.weight(1f).testTag("sessionSearch"),
-                decorationBox = { inner ->
-                    if (search.isEmpty()) Text(L.searchSessions(), fontSize = 14.sp, color = T.Caption)
-                    inner()
-                },
-            )
-            if (search.isNotEmpty()) {
-                Text(L.clearSearch(), fontSize = 12.sp, color = T.Text3, modifier = Modifier.clickable {
-                    search = ""; searchHits = null
-                })
+        Spacer(Modifier.height(12.dp))
+        Column(Modifier.padding(horizontal = 10.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            if ("plugins.list" in ops) {
+                DrawerPanelRow(D.pluginPinwheel, L.pluginsNav(), onClick = onPlugins)
+            }
+            if ("schedule.catalog" in ops) {
+                DrawerPanelRow(D.clock, L.scheduleTitle(), onClick = onSchedule)
             }
         }
-        if ("workspace.state" in ops) {
-            Text(
-                if (showArchived) "全部对话（显示已归档）" else "隐藏已归档",
-                fontSize = 12.sp,
-                color = T.Accent,
-                modifier = Modifier.padding(horizontal = 22.dp, vertical = 6.dp).clickable { showArchived = !showArchived },
-            )
+        if ("plugins.list" in ops || "schedule.catalog" in ops) {
+            Spacer(Modifier.height(8.dp))
         }
-        Spacer(Modifier.height(2.dp))
-        Text("工作区", fontSize = 13.sp, color = T.Text3, modifier = Modifier.padding(start = 22.dp, top = 8.dp, bottom = 6.dp))
+        Row(
+            Modifier.fillMaxWidth().height(36.dp).padding(start = 14.dp, end = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            if (searchExpanded) {
+                Icon(D.search, L.searchSessionsAria(), Modifier.size(14.dp), tint = T.Text3)
+                Spacer(Modifier.width(6.dp))
+                BasicTextField(
+                    search,
+                    { search = it },
+                    singleLine = true,
+                    textStyle = androidx.compose.ui.text.TextStyle(fontSize = 14.sp, color = T.Ink),
+                    cursorBrush = SolidColor(T.Accent),
+                    modifier = Modifier.weight(1f).focusRequester(searchFocus).testTag("sessionSearch"),
+                    decorationBox = { inner ->
+                        if (search.isEmpty()) Text(L.searchSessions(), fontSize = 14.sp, color = T.Caption)
+                        inner()
+                    },
+                )
+                if (search.isNotEmpty()) {
+                    Text(L.clearSearch(), fontSize = 12.sp, color = T.Text3, modifier = Modifier.clickable {
+                        search = ""; searchHits = null
+                    })
+                } else {
+                    Icon(
+                        D.chevronLeft, L.clearSearch(),
+                        Modifier.size(18.dp).clickable {
+                            searchExpanded = false; search = ""; searchHits = null
+                        },
+                        tint = T.Text3,
+                    )
+                }
+            } else {
+                Text(
+                    if (groupBy == SessionGroupBy.Flat) L.sectionSessions() else L.sectionWorkspaces(),
+                    fontSize = 13.sp,
+                    color = T.Text3,
+                    lineHeight = 20.sp,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f, fill = false).padding(end = 4.dp),
+                )
+                Spacer(Modifier.weight(1f))
+                DrawerHeaderIcon(D.search, L.search()) { searchExpanded = true }
+                DrawerHeaderIcon(D.sliders, L.viewOptions()) { viewOptionsOpen = true }
+                DrawerHeaderIcon(D.projectAdd, L.addWorkspace()) { addWorkspaceOpen = true }
+            }
+        }
+        Spacer(Modifier.height(4.dp))
         Column(Modifier.weight(1f).verticalScroll(rememberScrollState())) {
             when {
                 searching -> Text(L.searchingSessions(), fontSize = 14.sp, color = T.Caption, modifier = Modifier.padding(horizontal = 22.dp, vertical = 10.dp))
@@ -240,14 +280,27 @@ private fun SessionDrawerBody(
                     }
                 }
                 else -> {
-                    val pinnedList = sessions.filter { it.sessionId in pinned && it.parentSessionId == null && !it.blank }
-                    val top = sessions.filter {
-                        it.parentSessionId == null && !it.blank &&
-                            it.sessionId !in pinned &&
-                            (showArchived || it.sessionId !in archived)
+                    val visible = sessions.filter { s ->
+                        if (s.parentSessionId != null || s.blank) return@filter false
+                        when (archivedFilter) {
+                            ArchivedFilter.Default -> s.sessionId !in archived
+                            ArchivedFilter.Show -> true
+                            ArchivedFilter.Only -> s.sessionId in archived
+                        }
                     }
-                    if (pinnedList.isEmpty() && top.isEmpty()) {
-                        Text(if (status[active] == Dot.Online) "暂无会话" else "连接后显示会话", fontSize = 14.sp, color = T.Caption, modifier = Modifier.padding(horizontal = 22.dp, vertical = 10.dp))
+                    val ordered = when (orderBy) {
+                        SessionOrderBy.Updated -> visible.sortedByDescending { it.updatedAt }
+                        SessionOrderBy.Manual -> visible
+                    }
+                    val pinnedList = ordered.filter { it.sessionId in pinned }
+                    val rest = ordered.filter { it.sessionId !in pinned }
+                    if (pinnedList.isEmpty() && rest.isEmpty()) {
+                        val empty = when {
+                            status[active] != Dot.Online -> "连接后显示会话"
+                            archivedFilter == ArchivedFilter.Only -> L.emptyArchivedSessions()
+                            else -> L.emptySessions()
+                        }
+                        Text(empty, fontSize = 14.sp, color = T.Caption, modifier = Modifier.padding(horizontal = 22.dp, vertical = 10.dp))
                     }
                     if (pinnedList.isNotEmpty()) {
                         Text(L.pinned(), fontSize = 12.sp, color = T.Text3, modifier = Modifier.padding(horizontal = 22.dp, vertical = 4.dp))
@@ -261,32 +314,57 @@ private fun SessionDrawerBody(
                             )
                         }
                     }
-                    top.groupBy { it.cwd?.trimEnd('/')?.substringAfterLast('/') ?: "默认" }.forEach { (ws, list) ->
-                        val collapsed = ws in collapsedWorkspaces
-                        Row(
-                            Modifier
-                                .fillMaxWidth()
-                                .clip(T.R8)
-                                .clickable {
-                                    collapsedWorkspaces = if (collapsed) collapsedWorkspaces - ws else collapsedWorkspaces + ws
-                                }
-                                .padding(horizontal = 22.dp, vertical = 8.dp)
-                                .testTag("workspaceCollapse:$ws"),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            Icon(D.folderOpen, null, Modifier.size(17.dp), tint = T.Accent)
-                            Spacer(Modifier.width(10.dp))
-                            Text(ws, fontSize = 15.sp, color = T.Ink, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
-                            Text(if (collapsed) L.expand() else L.collapse(), fontSize = 12.sp, color = T.Caption)
+                    when (groupBy) {
+                        SessionGroupBy.Flat -> rest.forEach { s ->
+                            SessionRow(
+                                s, selected = s.sessionId == chat?.sessionId,
+                                archived = s.sessionId in archived, pinned = s.sessionId in pinned,
+                                menuOpen = menuSessionId == s.sessionId,
+                                onPick = { onPick(s.sessionId) },
+                                onMenuOpenChange = { open -> menuSessionId = if (open) s.sessionId else null },
+                            )
                         }
-                        if (!collapsed) {
-                            list.forEach { s ->
-                                SessionRow(
-                                    s, selected = s.sessionId == chat?.sessionId,
-                                    archived = s.sessionId in archived, pinned = s.sessionId in pinned,
-                                    menuOpen = menuSessionId == s.sessionId,
-                                    onPick = { onPick(s.sessionId) },
-                                    onMenuOpenChange = { open -> menuSessionId = if (open) s.sessionId else null },
+                        SessionGroupBy.Workspace -> {
+                            rest.groupBy { it.cwd?.trimEnd('/')?.substringAfterLast('/') ?: L.ungrouped() }.forEach { (ws, list) ->
+                                WorkspaceCollapseGroup(
+                                    ws = ws,
+                                    list = list,
+                                    collapsed = ws in collapsedWorkspaces,
+                                    selectedId = chat?.sessionId,
+                                    archived = archived,
+                                    pinned = pinned,
+                                    menuSessionId = menuSessionId,
+                                    onToggle = {
+                                        collapsedWorkspaces = if (ws in collapsedWorkspaces) collapsedWorkspaces - ws else collapsedWorkspaces + ws
+                                    },
+                                    onPick = onPick,
+                                    onMenuOpenChange = { id, open -> menuSessionId = if (open) id else null },
+                                )
+                            }
+                        }
+                        SessionGroupBy.WorkspaceTree -> {
+                            rest.groupBy { cwd ->
+                                val path = cwd.cwd?.trimEnd('/')
+                                when {
+                                    path.isNullOrBlank() -> L.ungrouped()
+                                    path.contains('/') -> path.substringBeforeLast('/')
+                                    else -> path
+                                }
+                            }.forEach { (ws, list) ->
+                                val label = ws.substringAfterLast('/').ifBlank { ws }
+                                WorkspaceCollapseGroup(
+                                    ws = label,
+                                    list = list,
+                                    collapsed = label in collapsedWorkspaces,
+                                    selectedId = chat?.sessionId,
+                                    archived = archived,
+                                    pinned = pinned,
+                                    menuSessionId = menuSessionId,
+                                    onToggle = {
+                                        collapsedWorkspaces = if (label in collapsedWorkspaces) collapsedWorkspaces - label else collapsedWorkspaces + label
+                                    },
+                                    onPick = onPick,
+                                    onMenuOpenChange = { id, open -> menuSessionId = if (open) id else null },
                                 )
                             }
                         }
@@ -296,6 +374,164 @@ private fun SessionDrawerBody(
         }
         DrawerItem(D.settings, "设置", onClick = onSettings)
         Spacer(Modifier.height(8.dp))
+    }
+    if (viewOptionsOpen) {
+        ViewOptionsSheet(
+            groupBy = groupBy,
+            orderBy = orderBy,
+            archivedFilter = archivedFilter,
+            onDismiss = { viewOptionsOpen = false },
+            onGroup = { groupBy = it; Pocket.prefs.sessionGroupBy = it },
+            onOrder = { orderBy = it; Pocket.prefs.sessionOrderBy = it },
+            onArchived = { archivedFilter = it; Pocket.prefs.archivedFilter = it },
+        )
+    }
+    if (addWorkspaceOpen) {
+        AddWorkspaceSheet(
+            known = sessions.mapNotNull { it.cwd }.distinct(),
+            onDismiss = { addWorkspaceOpen = false },
+            onPick = { path ->
+                addWorkspaceOpen = false
+                Pocket.startInWorkspace(path)
+            },
+        )
+    }
+}
+
+
+@Composable
+private fun WorkspaceCollapseGroup(
+    ws: String,
+    list: List<dev.dsh.pocket.protocol.SessionSummary>,
+    collapsed: Boolean,
+    selectedId: String?,
+    archived: Set<String>,
+    pinned: Set<String>,
+    menuSessionId: String?,
+    onToggle: () -> Unit,
+    onPick: (String) -> Unit,
+    onMenuOpenChange: (String, Boolean) -> Unit,
+) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .clip(T.R8)
+            .clickable(onClick = onToggle)
+            .padding(horizontal = 22.dp, vertical = 8.dp)
+            .testTag("workspaceCollapse:$ws"),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(D.folderOpen, null, Modifier.size(17.dp), tint = T.Accent)
+        Spacer(Modifier.width(10.dp))
+        Text(ws, fontSize = 15.sp, color = T.Ink, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+        Text(if (collapsed) L.expand() else L.collapse(), fontSize = 12.sp, color = T.Caption)
+    }
+    if (!collapsed) {
+        list.forEach { s ->
+            SessionRow(
+                s, selected = s.sessionId == selectedId,
+                archived = s.sessionId in archived, pinned = s.sessionId in pinned,
+                menuOpen = menuSessionId == s.sessionId,
+                onPick = { onPick(s.sessionId) },
+                onMenuOpenChange = { open -> onMenuOpenChange(s.sessionId, open) },
+            )
+        }
+    }
+}
+
+/** Desktop `.panelRow`: 16px icon, 8px gap, 14px label, min-height 36. */
+@Composable
+private fun DrawerPanelRow(icon: ImageVector, text: String, onClick: () -> Unit) {
+    Row(
+        Modifier.fillMaxWidth().heightIn(min = 36.dp).clip(T.R12).clickable(onClick = onClick).padding(horizontal = 8.dp, vertical = 7.dp).testTag("drawerPanel:$text"),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(icon, null, Modifier.size(16.dp), tint = T.Ink)
+        Spacer(Modifier.width(8.dp))
+        Text(text, fontSize = 14.sp, color = T.Ink, lineHeight = 22.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+    }
+}
+
+/** Desktop WorkspaceBrowser `.iconButton` 28×28. */
+@Composable
+private fun DrawerHeaderIcon(icon: ImageVector, label: String, onClick: () -> Unit) {
+    Box(
+        Modifier.size(28.dp).clip(T.R8).clickable(onClick = onClick).testTag("drawerHeader:$label"),
+        contentAlignment = Alignment.Center,
+    ) {
+        Icon(icon, label, Modifier.size(16.dp), tint = T.Text2)
+    }
+}
+
+@Composable
+internal fun ViewOptionsSheet(
+    groupBy: SessionGroupBy,
+    orderBy: SessionOrderBy,
+    archivedFilter: ArchivedFilter,
+    onDismiss: () -> Unit,
+    onGroup: (SessionGroupBy) -> Unit,
+    onOrder: (SessionOrderBy) -> Unit,
+    onArchived: (ArchivedFilter) -> Unit,
+) {
+    PocketSheet(onDismiss) {
+        SheetTitle(L.viewOptions())
+        Text(L.groupByLabel(), fontSize = 12.sp, color = T.Text3, modifier = Modifier.padding(horizontal = 22.dp, vertical = 6.dp))
+        OptionRow(L.groupByWorkspace(), icon = D.folderOpen, selected = groupBy == SessionGroupBy.Workspace) {
+            onGroup(SessionGroupBy.Workspace); onDismiss()
+        }
+        OptionRow(L.groupByWorkspaceTree(), icon = D.folderOpen, selected = groupBy == SessionGroupBy.WorkspaceTree) {
+            onGroup(SessionGroupBy.WorkspaceTree); onDismiss()
+        }
+        OptionRow(L.groupByFlat(), icon = D.chat, selected = groupBy == SessionGroupBy.Flat) {
+            onGroup(SessionGroupBy.Flat); onDismiss()
+        }
+        Text(L.orderByLabel(), fontSize = 12.sp, color = T.Text3, modifier = Modifier.padding(horizontal = 22.dp, vertical = 6.dp))
+        OptionRow(L.orderByManual(), icon = D.ellipsis, selected = orderBy == SessionOrderBy.Manual) {
+            onOrder(SessionOrderBy.Manual); onDismiss()
+        }
+        OptionRow(L.orderByUpdated(), icon = D.clock, selected = orderBy == SessionOrderBy.Updated) {
+            onOrder(SessionOrderBy.Updated); onDismiss()
+        }
+        Text(L.filterByLabel(), fontSize = 12.sp, color = T.Text3, modifier = Modifier.padding(horizontal = 22.dp, vertical = 6.dp))
+        OptionRow(L.hideArchived(), selected = archivedFilter == ArchivedFilter.Default) {
+            onArchived(ArchivedFilter.Default); onDismiss()
+        }
+        OptionRow(L.showArchived(), selected = archivedFilter == ArchivedFilter.Show) {
+            onArchived(ArchivedFilter.Show); onDismiss()
+        }
+        OptionRow(L.onlyArchived(), selected = archivedFilter == ArchivedFilter.Only) {
+            onArchived(ArchivedFilter.Only); onDismiss()
+        }
+    }
+}
+
+@Composable
+private fun AddWorkspaceSheet(known: List<String>, onDismiss: () -> Unit, onPick: (String) -> Unit) {
+    var path by remember { mutableStateOf("") }
+    PocketSheet(onDismiss) {
+        SheetTitle(L.addWorkspace())
+        OutlinedTextField(
+            path,
+            { path = it },
+            placeholder = { Text(L.workspacePathPlaceholder()) },
+            shape = T.R12,
+            singleLine = true,
+            modifier = Modifier.padding(horizontal = 22.dp).fillMaxWidth().testTag("addWorkspacePath"),
+        )
+        Spacer(Modifier.height(8.dp))
+        Button(
+            { onPick(path.trim()) },
+            Modifier.padding(horizontal = 22.dp).fillMaxWidth().height(50.dp),
+            enabled = path.isNotBlank(),
+            shape = T.R12,
+            colors = PrimaryColors(),
+        ) { Text(L.addWorkspace()) }
+        if (known.isNotEmpty()) {
+            Text(L.sectionWorkspaces(), fontSize = 12.sp, color = T.Text3, modifier = Modifier.padding(horizontal = 22.dp, vertical = 8.dp))
+            known.forEach { w ->
+                OptionRow(w.substringAfterLast('/'), w, D.folderOpen) { onPick(w) }
+            }
+        }
     }
 }
 

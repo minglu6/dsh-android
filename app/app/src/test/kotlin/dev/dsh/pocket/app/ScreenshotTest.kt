@@ -52,7 +52,10 @@ class ScreenshotTest {
         Pocket.active.value = "p1"
         Pocket.status.value = mapOf("p1" to Dot.Online, "p2" to Dot.Offline)
         Pocket.catalog.value = catalog
-        Pocket.ops.value = setOf("permissions.set", "presets.list")
+        Pocket.ops.value = setOf(
+            "permissions.set", "presets.list",
+            "plugins.list", "schedule.catalog", "sessions.search", "workspace.state",
+        )
         Pocket.presets.value = listOf("standard", "ptc", "minimal", "cordis")
         Pocket.sessions.value = listOf(
             SessionSummary("s1", "重构 bridge 鉴权流程", "/Users/felix/src/pi-android", true, false, 3, null),

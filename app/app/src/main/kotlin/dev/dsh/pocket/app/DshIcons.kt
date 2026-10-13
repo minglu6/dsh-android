@@ -20,8 +20,14 @@ object D {
     val chevronLeft @Composable get() = v(R.drawable.dsh_chevron_left)
     val newChat @Composable get() = v(R.drawable.dsh_new_chat)
     val plugin @Composable get() = v(R.drawable.dsh_cordis_plugin)
+    /** Sidebar Plugins panel glyph (ui-plugin-manager PluginsPanelIcon). */
+    val pluginPinwheel @Composable get() = v(R.drawable.dsh_plugin_pinwheel)
     val clock @Composable get() = v(R.drawable.dsh_clock)
     val alarm @Composable get() = v(R.drawable.dsh_alarm_clock)
+    /** WorkspaceBrowser view-options (IconSlidersTwoOutlineRegular). */
+    val sliders @Composable get() = v(R.drawable.dsh_sliders_two)
+    /** WorkspaceBrowser add-workspace (IconProjectAddOutlineRegular). */
+    val projectAdd @Composable get() = v(R.drawable.dsh_project_add)
     val settings @Composable get() = v(R.drawable.dsh_settings)
     val search @Composable get() = v(R.drawable.dsh_search)
     val database @Composable get() = v(R.drawable.dsh_database)

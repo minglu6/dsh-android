@@ -450,6 +450,22 @@ object Pocket {
 
     fun closeChat() = main.launch { subId?.let { s -> client?.let { runCatching { it.unfollow(s) } } }; subId = null; chat.value = null }
 
+    /**
+     * Desktop add-workspace → startSession: create a blank session in [cwd].
+     * Phone has no Host OS directory picker; the path comes from a typed/picked host path.
+     */
+    fun startInWorkspace(cwd: String) = main.launch {
+        val path = cwd.trim()
+        if (path.isEmpty()) return@launch errors.tryEmit(L.workspacePathPlaceholder()).let { }
+        val c = client ?: return@launch errors.tryEmit("未连接").let { }
+        try {
+            val id = c.createSession(cwd = path)
+            openSession(id).join()
+        } catch (e: Exception) {
+            errors.tryEmit(e.message ?: e.toString())
+        }
+    }
+
     /** Create a session (optionally with preset), then send [text] into it. */
     fun newSession(text: String, preset: String?, pendingPermission: String?, pendingModel: ModelChoice?, cwd: String? = null) = main.launch {
         val c = client ?: return@launch errors.tryEmit("未连接").let { }
