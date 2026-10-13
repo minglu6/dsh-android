@@ -117,7 +117,7 @@ fun resolveDarkAppearance(appearance: Appearance, systemDark: Boolean): Boolean 
 
 /**
  * Tokyo Night chrome for the phone connection / pairing surface
- * (peer tabs, address sheets). Meslo via [T.Mono] / [Conn.Mono].
+ * (settings-style list rows, address sheets). Meslo via [T.Mono] / [Conn.Mono].
  */
 object Conn {
     val Bg = TokyoNight.Bg

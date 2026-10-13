@@ -145,18 +145,26 @@ object L {
     fun offline() = if (en) "Offline" else "离线"
     fun revoked() = if (en) "Revoked" else "已撤销"
 
-    // Connection screen — minimal labels (desktop settings density)
+    // Connection screen — desktop locales (plugin/src/client/locales.ts + settings density)
     fun connections() = if (en) "Connections" else "连接"
     fun scanQr() = if (en) "Scan" else "扫码"
     fun enterAddress() = if (en) "Enter address" else "输入地址"
     fun moreActions() = if (en) "More" else "更多"
-    fun pairedDevices() = if (en) "Paired" else "已配对"
+    fun pairedDevices() = if (en) "Paired devices" else "已配对设备"
     fun allowNearby() = if (en) "Allow" else "允许"
     fun pairSheetTitle() = if (en) "Pair" else "配对"
     fun addressField() = if (en) "Address" else "地址"
     fun nameField() = if (en) "Name" else "名称"
     fun nameHint() = if (en) "Name" else "名称"
-    fun pairAction() = if (en) "Pair" else "配对"
+    /** Desktop `pair` — primary action on the phone pair sheet. */
+    fun pairAction() = if (en) "Start pairing" else "开始配对"
+    fun pairingBusy() = if (en) "Pairing…" else "配对中…"
+    fun pairTimeout() = if (en) {
+        "Pairing timed out. Confirm the desktop pairing window is open and this host:port is reachable."
+    } else {
+        "配对超时。请确认电脑已打开配对，且手机可达该 host:port。"
+    }
+    fun pairFailed() = if (en) "Pairing failed" else "配对失败"
     fun currentDevice() = if (en) "Current" else "当前"
     fun connecting() = if (en) "Connecting" else "连接中"
     fun unknownStatus() = if (en) "Unknown" else "未知"

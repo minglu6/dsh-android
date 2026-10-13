@@ -124,6 +124,8 @@ object Pocket {
     private const val MAX_FOLLOW_ATTEMPTS = 3
     /** Slow-link hello / dial budget (ref dsh-mobile SLOW_CONNECTIONS ~120s init wait). */
     private const val CONNECT_TIMEOUT_MS = 120_000L
+    /** Interactive pair sheet budget — fail visibly instead of spinning for the full connect wait. */
+    private const val PAIR_TIMEOUT_MS = 45_000L
     /** Current reconnect backoff; reset via [ReconnectBackoffPolicy] on Online or network restore. */
     private val backoffMs = AtomicLong(ReconnectBackoffPolicy.INITIAL_MS)
     /** Wakes a pending reconnect delay when the network becomes available. */
@@ -854,7 +856,11 @@ object Pocket {
             val draft = Profile("", name.ifBlank { "电脑" }, host = host, port = port)
             val factories = factoriesFor(draft)
             if (factories.isEmpty()) return@withContext Result.failure(Exception("无法建立 WebSocket 连接"))
-            val hello = c.connect(factories, Auth.Pair(code, Build.MODEL ?: "Android"))
+            val hello = c.connect(factories, Auth.Pair(code, Build.MODEL ?: "Android"), PAIR_TIMEOUT_MS)
+            val mismatch = pairCompatibilityIssue(hello)
+            if (mismatch != null) {
+                return@withContext Result.failure(Exception(compatibilityMessage(mismatch)))
+            }
             val token = hello.issuedToken ?: error("服务端未返回令牌")
             val p = Profile(
                 id = UUID.randomUUID().toString(),
@@ -867,10 +873,14 @@ object Pocket {
             )
             tokens.put(p.id, token)
             withContext(main.coroutineContext) {
-                applyCompatibility(hello)
+                compatibility.value = null
                 upsertProfile(p)
             }
             Result.success(p)
+        } catch (e: TimeoutCancellationException) {
+            Result.failure(Exception(L.pairTimeout()))
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: PocketError) {
             Result.failure(Exception(when {
                 e.code.contains("expired") -> "配对码已过期"
@@ -879,8 +889,21 @@ object Pocket {
                 else -> e.message
             }))
         } catch (e: Exception) {
-            Result.failure(Exception(e.message ?: "配对失败"))
+            Result.failure(Exception(e.message ?: L.pairFailed()))
         } finally { c.close() }
+    }
+
+    /** Version handshake check for pair — fail the sheet instead of saving a dead profile. */
+    internal fun pairCompatibilityIssue(hello: HelloResult): CompatibilityIssue? {
+        val handshake = hello.handshakeVersions()
+            ?: return CompatibilityIssue(CompatibilityIssueKind.PROTOCOL_UNSUPPORTED)
+        return VersionCompatibility.evaluate(BuildConfig.APP_VERSION, handshake)
+    }
+
+    internal fun compatibilityMessage(issue: CompatibilityIssue): String = when (issue.kind) {
+        CompatibilityIssueKind.PLUGIN_TOO_OLD -> L.pluginTooOld(issue.requiredVersion)
+        CompatibilityIssueKind.APP_TOO_OLD -> L.appTooOld(issue.requiredVersion)
+        CompatibilityIssueKind.PROTOCOL_UNSUPPORTED -> L.protocolUnsupported()
     }
 
     private fun upsertProfile(p: Profile) {

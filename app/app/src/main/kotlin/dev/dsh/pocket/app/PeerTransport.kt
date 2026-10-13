@@ -4,8 +4,8 @@ import dev.dsh.pocket.protocol.Route
 import dev.dsh.pocket.protocol.classifyWsRoute
 
 /**
- * Peer transport tabs on the connection screen: LAN and Tailscale only.
- * (Equal weight — LAN is never hidden behind Tailscale copy.)
+ * Peer transport kinds for address hints / profile classification.
+ * LAN and Tailscale are equal first-class peers (no segmented tabs on the phone UI).
  */
 enum class PeerTransport {
     Lan,
