@@ -323,11 +323,14 @@ class TranscriptReducer {
     private var outputTokens = 0L
     /** Latest whole-list todo snapshot (`todo/write` / projections.values.todos). */
     private var todos: List<TodoItem> = emptyList()
+    /** Host `plan` projection (`plan/mode` + projections.values.plan.active). */
+    private var planActive: Boolean = false
 
     val usage get() = Usage(turns, steps, inputTokens, cacheRead, outputTokens)
     fun stepRecords(): List<StepRecord> = settledSteps.toList()
     fun requestHeaders(): List<RequestHeaderFact> = headerFacts.toList()
     fun todos(): List<TodoItem> = todos
+    val planMode: Boolean get() = planActive
 
     fun items(): List<Item> = committed + (live?.items() ?: emptyList())
 
@@ -430,6 +433,7 @@ class TranscriptReducer {
         turns = 0; steps = 0; openTurn = null; openStep = null
         inputTokens = 0; cacheRead = 0; outputTokens = 0; running = false
         todos = emptyList()
+        planActive = false
     }
 
     private fun readProjections(p: JsonElement?) {
@@ -447,6 +451,9 @@ class TranscriptReducer {
                 val status = row["status"].str() ?: return@mapNotNull null
                 if (content.isEmpty()) null else TodoItem(content, status)
             }
+        }
+        values["plan"]?.let { plan ->
+            plan["active"].bool()?.let { planActive = it }
         }
     }
 
@@ -499,6 +506,9 @@ class TranscriptReducer {
                     val status = row["status"].str() ?: return@mapNotNull null
                     if (content.isEmpty()) null else TodoItem(content, status)
                 }
+            }
+            "plan/mode" -> {
+                planActive = data["active"].bool() ?: planActive
             }
             "step/start" -> {
                 val turn = data["turn"].long()?.toInt() ?: turns
