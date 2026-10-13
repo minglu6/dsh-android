@@ -306,6 +306,8 @@ fun ConnectionsScreen(pairLink: PairingLink?, onPairLinkConsumed: () -> Unit, ca
     var pairing by remember { mutableStateOf<PairingLink?>(null) }
     var showPair by remember { mutableStateOf(false) }
     var showScan by remember { mutableStateOf(false) }
+    var showTermux by remember { mutableStateOf(false) }
+    var termuxPaste by remember { mutableStateOf("") }
     var manageId by remember { mutableStateOf<String?>(null) }
     var repairTarget by remember { mutableStateOf<Profile?>(null) }
     var nearby by remember { mutableStateOf<List<DiscoveredHost>>(emptyList()) }
@@ -354,10 +356,39 @@ fun ConnectionsScreen(pairLink: PairingLink?, onPairLinkConsumed: () -> Unit, ca
             kotlinx.coroutines.delay(8_000)
         }
     }
-    LaunchedEffect(pairLink) { if (pairLink != null) { pairing = pairLink; showPair = true; onPairLinkConsumed() } }
+    LaunchedEffect(pairLink) {
+        val link = pairLink ?: return@LaunchedEffect
+        onPairLinkConsumed()
+        if (dev.dsh.pocket.protocol.isLoopbackHost(link.host)) {
+            termuxPaste = "dshpocket://pair?h=${link.host}:${link.port}&c=${link.code}"
+            showTermux = true
+        } else {
+            pairing = link
+            showPair = true
+        }
+    }
 
     Column(Modifier.fillMaxSize().background(Color.White).systemBarsPadding().verticalScroll(rememberScrollState())) {
         Header("连接", if (canBack) onBack else null)
+        Card {
+            Row(
+                Modifier.fillMaxWidth().clickable {
+                    termuxPaste = ""
+                    showTermux = true
+                }.padding(16.dp).testTag("termuxModeEntry"),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Box(Modifier.size(40.dp).clip(CircleShape).background(T.Fill2), contentAlignment = Alignment.Center) {
+                    Icon(Icons.Outlined.Terminal, null, tint = T.Ink, modifier = Modifier.size(20.dp))
+                }
+                Spacer(Modifier.width(14.dp))
+                Column(Modifier.weight(1f)) {
+                    Text(L.termuxMode(), fontSize = 16.sp, color = T.Ink)
+                    Text(L.termuxModeHint(), fontSize = 13.sp, color = T.Text3, modifier = Modifier.padding(top = 2.dp), maxLines = 2, overflow = TextOverflow.Ellipsis)
+                }
+                Icon(D.chevronRight, null, tint = T.Text3, modifier = Modifier.size(20.dp))
+            }
+        }
         if (sorted.isEmpty()) {
             Card {
                 Row(Modifier.fillMaxWidth().padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -365,7 +396,7 @@ fun ConnectionsScreen(pairLink: PairingLink?, onPairLinkConsumed: () -> Unit, ca
                     Spacer(Modifier.width(14.dp))
                     Column {
                         Text("连接到桌面端 dsh", fontSize = 16.sp, color = T.Ink)
-                        Text("扫码或粘贴电脑「手机连接」里的配对信息", fontSize = 13.sp, color = T.Text3, modifier = Modifier.padding(top = 2.dp))
+                        Text("扫码或粘贴电脑「手机连接」里的配对信息（Tailscale / 局域网）", fontSize = 13.sp, color = T.Text3, modifier = Modifier.padding(top = 2.dp))
                     }
                 }
             }
@@ -423,8 +454,21 @@ fun ConnectionsScreen(pairLink: PairingLink?, onPairLinkConsumed: () -> Unit, ca
         prefName = repairTarget?.name.orEmpty(),
         onDismiss = { showPair = false; repairTarget = null },
     ) { p -> showPair = false; repairTarget = null; Pocket.connect(p.id); onConnected() }
+    if (showTermux) TermuxConnectSheet(
+        initialPaste = termuxPaste,
+        onDismiss = { showTermux = false; termuxPaste = "" },
+    ) { p -> showTermux = false; termuxPaste = ""; Pocket.connect(p.id); onConnected() }
     if (showScan) ScanPairFlow(
-        onResult = { link -> pairing = link; showScan = false; showPair = true },
+        onResult = { link ->
+            showScan = false
+            if (dev.dsh.pocket.protocol.isLoopbackHost(link.host)) {
+                termuxPaste = "dshpocket://pair?h=${link.host}:${link.port}&c=${link.code}"
+                showTermux = true
+            } else {
+                pairing = link
+                showPair = true
+            }
+        },
         onDismiss = { showScan = false },
     )
     manage?.let { p ->
@@ -437,8 +481,13 @@ fun ConnectionsScreen(pairLink: PairingLink?, onPairLinkConsumed: () -> Unit, ca
             onRepair = {
                 manageId = null
                 repairTarget = p
-                pairing = if (!p.needsRepair) PairingLink(p.host, p.port, "") else null
-                showPair = true
+                if (!p.needsRepair && TermuxSidecar.isTermuxProfile(p.host)) {
+                    termuxPaste = "${p.host}:${p.port}"
+                    showTermux = true
+                } else {
+                    pairing = if (!p.needsRepair) PairingLink(p.host, p.port, "") else null
+                    showPair = true
+                }
             },
         )
     }

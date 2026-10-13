@@ -4,8 +4,8 @@ Gradle 工程根目录就是 `app/`。
 
 | 模块 | 内容 |
 |---|---|
-| `core/protocol` | 纯 Kotlin/JVM：`PocketClient`（WebSocket）、`Transport`（Tailscale / LAN 路由标签）、`TranscriptReducer`、模型等数据结构 |
-| `app` | Compose 界面、连接管理、前台服务（审批通知）、Keystore 加密 token |
+| `core/protocol` | 纯 Kotlin/JVM：`PocketClient`（WebSocket）、`Transport`（Tailscale / LAN / 本机 路由标签）、`TranscriptReducer`、模型等数据结构 |
+| `app` | Compose 界面、连接管理（含本机 Termux sidecar）、前台服务（审批通知）、Keystore 加密 token |
 
 界面按 [docs/mockups](../docs/mockups/) 实现，配色和圆角沿用 dsh 网页端。
 
@@ -26,9 +26,10 @@ APK **不再**包含 `libpocket_iroh.so`；连接只走 host:port WebSocket。
 ## 使用
 
 1. 电脑端：`dsh web` 装好插件后，设置 →「手机连接」打开配对（QR + `dshpocket://pair?h=host:port&c=`）。
-2. 手机端：连接 →「扫码配对」或「手动配对」填入电脑地址与 6 位码。
-3. 列表小标签按地址显示 `Tailscale` / `LAN`。旧 iroh 配置需重新配对。
-4. token 用 Android Keystore 的 AES-GCM 密钥加密保存。
+2. 手机端：连接 →「扫码配对」或「手动配对」填入电脑地址与 6 位码（Tailscale / 局域网）。
+3. 本机：连接 →「本机 Termux」，连 Termux 里 `127.0.0.1:port` 的 pocket；配对串或粘贴 token。见 [docs/termux-sidecar.md](../docs/termux-sidecar.md)。
+4. 列表小标签按地址显示 `Tailscale` / `LAN` / `本机`。旧 iroh 配置需重新配对。
+5. token 用 Android Keystore 的 AES-GCM 密钥加密保存。APK 不内嵌 Node/dsh，不执行 su。
 
 ## 功能对齐
 

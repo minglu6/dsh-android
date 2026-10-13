@@ -85,7 +85,7 @@ data class Profile(
         else -> when (routeKind) {
             Route.WsTailscale -> "Tailscale"
             Route.WsLan -> "LAN"
-            Route.WsLocal -> "local"
+            Route.WsLocal -> "本机"
             null -> "需重新配对"
         }
     }

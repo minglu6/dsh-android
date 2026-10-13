@@ -46,6 +46,11 @@ class FormatTest {
         assertEquals(false, lan.needsRepair)
         assertEquals("LAN", lan.kind)
 
+        val local = Profile("t", "Termux", host = "127.0.0.1", port = 7690)
+        assertEquals(false, local.needsRepair)
+        assertEquals("本机", local.kind)
+        assertEquals("127.0.0.1:7690", local.subtitle)
+
         val legacyIroh = Profile("a", "desk", nodeId = "abcdefghijklmnopqrst")
         assertEquals(true, legacyIroh.needsRepair)
         assertEquals("需重新配对", legacyIroh.kind)
