@@ -15,6 +15,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.paneTitle
 import androidx.compose.ui.semantics.semantics
@@ -36,6 +38,7 @@ internal fun RightPanelFrame(
     onDismiss: () -> Unit,
     onBack: (() -> Unit)? = null,
     actions: @Composable RowScope.() -> Unit = {},
+    keyboardFirstBack: Boolean = false,
     content: @Composable ColumnScope.() -> Unit,
 ) {
     Dialog(
@@ -63,8 +66,12 @@ internal fun RightPanelFrame(
                         Modifier.fillMaxWidth().heightIn(min = 56.dp).padding(horizontal = 8.dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
+                        val keyboard = LocalSoftwareKeyboardController.current
+                        val imeVisible = WindowInsets.ime.getBottom(LocalDensity.current) > 0
                         if (onBack != null) {
-                            IconButton(onBack) { Icon(D.chevronLeft, panelText("返回", "Back"), tint = T.Text2, modifier = Modifier.size(20.dp)) }
+                            IconButton({
+                                if (keyboardFirstBack && imeVisible) keyboard?.hide() else onBack()
+                            }) { Icon(D.chevronLeft, panelText("返回", "Back"), tint = T.Text2, modifier = Modifier.size(20.dp)) }
                         } else {
                             Icon(ImageVector.vectorResource(R.drawable.dsh_compass), null, tint = T.Text3,
                                 modifier = Modifier.padding(horizontal = 12.dp).size(16.dp))

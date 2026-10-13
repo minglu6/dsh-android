@@ -1,8 +1,8 @@
 package dev.dsh.pocket.app
 
-import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -32,6 +32,7 @@ fun TerminalSheet(sessionId: String, onDismiss: () -> Unit, onBack: (() -> Unit)
     var confirmTerminate by remember(sessionId) { mutableStateOf(false) }
     var terminating by remember(sessionId) { mutableStateOf(false) }
     var operationError by remember(sessionId) { mutableStateOf<String?>(null) }
+    var menuOpen by remember(sessionId) { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
     val online = connections[active] == Dot.Online
     val current = meta?.takeIf { it.sessionId == sessionId && !opening }
@@ -78,6 +79,33 @@ fun TerminalSheet(sessionId: String, onDismiss: () -> Unit, onBack: (() -> Unit)
         title = current?.title?.takeIf { it.isNotBlank() } ?: terminalText("终端", "Terminal"),
         onDismiss = onDismiss,
         onBack = onBack,
+        keyboardFirstBack = true,
+        actions = {
+            val label = when {
+                !online -> terminalText("离线", "Offline")
+                opening -> terminalText("连接中", "Connecting")
+                terminating -> terminalText("终止中", "Stopping")
+                running -> terminalText("运行中", "Running")
+                else -> terminalText("已停止", "Stopped")
+            }
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(5.dp),
+                modifier = Modifier.padding(horizontal = 4.dp).semantics(mergeDescendants = true) {}) {
+                Box(Modifier.size(6.dp).background(if (running) T.Ok else T.Text3, CircleShape))
+                Text(label, color = T.Text3, fontSize = 11.sp)
+            }
+            if (current != null && "terminal.close" in ops) Box {
+                IconButton(onClick = { menuOpen = true }) {
+                    Icon(D.ellipsis, terminalText("终端操作", "Terminal actions"), Modifier.size(18.dp), tint = T.Text2)
+                }
+                DropdownMenu(menuOpen, { menuOpen = false }, containerColor = T.Surface) {
+                    DropdownMenuItem(
+                        text = { Text(terminalText("终止终端…", "Terminate terminal…"), color = if (running) T.Err else T.Text3) },
+                        enabled = running,
+                        onClick = { menuOpen = false; confirmTerminate = true },
+                    )
+                }
+            }
+        },
     ) {
         val status = when {
             !online -> terminalText("连接已断开；连接恢复后会重新附加。", "Disconnected; reattaching when the connection returns.")
@@ -92,26 +120,23 @@ fun TerminalSheet(sessionId: String, onDismiss: () -> Unit, onBack: (() -> Unit)
             Text(operationError ?: status.orEmpty(), color = if (operationError != null) T.Err else T.Text3, fontSize = 12.sp,
                 modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp).semantics { liveRegion = LiveRegionMode.Polite })
         }
-        Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), verticalAlignment = Alignment.CenterVertically) {
-            if (!running) {
-                TextButton(onClick = { attempt++ }, enabled = online && !opening && !terminating) {
+        if (!running && !opening && !terminating && online) {
+            Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                TextButton(onClick = { attempt++ }) {
                     Icon(D.refresh, null, Modifier.size(16.dp))
                     Spacer(Modifier.width(6.dp))
                     Text(terminalText("重新连接", "Reconnect"))
                 }
-                TextButton(onClick = { forceNew = true; attempt++ }, enabled = online && !opening && !terminating && "terminal.create" in ops) {
+                if ("terminal.create" in ops) TextButton(onClick = { forceNew = true; attempt++ }) {
                     Text(terminalText("新建终端", "New terminal"))
                 }
-            }
-            if (current != null && "terminal.close" in ops) TextButton(onClick = { confirmTerminate = true }, enabled = running) {
-                Text(terminalText("终止终端", "Terminate"), color = if (running) T.Err else T.Text3)
             }
         }
         if (current != null || everAttached) {
             TerminalView(
                 terminal = Pocket.terminal,
                 revision = revision,
-                modifier = Modifier.fillMaxWidth().weight(1f).padding(8.dp),
+                modifier = Modifier.fillMaxWidth().weight(1f),
                 enabled = running,
                 onResize = { cols, rows -> if (online) Pocket.resizeTerminal(cols, rows) },
                 onInput = { if (running) Pocket.writeTerminal(it) },
