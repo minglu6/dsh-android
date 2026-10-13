@@ -21,11 +21,31 @@ test('files.list builds scope from session header cwd', async () => {
   const ops = filesOps({
     list: async (scope, path) => ({ path, scope, entries: [{ name: 'a.ts', type: 'file' }] }),
     read: async () => ({ text: 'hi' }),
+    readBytes: async () => ({ absolutePath: '/tmp/ws/a.png', version: 'v1', bytes: 3, offset: 0, eof: true, data: Uint8Array.from([1, 2, 3]) }),
   }, { get: (id) => id === 's1' ? { header: { cwd: '/tmp/ws' } } : undefined })
   const listed = await ops['files.list']({ sessionId: 's1', path: 'src' }, AbortSignal.timeout(1000))
   assert.equal(listed.scope.workspaceRoot, '/tmp/ws')
   assert.equal(listed.path, 'src')
   assert.equal(listed.entries[0].name, 'a.ts')
+})
+
+test('files.readBytes base64-encodes host Uint8Array for JSON transport', async () => {
+  const ops = filesOps({
+    list: async () => ({ path: '.', entries: [] }),
+    read: async () => ({ text: '' }),
+    readBytes: async (scope, path) => ({
+      absolutePath: `${scope.workspaceRoot}/${path}`,
+      version: 'v1',
+      bytes: 4,
+      offset: 0,
+      eof: true,
+      data: Uint8Array.from([0x89, 0x50, 0x4e, 0x47]),
+    }),
+  }, { get: (id) => id === 's1' ? { header: { cwd: '/tmp/ws' } } : undefined })
+  const r = await ops['files.readBytes']({ sessionId: 's1', path: 'a.png' }, AbortSignal.timeout(1000))
+  assert.equal(r.encoding, 'base64')
+  assert.equal(r.eof, true)
+  assert.equal(Buffer.from(r.data, 'base64').equals(Buffer.from([0x89, 0x50, 0x4e, 0x47])), true)
 })
 
 test('jobs.list returns first rows frame then stops', async () => {

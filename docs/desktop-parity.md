@@ -13,7 +13,7 @@ Decision tags used in §9:
 | **needs-plugin** | Host has the data/API; pocket must forward it before UI can finish |
 | **hide** | Requires local desktop chrome (OS picker, embedded browser, plugin install UI, schedule CRUD, credentials). Do not show a stub |
 
-Phone constraints (always): Tokyo Night tokens where terminal/code surfaces need them, Meslo for mono, themed bottom sheets (no system `AlertDialog`), desktop locale strings only, no `FLAG_SECURE`, no secrets in logs, no GMS.
+Phone constraints (always): desktop `--dsw-alias-*` chrome (light/dark via Appearance), Tokyo Night tokens where terminal/code surfaces need them, Meslo for mono, themed bottom sheets (no system `AlertDialog`), desktop locale strings only, no `FLAG_SECURE`, no secrets in logs, no GMS.
 
 ---
 
@@ -207,7 +207,7 @@ Phone adaptation: themed bottom sheets.
 | 工作区文件 | `guide.title` 工作区文件 | `files.list` / `files.read` | feasible (done) |
 | 终端 | `title` 终端 / guide `新建终端` | `terminal.*` | feasible (done) |
 | 浏览器 | `guide.title` 浏览器 | client iframe only | **hide** |
-| 文档预览 | documentpreview locales | Host file bytes + preview (opened via `openResource`, not a guide capsule) | **needs-plugin** / heavy; text subset via `files.read` |
+| 文档预览 | documentpreview locales | Host file bytes + preview (opened via `openResource`, not a guide capsule) | **done** — `files.read` text paging + `files.readBytes` (base64) for image/PDF; `FilePreviewSheet` |
 | Dock split / float | `dock.*` | desktop layout | **hide** (phone sheets) |
 | Deliverable / changes-review tabs | `deliverables.*` | events / turn payloads | feasible once events parsed |
 
@@ -323,7 +323,10 @@ Appearance values from `ui-theme` locales. Performance: `settings.performance.{c
 | Gap | Notes |
 |---|---|
 | Folder attach | desktop-only (**hide**) |
-| Appearance theme tokens | prefs + labels done; new settings pages use `MaterialTheme.colorScheme` (parallel theme-token agent) |
+| Appearance theme tokens | **done** — full `--dsw-alias-*` / `--dsw-specific-*` from ui-theme design-platform.css @ d743267 → `DswColors` + theme-aware `T.*`; Appearance Light/Dark/System drives chrome |
+| Document preview (text / image / PDF) | **done** — tap file path/link in chat or trajectory → `FilePreviewSheet` via `files.read` / `files.readBytes`; copy uses common `copy`/`copied`; PDF via `PdfRenderer` (no GMS) |
+| Wide / foldable layout | **done** — ≥600dp two-pane sidebar (desktop-like) + Layout Auto/Phone/Desktop pref |
+| Drawer tap / safe-area | **done** — session row closes drawer; workspace collapse does not; drawer session menu is `DropdownMenu` (first tap not eaten); sheets/nav use system bar insets |
 | OS workspace picker / browser / open-config / local-path plugin install | **hide** (desktop OS chrome) |
 | Schedule pause toggle | desktop has no pause — `inactive` means ended after delivery |
 | Plugin schema ConfigForm editors | desktop `configForms` is client-side over settings namespaces; phone shows enable/detail/parts. Full schema-driven forms stay limited — use `models.settingsMutate` / Host settings when a namespace is known |

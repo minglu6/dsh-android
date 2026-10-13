@@ -38,14 +38,21 @@ fun PocketSheet(onDismiss: () -> Unit, content: @Composable ColumnScope.() -> Un
         onDismiss,
         sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
         shape = T.Sheet,
-        containerColor = Color.White,
+        containerColor = T.Surface,
         scrimColor = T.Scrim,
         tonalElevation = 0.dp,
         // Never inherit/set FLAG_SECURE — screenshots & recording stay allowed on every sheet.
         properties = ModalBottomSheetProperties(securePolicy = SecureFlagPolicy.SecureOff),
         dragHandle = { Box(Modifier.padding(top = 10.dp, bottom = 14.dp).size(40.dp, 4.dp).clip(CircleShape).background(T.Border)) },
     ) {
-        Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(bottom = 24.dp), content = content)
+        Column(
+            Modifier
+                .fillMaxWidth()
+                .navigationBarsPadding()
+                .verticalScroll(rememberScrollState())
+                .padding(bottom = 24.dp),
+            content = content,
+        )
     }
 }
 
@@ -392,13 +399,13 @@ fun TerminalSheet(sessionId: String, onDismiss: () -> Unit) {
         onDismissRequest = dismiss,
         sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
         shape = T.Sheet,
-        containerColor = Color.White,
+        containerColor = T.Surface,
         scrimColor = T.Scrim,
         tonalElevation = 0.dp,
         properties = ModalBottomSheetProperties(securePolicy = SecureFlagPolicy.SecureOff),
         dragHandle = { Box(Modifier.padding(top = 10.dp, bottom = 14.dp).size(40.dp, 4.dp).clip(CircleShape).background(T.Border)) },
     ) {
-        Column(Modifier.fillMaxWidth().padding(bottom = 24.dp)) {
+        Column(Modifier.fillMaxWidth().navigationBarsPadding().padding(bottom = 24.dp)) {
             Row(Modifier.padding(horizontal = 22.dp), verticalAlignment = Alignment.CenterVertically) {
                 Text(meta?.title ?: "终端", fontSize = 18.sp, fontWeight = FontWeight.SemiBold, color = T.Ink)
                 Spacer(Modifier.weight(1f))
@@ -420,7 +427,7 @@ fun FilesSheet(sessionId: String, onDismiss: () -> Unit) {
     var path by remember { mutableStateOf(".") }
     var entries by remember { mutableStateOf<List<Pair<String, String>>>(emptyList()) }
     var err by remember { mutableStateOf<String?>(null) }
-    var preview by remember { mutableStateOf<String?>(null) }
+    var previewPath by remember { mutableStateOf<String?>(null) }
     val scope = rememberCoroutineScope()
     fun load(p: String) {
         scope.launch {
@@ -432,21 +439,21 @@ fun FilesSheet(sessionId: String, onDismiss: () -> Unit) {
                     val type = e["type"].str() ?: "file"
                     name to type
                 }
-                err = null; preview = null
+                err = null
             }.onFailure { err = it.message }
         }
     }
     LaunchedEffect(sessionId) { load(".") }
+    if (previewPath != null) {
+        FilePreviewSheet(sessionId, previewPath!!, onDismiss = { previewPath = null })
+        return
+    }
     PocketSheet(onDismiss) {
         SheetTitle("工作区文件")
         SelectableOutput {
             Text(path, style = T.Mono.copy(color = T.Text3), modifier = Modifier.padding(horizontal = 22.dp, vertical = 4.dp))
         }
         err?.let { SelectableOutput { Text(it, color = T.Err, fontSize = 13.sp, modifier = Modifier.padding(22.dp)) } }
-        preview?.let {
-            CodeBox(it, maxLines = 60)
-            return@PocketSheet
-        }
         if (path != "." && path != "/") {
             OptionRow("..", icon = D.folderOpen) {
                 val parent = path.trimEnd('/').substringBeforeLast('/', ".")
@@ -456,12 +463,7 @@ fun FilesSheet(sessionId: String, onDismiss: () -> Unit) {
         entries.forEach { (name, type) ->
             val child = if (path == "." || path.isEmpty()) name else "${path.trimEnd('/')}/$name"
             OptionRow(name, type, if (type == "directory") D.folderOpen else D.plan) {
-                if (type == "directory") load(child) else scope.launch {
-                    runCatching {
-                        val r = Pocket.readFile(sessionId, child)
-                        preview = r["text"].str() ?: r["content"].str() ?: r.toString()
-                    }.onFailure { err = it.message }
-                }
+                if (type == "directory") load(child) else previewPath = child
             }
         }
     }
@@ -640,4 +642,4 @@ fun FeedbackCategorySheet(onDismiss: () -> Unit, onSubmit: (category: String?, n
 
 /** Black primary button; label/progress always white (also under OEM force-dark). */
 @Composable
-fun PrimaryColors() = ButtonDefaults.buttonColors(containerColor = T.Ink, contentColor = Color.White, disabledContainerColor = T.Caption, disabledContentColor = Color.White)
+fun PrimaryColors() = ButtonDefaults.buttonColors(containerColor = T.PrimaryButton, contentColor = T.OnPrimary, disabledContainerColor = T.Caption, disabledContentColor = T.OnPrimary)

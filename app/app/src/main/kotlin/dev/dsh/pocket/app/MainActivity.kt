@@ -10,12 +10,14 @@ import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.unit.dp
 import dev.dsh.pocket.protocol.PairingLink
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
@@ -81,6 +83,10 @@ private fun Root(deepLink: MutableStateFlow<PairingLink?>) {
     val drawer = rememberDrawerState(DrawerValue.Closed)
     val scope = rememberCoroutineScope()
     val snack = remember { SnackbarHostState() }
+    val widthDp = LocalConfiguration.current.screenWidthDp
+    val layoutMode = Pocket.prefs.layoutMode
+    val twoPane = useTwoPaneLayout(widthDp, layoutMode)
+    var drawerMenuOpen by remember { mutableStateOf(false) }
 
     LaunchedEffect(active) {
         if (active == null) return@LaunchedEffect
@@ -113,9 +119,9 @@ private fun Root(deepLink: MutableStateFlow<PairingLink?>) {
             else -> Screen.Chat
         }
     }
-    BackHandler(drawer.isOpen) { scope.launch { drawer.close() } }
+    BackHandler(!twoPane && drawer.isOpen) { scope.launch { drawer.close() } }
 
-    Box(Modifier.fillMaxSize()) {
+    Box(Modifier.fillMaxSize().background(T.Bg)) {
         when (screen) {
             Screen.Connections -> ConnectionsScreen(
                 pairLink = link, onPairLinkConsumed = { deepLink.value = null },
@@ -136,23 +142,44 @@ private fun Root(deepLink: MutableStateFlow<PairingLink?>) {
             Screen.Plugins -> PluginsSettingsScreen(onBack = { screen = Screen.Settings })
             Screen.Schedule -> ScheduleSettingsScreen(onBack = { screen = Screen.Settings })
             Screen.Credentials -> CredentialsSettingsScreen(onBack = { screen = Screen.Settings })
-            Screen.Chat -> ModalNavigationDrawer(
-                drawerState = drawer,
-                drawerContent = {
+            Screen.Chat -> {
+                val drawerContent: @Composable () -> Unit = {
                     SessionDrawer(
-                        onPick = { Pocket.openSession(it); scope.launch { drawer.close() } },
-                        onNew = { Pocket.closeChat(); scope.launch { drawer.close() } },
-                        onSettings = { screen = Screen.Settings; scope.launch { drawer.close() } },
-                        onConnections = { screen = Screen.Connections; scope.launch { drawer.close() } },
+                        permanent = twoPane,
+                        onPick = { Pocket.openSession(it); if (!twoPane) scope.launch { drawer.close() } },
+                        onNew = { Pocket.closeChat(); if (!twoPane) scope.launch { drawer.close() } },
+                        onSettings = { screen = Screen.Settings; if (!twoPane) scope.launch { drawer.close() } },
+                        onConnections = { screen = Screen.Connections; if (!twoPane) scope.launch { drawer.close() } },
+                        onMenuOpenChange = { drawerMenuOpen = it },
                     )
-                },
-            ) { ChatRoot(onMenu = { scope.launch { drawer.open() } }) }
+                }
+                if (twoPane) {
+                    Row(Modifier.fillMaxSize().statusBarsPadding()) {
+                        drawerContent()
+                        VerticalDivider(color = T.Border, thickness = 0.5.dp)
+                        Box(Modifier.weight(1f).fillMaxHeight().navigationBarsPadding()) {
+                            ChatRoot(onMenu = {}, showMenuButton = false)
+                        }
+                    }
+                } else {
+                    ModalNavigationDrawer(
+                        drawerState = drawer,
+                        gesturesEnabled = !drawerMenuOpen,
+                        drawerContent = { drawerContent() },
+                    ) {
+                        ChatRoot(onMenu = { scope.launch { drawer.open() } }, showMenuButton = true)
+                    }
+                }
+            }
         }
-        SnackbarHost(snack, Modifier.align(androidx.compose.ui.Alignment.BottomCenter).padding(bottom = 120.dp)) {
-            Snackbar(it, containerColor = T.Ink, contentColor = Color.White, shape = T.R12)
+        SnackbarHost(snack, Modifier.align(androidx.compose.ui.Alignment.BottomCenter).navigationBarsPadding().padding(bottom = 120.dp)) {
+            Snackbar(
+                it,
+                containerColor = ThemeState.colors.ToastBg,
+                contentColor = ThemeState.colors.ToastLabel,
+                shape = T.R12,
+            )
         }
     }
     if (profiles.isEmpty() && screen == Screen.Chat) screen = Screen.Connections
 }
-
-private val Int.dp get() = androidx.compose.ui.unit.Dp(this.toFloat())

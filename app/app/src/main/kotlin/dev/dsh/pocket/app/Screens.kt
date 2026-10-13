@@ -83,9 +83,66 @@ fun drawerWidthFor(screenWidth: Dp, fraction: Float = 0.8f, max: Dp = DrawerMaxW
     minOf(screenWidth * fraction, max)
 
 val DrawerMaxWidth = 320.dp
+val SidebarPaneWidth = 280.dp
+
+/** Breakpoint matching Material compact/medium (≥600dp → desktop two-pane). */
+const val WideLayoutMinDp = 600
+
+fun useTwoPaneLayout(widthDp: Int, mode: LayoutMode = runCatching { Pocket.prefs.layoutMode }.getOrDefault(LayoutMode.Auto)): Boolean =
+    when (mode) {
+        LayoutMode.Desktop -> true
+        LayoutMode.Phone -> false
+        LayoutMode.Auto -> widthDp >= WideLayoutMinDp
+    }
 
 @Composable
-fun SessionDrawer(onPick: (String) -> Unit, onNew: () -> Unit, onSettings: () -> Unit, onConnections: () -> Unit) {
+fun SessionDrawer(
+    onPick: (String) -> Unit,
+    onNew: () -> Unit,
+    onSettings: () -> Unit,
+    onConnections: () -> Unit,
+    permanent: Boolean = false,
+    onMenuOpenChange: (Boolean) -> Unit = {},
+) {
+    val drawerWidth = if (permanent) SidebarPaneWidth else drawerWidthFor(LocalConfiguration.current.screenWidthDp.dp)
+    val body: @Composable () -> Unit = {
+        SessionDrawerBody(
+            onPick = onPick,
+            onNew = onNew,
+            onSettings = onSettings,
+            onConnections = onConnections,
+            onMenuOpenChange = onMenuOpenChange,
+        )
+    }
+    if (permanent) {
+        Column(
+            Modifier
+                .width(drawerWidth)
+                .fillMaxHeight()
+                .background(T.Drawer)
+                .statusBarsPadding()
+                .navigationBarsPadding()
+                .testTag("sessionDrawer"),
+        ) { body() }
+    } else {
+        ModalDrawerSheet(
+            drawerContainerColor = T.Drawer,
+            drawerShape = RoundedCornerShapeEnd,
+            modifier = Modifier.width(drawerWidth).testTag("sessionDrawer"),
+        ) {
+            Column(Modifier.fillMaxHeight().systemBarsPadding()) { body() }
+        }
+    }
+}
+
+@Composable
+private fun SessionDrawerBody(
+    onPick: (String) -> Unit,
+    onNew: () -> Unit,
+    onSettings: () -> Unit,
+    onConnections: () -> Unit,
+    onMenuOpenChange: (Boolean) -> Unit,
+) {
     val sessions by Pocket.sessions.collectAsState()
     val chat by Pocket.chat.collectAsState()
     val active by Pocket.active.collectAsState()
@@ -94,12 +151,13 @@ fun SessionDrawer(onPick: (String) -> Unit, onNew: () -> Unit, onSettings: () ->
     val pinned by Pocket.pinnedIds.collectAsState()
     val ops by Pocket.ops.collectAsState()
     val profile = Pocket.profiles.collectAsState().value.firstOrNull { it.id == active }
-    val drawerWidth = drawerWidthFor(LocalConfiguration.current.screenWidthDp.dp)
     var search by remember { mutableStateOf("") }
     var searching by remember { mutableStateOf(false) }
     var searchHits by remember { mutableStateOf<List<dev.dsh.pocket.protocol.SessionSummary>?>(null) }
     var showArchived by remember { mutableStateOf(false) }
-    var menuSession by remember { mutableStateOf<dev.dsh.pocket.protocol.SessionSummary?>(null) }
+    var menuSessionId by remember { mutableStateOf<String?>(null) }
+    var collapsedWorkspaces by remember { mutableStateOf(setOf<String>()) }
+    LaunchedEffect(menuSessionId) { onMenuOpenChange(menuSessionId != null) }
     LaunchedEffect(search) {
         if (search.isBlank() || "sessions.search" !in ops) {
             searchHits = null; searching = false; return@LaunchedEffect
@@ -108,146 +166,136 @@ fun SessionDrawer(onPick: (String) -> Unit, onNew: () -> Unit, onSettings: () ->
         kotlinx.coroutines.delay(250)
         Pocket.searchSessions(search) { searchHits = it; searching = false }
     }
-    ModalDrawerSheet(
-        drawerContainerColor = T.Drawer,
-        drawerShape = RoundedCornerShapeEnd,
-        modifier = Modifier.width(drawerWidth).testTag("sessionDrawer"),
-    ) {
-        Column(Modifier.fillMaxHeight().systemBarsPadding()) {
-            Row(Modifier.padding(start = 18.dp, end = 18.dp, top = 18.dp, bottom = 12.dp), verticalAlignment = Alignment.CenterVertically) {
-                androidx.compose.foundation.Image(D.wordmark, "deepseek HARNESS", modifier = Modifier.height(22.dp).width(167.dp))
-                Spacer(Modifier.width(8.dp))
-                Row(
-                    Modifier.weight(1f).clip(T.R8).clickable(onClick = onConnections).padding(4.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.End,
-                ) {
-                    StatusDot(status[active]); Spacer(Modifier.width(6.dp))
-                    Text(profile?.name ?: "未连接", fontSize = 13.sp, color = T.Text2, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                }
-            }
-            Row(Modifier.padding(horizontal = 12.dp).fillMaxWidth().clip(T.R12).background(Color.White).border(1.dp, T.Border, T.R12).clickable(onClick = onNew).padding(12.dp),
-                horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically) {
-                Icon(D.newChat, null, Modifier.size(16.dp), tint = T.Ink); Spacer(Modifier.width(6.dp)); Text("新会话", fontSize = 15.sp)
-            }
-            Spacer(Modifier.height(8.dp))
+    Column(Modifier.fillMaxHeight()) {
+        Row(Modifier.padding(start = 18.dp, end = 18.dp, top = 18.dp, bottom = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+            androidx.compose.foundation.Image(D.wordmark, "deepseek HARNESS", modifier = Modifier.height(22.dp).width(167.dp))
+            Spacer(Modifier.width(8.dp))
             Row(
-                Modifier.padding(horizontal = 12.dp).fillMaxWidth().clip(T.R12).background(Color.White).border(1.dp, T.Border, T.R12)
-                    .padding(horizontal = 12.dp, vertical = 10.dp),
+                Modifier.weight(1f).clip(T.R8).clickable(onClick = onConnections).padding(4.dp),
                 verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.End,
             ) {
-                Icon(D.search, L.searchSessions(), Modifier.size(16.dp), tint = T.Text3)
-                Spacer(Modifier.width(8.dp))
-                BasicTextField(
-                    search,
-                    { search = it },
-                    singleLine = true,
-                    textStyle = androidx.compose.ui.text.TextStyle(fontSize = 14.sp, color = T.Ink),
-                    cursorBrush = SolidColor(T.Accent),
-                    modifier = Modifier.weight(1f).testTag("sessionSearch"),
-                    decorationBox = { inner ->
-                        if (search.isEmpty()) Text(L.searchSessions(), fontSize = 14.sp, color = T.Caption)
-                        inner()
-                    },
-                )
-                if (search.isNotEmpty()) {
-                    Text(L.clearSearch(), fontSize = 12.sp, color = T.Text3, modifier = Modifier.clickable {
-                        search = ""; searchHits = null
-                    })
+                StatusDot(status[active]); Spacer(Modifier.width(6.dp))
+                Text(profile?.name ?: "未连接", fontSize = 13.sp, color = T.Text2, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            }
+        }
+        Row(
+            Modifier.padding(horizontal = 12.dp).fillMaxWidth().clip(T.R12).background(T.Surface).border(1.dp, T.Border, T.R12)
+                .clickable(onClick = onNew).padding(12.dp),
+            horizontalArrangement = Arrangement.Center,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(D.newChat, null, Modifier.size(16.dp), tint = T.Ink); Spacer(Modifier.width(6.dp)); Text("新会话", fontSize = 15.sp)
+        }
+        Spacer(Modifier.height(8.dp))
+        Row(
+            Modifier.padding(horizontal = 12.dp).fillMaxWidth().clip(T.R12).background(T.Surface).border(1.dp, T.Border, T.R12)
+                .padding(horizontal = 12.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(D.search, L.searchSessions(), Modifier.size(16.dp), tint = T.Text3)
+            Spacer(Modifier.width(8.dp))
+            BasicTextField(
+                search,
+                { search = it },
+                singleLine = true,
+                textStyle = androidx.compose.ui.text.TextStyle(fontSize = 14.sp, color = T.Ink),
+                cursorBrush = SolidColor(T.Accent),
+                modifier = Modifier.weight(1f).testTag("sessionSearch"),
+                decorationBox = { inner ->
+                    if (search.isEmpty()) Text(L.searchSessions(), fontSize = 14.sp, color = T.Caption)
+                    inner()
+                },
+            )
+            if (search.isNotEmpty()) {
+                Text(L.clearSearch(), fontSize = 12.sp, color = T.Text3, modifier = Modifier.clickable {
+                    search = ""; searchHits = null
+                })
+            }
+        }
+        if ("workspace.state" in ops) {
+            Text(
+                if (showArchived) "全部对话（显示已归档）" else "隐藏已归档",
+                fontSize = 12.sp,
+                color = T.Accent,
+                modifier = Modifier.padding(horizontal = 22.dp, vertical = 6.dp).clickable { showArchived = !showArchived },
+            )
+        }
+        Spacer(Modifier.height(2.dp))
+        Text("工作区", fontSize = 13.sp, color = T.Text3, modifier = Modifier.padding(start = 22.dp, top = 8.dp, bottom = 6.dp))
+        Column(Modifier.weight(1f).verticalScroll(rememberScrollState())) {
+            when {
+                searching -> Text(L.searchingSessions(), fontSize = 14.sp, color = T.Caption, modifier = Modifier.padding(horizontal = 22.dp, vertical = 10.dp))
+                searchHits != null -> {
+                    val hits = searchHits!!
+                    if (hits.isEmpty()) Text(L.noMatchingSessions(), fontSize = 14.sp, color = T.Caption, modifier = Modifier.padding(horizontal = 22.dp, vertical = 10.dp))
+                    else hits.forEach { s ->
+                        SessionRow(
+                            s, selected = s.sessionId == chat?.sessionId,
+                            archived = s.sessionId in archived, pinned = s.sessionId in pinned,
+                            menuOpen = menuSessionId == s.sessionId,
+                            onPick = { onPick(s.sessionId) },
+                            onMenuOpenChange = { open -> menuSessionId = if (open) s.sessionId else null },
+                        )
+                    }
                 }
-            }
-            if ("workspace.state" in ops) {
-                Text(
-                    if (showArchived) "全部对话（显示已归档）" else "隐藏已归档",
-                    fontSize = 12.sp,
-                    color = T.Accent,
-                    modifier = Modifier.padding(horizontal = 22.dp, vertical = 6.dp).clickable { showArchived = !showArchived },
-                )
-            }
-            Spacer(Modifier.height(2.dp))
-            Text("工作区", fontSize = 13.sp, color = T.Text3, modifier = Modifier.padding(start = 22.dp, top = 8.dp, bottom = 6.dp))
-            Column(Modifier.weight(1f).verticalScroll(rememberScrollState())) {
-                when {
-                    searching -> Text(L.searchingSessions(), fontSize = 14.sp, color = T.Caption, modifier = Modifier.padding(horizontal = 22.dp, vertical = 10.dp))
-                    searchHits != null -> {
-                        val hits = searchHits!!
-                        if (hits.isEmpty()) Text(L.noMatchingSessions(), fontSize = 14.sp, color = T.Caption, modifier = Modifier.padding(horizontal = 22.dp, vertical = 10.dp))
-                        else hits.forEach { s ->
+                else -> {
+                    val pinnedList = sessions.filter { it.sessionId in pinned && it.parentSessionId == null && !it.blank }
+                    val top = sessions.filter {
+                        it.parentSessionId == null && !it.blank &&
+                            it.sessionId !in pinned &&
+                            (showArchived || it.sessionId !in archived)
+                    }
+                    if (pinnedList.isEmpty() && top.isEmpty()) {
+                        Text(if (status[active] == Dot.Online) "暂无会话" else "连接后显示会话", fontSize = 14.sp, color = T.Caption, modifier = Modifier.padding(horizontal = 22.dp, vertical = 10.dp))
+                    }
+                    if (pinnedList.isNotEmpty()) {
+                        Text(L.pinned(), fontSize = 12.sp, color = T.Text3, modifier = Modifier.padding(horizontal = 22.dp, vertical = 4.dp))
+                        pinnedList.forEach { s ->
                             SessionRow(
                                 s, selected = s.sessionId == chat?.sessionId,
-                                archived = s.sessionId in archived, pinned = s.sessionId in pinned,
+                                archived = s.sessionId in archived, pinned = true,
+                                menuOpen = menuSessionId == s.sessionId,
                                 onPick = { onPick(s.sessionId) },
-                                onMenu = { menuSession = s },
+                                onMenuOpenChange = { open -> menuSessionId = if (open) s.sessionId else null },
                             )
                         }
                     }
-                    else -> {
-                        val pinnedList = sessions.filter { it.sessionId in pinned && it.parentSessionId == null && !it.blank }
-                        val top = sessions.filter {
-                            it.parentSessionId == null && !it.blank &&
-                                it.sessionId !in pinned &&
-                                (showArchived || it.sessionId !in archived)
+                    top.groupBy { it.cwd?.trimEnd('/')?.substringAfterLast('/') ?: "默认" }.forEach { (ws, list) ->
+                        val collapsed = ws in collapsedWorkspaces
+                        Row(
+                            Modifier
+                                .fillMaxWidth()
+                                .clip(T.R8)
+                                .clickable {
+                                    collapsedWorkspaces = if (collapsed) collapsedWorkspaces - ws else collapsedWorkspaces + ws
+                                }
+                                .padding(horizontal = 22.dp, vertical = 8.dp)
+                                .testTag("workspaceCollapse:$ws"),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Icon(D.folderOpen, null, Modifier.size(17.dp), tint = T.Accent)
+                            Spacer(Modifier.width(10.dp))
+                            Text(ws, fontSize = 15.sp, color = T.Ink, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+                            Text(if (collapsed) L.expand() else L.collapse(), fontSize = 12.sp, color = T.Caption)
                         }
-                        if (pinnedList.isEmpty() && top.isEmpty()) {
-                            Text(if (status[active] == Dot.Online) "暂无会话" else "连接后显示会话", fontSize = 14.sp, color = T.Caption, modifier = Modifier.padding(horizontal = 22.dp, vertical = 10.dp))
-                        }
-                        if (pinnedList.isNotEmpty()) {
-                            Text(L.pinned(), fontSize = 12.sp, color = T.Text3, modifier = Modifier.padding(horizontal = 22.dp, vertical = 4.dp))
-                            pinnedList.forEach { s ->
-                                SessionRow(
-                                    s, selected = s.sessionId == chat?.sessionId,
-                                    archived = s.sessionId in archived, pinned = true,
-                                    onPick = { onPick(s.sessionId) },
-                                    onMenu = { menuSession = s },
-                                )
-                            }
-                        }
-                        top.groupBy { it.cwd?.trimEnd('/')?.substringAfterLast('/') ?: "默认" }.forEach { (ws, list) ->
-                            Row(Modifier.fillMaxWidth().padding(horizontal = 22.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-                                Icon(D.folderOpen, null, Modifier.size(17.dp), tint = T.Accent); Spacer(Modifier.width(10.dp))
-                                Text(ws, fontSize = 15.sp, color = T.Ink, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
-                            }
+                        if (!collapsed) {
                             list.forEach { s ->
                                 SessionRow(
                                     s, selected = s.sessionId == chat?.sessionId,
                                     archived = s.sessionId in archived, pinned = s.sessionId in pinned,
+                                    menuOpen = menuSessionId == s.sessionId,
                                     onPick = { onPick(s.sessionId) },
-                                    onMenu = { menuSession = s },
+                                    onMenuOpenChange = { open -> menuSessionId = if (open) s.sessionId else null },
                                 )
                             }
                         }
                     }
                 }
             }
-            DrawerItem(D.settings, "设置", onClick = onSettings)
-            Spacer(Modifier.height(8.dp))
         }
-    }
-    menuSession?.let { s ->
-        val isArchived = s.sessionId in archived
-        val isPinned = s.sessionId in pinned
-        PocketSheet({ menuSession = null }) {
-            SheetTitle(s.title ?: "新会话")
-            if ("workspace.pinSession" in ops) {
-                OptionRow(if (isPinned) L.unpinSession() else L.pinSession(), icon = D.check) {
-                    if (isPinned) Pocket.unpinSession(s.sessionId) else Pocket.pinSession(s.sessionId)
-                    menuSession = null
-                }
-            }
-            if ("workspace.archiveSession" in ops) {
-                OptionRow(if (isArchived) L.unarchiveSession() else L.archiveSession(), icon = D.folderOpen) {
-                    if (isArchived) Pocket.unarchiveSession(s.sessionId) else Pocket.archiveSession(s.sessionId)
-                    menuSession = null
-                }
-            }
-            if ("sessions.fork" in ops) {
-                OptionRow("在新对话中分支", icon = D.newChat) {
-                    Pocket.openSession(s.sessionId)
-                    Pocket.forkSession(null)
-                    menuSession = null
-                }
-            }
-        }
+        DrawerItem(D.settings, "设置", onClick = onSettings)
+        Spacer(Modifier.height(8.dp))
     }
 }
 
@@ -258,29 +306,76 @@ private fun SessionRow(
     selected: Boolean,
     archived: Boolean,
     pinned: Boolean,
+    menuOpen: Boolean,
     onPick: () -> Unit,
-    onMenu: () -> Unit,
+    onMenuOpenChange: (Boolean) -> Unit,
 ) {
     val pending = Pocket.approvals.collectAsState().value.any { it.sessionId == s.sessionId }
-    Row(
-        Modifier.padding(horizontal = 10.dp).fillMaxWidth().clip(T.R8).background(if (selected) T.Fill else Color.Transparent)
-            .combinedClickable(onClick = onPick, onLongClick = onMenu)
-            .padding(start = 38.dp, end = 8.dp, top = 11.dp, bottom = 11.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Column(Modifier.weight(1f)) {
-            Text(s.title ?: "新会话", fontSize = 15.sp, color = T.Ink, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            if (archived || pinned) {
-                Text(
-                    listOfNotNull(if (pinned) L.pinned() else null, if (archived) L.archived() else null).joinToString(" · "),
-                    fontSize = 11.sp, color = T.Caption,
+    val ops by Pocket.ops.collectAsState()
+    val archivedIds by Pocket.archivedIds.collectAsState()
+    val pinnedIds by Pocket.pinnedIds.collectAsState()
+    val isArchived = s.sessionId in archivedIds
+    val isPinned = s.sessionId in pinnedIds
+    Box {
+        Row(
+            Modifier.padding(horizontal = 10.dp).fillMaxWidth().clip(T.R8).background(if (selected) T.Fill else Color.Transparent)
+                .combinedClickable(onClick = onPick, onLongClick = { onMenuOpenChange(true) })
+                .padding(start = 38.dp, end = 8.dp, top = 11.dp, bottom = 11.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(Modifier.weight(1f)) {
+                Text(s.title ?: "新会话", fontSize = 15.sp, color = T.Ink, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                if (archived || pinned) {
+                    Text(
+                        listOfNotNull(if (pinned) L.pinned() else null, if (archived) L.archived() else null).joinToString(" · "),
+                        fontSize = 11.sp, color = T.Caption,
+                    )
+                }
+            }
+            Icon(
+                D.ellipsis, "更多",
+                Modifier.size(18.dp).clickable { onMenuOpenChange(true) }.testTag("sessionMenu:${s.sessionId}"),
+                tint = T.Caption,
+            )
+            Spacer(Modifier.width(6.dp))
+            if (pending) Box(Modifier.size(7.dp).clip(CircleShape).background(T.WarnBorder))
+            else if (s.running) Box(Modifier.size(7.dp).clip(CircleShape).background(T.Accent))
+        }
+        // DropdownMenu (not a bottom sheet): first tap reaches items; drawer gestures stay uninvolved.
+        DropdownMenu(
+            expanded = menuOpen,
+            onDismissRequest = { onMenuOpenChange(false) },
+            containerColor = T.Surface,
+        ) {
+            if ("workspace.pinSession" in ops) {
+                DropdownMenuItem(
+                    text = { Text(if (isPinned) L.unpinSession() else L.pinSession()) },
+                    onClick = {
+                        if (isPinned) Pocket.unpinSession(s.sessionId) else Pocket.pinSession(s.sessionId)
+                        onMenuOpenChange(false)
+                    },
+                )
+            }
+            if ("workspace.archiveSession" in ops) {
+                DropdownMenuItem(
+                    text = { Text(if (isArchived) L.unarchiveSession() else L.archiveSession()) },
+                    onClick = {
+                        if (isArchived) Pocket.unarchiveSession(s.sessionId) else Pocket.archiveSession(s.sessionId)
+                        onMenuOpenChange(false)
+                    },
+                )
+            }
+            if ("sessions.fork" in ops) {
+                DropdownMenuItem(
+                    text = { Text("在新对话中分支") },
+                    onClick = {
+                        Pocket.openSession(s.sessionId)
+                        Pocket.forkSession(null)
+                        onMenuOpenChange(false)
+                    },
                 )
             }
         }
-        Icon(D.ellipsis, "更多", Modifier.size(18.dp).clickable(onClick = onMenu), tint = T.Caption)
-        Spacer(Modifier.width(6.dp))
-        if (pending) Box(Modifier.size(7.dp).clip(CircleShape).background(T.WarnBorder))
-        else if (s.running) Box(Modifier.size(7.dp).clip(CircleShape).background(T.Accent))
     }
 }
 
@@ -356,7 +451,7 @@ fun ConnectionsScreen(pairLink: PairingLink?, onPairLinkConsumed: () -> Unit, ca
     }
     LaunchedEffect(pairLink) { if (pairLink != null) { pairing = pairLink; showPair = true; onPairLinkConsumed() } }
 
-    Column(Modifier.fillMaxSize().background(Color.White).systemBarsPadding().verticalScroll(rememberScrollState())) {
+    Column(Modifier.fillMaxSize().background(T.Bg).systemBarsPadding().verticalScroll(rememberScrollState())) {
         Header("连接", if (canBack) onBack else null)
         if (sorted.isEmpty()) {
             Card {
@@ -634,7 +729,7 @@ fun SettingsScreen(
     var notify by remember { mutableStateOf(Pocket.prefs.approvalNotify) }
     var sheet by remember { mutableStateOf(false) }
     var diagnostics by remember { mutableStateOf(false) }
-    Column(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background).systemBarsPadding().verticalScroll(rememberScrollState())) {
+    Column(Modifier.fillMaxSize().background(T.Bg).systemBarsPadding().verticalScroll(rememberScrollState())) {
         Header(L.settings(), onBack)
         Card {
             Row2(L.generalNav(), icon = D.settings, onClick = onGeneral)
@@ -742,8 +837,9 @@ fun GeneralSettingsScreen(onBack: () -> Unit) {
     var transcript by remember { mutableStateOf(Pocket.prefs.transcriptView) }
     var collapse by remember { mutableStateOf(Pocket.prefs.collapseTiming) }
     var perf by remember { mutableStateOf(Pocket.prefs.performanceUsage) }
+    var layout by remember { mutableStateOf(Pocket.prefs.layoutMode) }
     var sheet by remember { mutableStateOf<String?>(null) }
-    Column(Modifier.fillMaxSize().background(Color.White).systemBarsPadding().verticalScroll(rememberScrollState())) {
+    Column(Modifier.fillMaxSize().background(T.Bg).systemBarsPadding().verticalScroll(rememberScrollState())) {
         Header("通用设置", onBack)
         Card {
             Row2("权限", "选择新会话的默认权限模式", value = permissionLabel(perm), onClick = { sheet = "perm" }, trailing = { DownArrow() })
@@ -756,6 +852,17 @@ fun GeneralSettingsScreen(onBack: () -> Unit) {
                     Appearance.System -> L.followSystem()
                 },
                 onClick = { sheet = "appearance" },
+                trailing = { DownArrow() },
+            )
+            Row2(
+                L.layout(),
+                "宽屏（≥${WideLayoutMinDp}dp）时侧栏常显",
+                value = when (layout) {
+                    LayoutMode.Auto -> L.layoutAuto()
+                    LayoutMode.Phone -> L.layoutPhone()
+                    LayoutMode.Desktop -> L.layoutDesktop()
+                },
+                onClick = { sheet = "layout" },
                 trailing = { DownArrow() },
             )
             Row2("字号大小", "仅影响会话内容的字号", value = "$fontSize px", onClick = { sheet = "font" }, divider = false, trailing = { DownArrow() })
@@ -784,6 +891,18 @@ fun GeneralSettingsScreen(onBack: () -> Unit) {
             OptionRow(L.light(), selected = appearance == Appearance.Light) { appearance = Appearance.Light; Pocket.prefs.appearance = appearance; sheet = null }
             OptionRow(L.dark(), selected = appearance == Appearance.Dark) { appearance = Appearance.Dark; Pocket.prefs.appearance = appearance; sheet = null }
             OptionRow(L.followSystem(), selected = appearance == Appearance.System) { appearance = Appearance.System; Pocket.prefs.appearance = appearance; sheet = null }
+        }
+        "layout" -> PocketSheet({ sheet = null }) {
+            SheetTitle(L.layout())
+            OptionRow(L.layoutAuto(), "跟随屏幕宽度", selected = layout == LayoutMode.Auto) {
+                layout = LayoutMode.Auto; Pocket.prefs.layoutMode = layout; sheet = null
+            }
+            OptionRow(L.layoutPhone(), "始终抽屉侧栏", selected = layout == LayoutMode.Phone) {
+                layout = LayoutMode.Phone; Pocket.prefs.layoutMode = layout; sheet = null
+            }
+            OptionRow(L.layoutDesktop(), "始终双栏侧栏", selected = layout == LayoutMode.Desktop) {
+                layout = LayoutMode.Desktop; Pocket.prefs.layoutMode = layout; sheet = null
+            }
         }
         "font" -> PocketSheet({ sheet = null }) {
             SheetTitle("字号大小")
