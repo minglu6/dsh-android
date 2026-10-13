@@ -124,8 +124,19 @@ class ScreenshotTest {
         show("03-approval") { ChatRoot(onMenu = {}) }
     }
     @Test fun s04_drawer() = show("04-drawer") { SessionDrawer({}, {}, {}, {}) }
-    @Test fun s05_connections() = show("05-connections") { ConnectionsScreen(null, {}, true, {}, {}) }
-    @Test fun s06_connectionsEmpty() { Pocket.profiles.value = emptyList(); Pocket.active.value = null; show("06-connections-empty") { ConnectionsScreen(null, {}, false, {}, {}) } }
+    @Test fun s05_connections() = show("05-connections") {
+        ConnectionsScreen(
+            null, {}, true, {}, {},
+            nearbySeed = listOf(
+                DiscoveredHost("客厅 Mac", "192.168.1.42", 7690, "f".repeat(64)),
+            ),
+        )
+    }
+    @Test fun s06_connectionsEmpty() {
+        Pocket.profiles.value = emptyList()
+        Pocket.active.value = null
+        show("06-connections-empty") { ConnectionsScreen(null, {}, false, {}, {}) }
+    }
     @Test fun s07_pairSheet() { Pocket.profiles.value = emptyList(); showWithDialogs("07-pair-sheet") { PairSheet(PairingLink("100.106.128.87", 7690, "752314"), onDismiss = {}, onPaired = {}) } }
     @Test fun s07b_cameraPermissionSheet() = showWithDialogs("07b-camera-permission") { CameraPermissionSheet({}, {}) }
     @Test fun s08_settings() = show("08-settings") {

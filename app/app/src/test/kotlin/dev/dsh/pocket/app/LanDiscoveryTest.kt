@@ -36,4 +36,20 @@ class LanDiscoveryTest {
         assertEquals("192.168.1.55", updated!!.host)
         assertNull(LanDiscovery.applyAddressUpdate(profile, DiscoveredHost("Other", "192.168.1.55", 7690, "c".repeat(64))))
     }
+
+    @Test
+    fun unpairedNearbyDropsPairedInstanceAndHostPort() {
+        val pairedId = "d".repeat(64)
+        val otherId = "e".repeat(64)
+        val profiles = listOf(Profile("p1", "Mac", host = "192.168.1.10", port = 7690, instanceId = pairedId))
+        val found = listOf(
+            DiscoveredHost("Mac", "192.168.1.10", 7690, pairedId),
+            DiscoveredHost("NAS", "192.168.1.10", 7690, otherId), // same host:port as paired
+            DiscoveredHost("Studio", "192.168.1.42", 7690, otherId),
+        )
+        assertEquals(
+            listOf(DiscoveredHost("Studio", "192.168.1.42", 7690, otherId)),
+            LanDiscovery.unpairedNearby(found, profiles),
+        )
+    }
 }

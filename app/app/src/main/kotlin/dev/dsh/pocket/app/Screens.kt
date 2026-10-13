@@ -633,7 +633,15 @@ private fun DrawerItem(icon: ImageVector, text: String, enabled: Boolean = true,
 // ---------- Connections (desktop settings list rows · Tokyo Night) ----------
 
 @Composable
-fun ConnectionsScreen(pairLink: PairingLink?, onPairLinkConsumed: () -> Unit, canBack: Boolean, onBack: () -> Unit, onConnected: () -> Unit) {
+fun ConnectionsScreen(
+    pairLink: PairingLink?,
+    onPairLinkConsumed: () -> Unit,
+    canBack: Boolean,
+    onBack: () -> Unit,
+    onConnected: () -> Unit,
+    /** Test/screenshot seed for mDNS `_dshpocket._tcp` rows (production leaves empty). */
+    nearbySeed: List<DiscoveredHost> = emptyList(),
+) {
     val profiles by Pocket.profiles.collectAsState()
     val status by Pocket.status.collectAsState()
     val active by Pocket.active.collectAsState()
@@ -641,13 +649,14 @@ fun ConnectionsScreen(pairLink: PairingLink?, onPairLinkConsumed: () -> Unit, ca
     val en = remember { runCatching { Pocket.prefs.language == AppLanguage.En }.getOrDefault(false) }
     var pairing by remember { mutableStateOf<PairingLink?>(null) }
     var addressHintTab by remember { mutableStateOf(PeerTransport.Lan) }
+    var pairPrefName by remember { mutableStateOf("") }
     var showPair by remember { mutableStateOf(false) }
     var showScan by remember { mutableStateOf(false) }
     var showOverflow by remember { mutableStateOf(false) }
     var showDiagnostics by remember { mutableStateOf(false) }
     var manageId by remember { mutableStateOf<String?>(null) }
     var repairTarget by remember { mutableStateOf<Profile?>(null) }
-    var nearby by remember { mutableStateOf<List<DiscoveredHost>>(emptyList()) }
+    var nearby by remember { mutableStateOf(nearbySeed) }
     var showNearbyPerm by remember { mutableStateOf(false) }
     val manage = manageId?.let { id -> profiles.firstOrNull { it.id == id } }
     val routes by Pocket.routes.collectAsState()
@@ -677,18 +686,30 @@ fun ConnectionsScreen(pairLink: PairingLink?, onPairLinkConsumed: () -> Unit, ca
     }
     val nearbyGranted = Build.VERSION.SDK_INT < 33 ||
         ContextCompat.checkSelfPermission(ctx, Manifest.permission.NEARBY_WIFI_DEVICES) == PackageManager.PERMISSION_GRANTED
+    val needNearbyPerm = NearbyDiscoveryPermissionPolicy.shouldRequest(
+        apiLevel = Build.VERSION.SDK_INT,
+        granted = nearbyGranted,
+        previouslyDeclined = Pocket.prefs.nearbyWifiDeclined,
+    )
     LaunchedEffect(Unit) {
+        if (nearbySeed.isNotEmpty()) return@LaunchedEffect
         while (true) {
             val canceled = AtomicBoolean(false)
             val found = withContext(Dispatchers.IO) { LanDiscovery.scan(ctx, canceled = canceled) }
-            nearby = found.filter { disc -> profiles.none { it.instanceId == disc.instanceId && it.instanceId.isNotBlank() } }
+            nearby = LanDiscovery.unpairedNearby(found, Pocket.profiles.value)
             Pocket.applyDiscoveredHosts(found)
             kotlinx.coroutines.delay(8_000)
+        }
+    }
+    LaunchedEffect(profiles, nearbySeed) {
+        if (nearbySeed.isNotEmpty()) {
+            nearby = LanDiscovery.unpairedNearby(nearbySeed, profiles)
         }
     }
     LaunchedEffect(pairLink) {
         if (pairLink != null) {
             pairing = pairLink
+            pairPrefName = ""
             addressHintTab = when (classifyWsRoute(pairLink.host)) {
                 Route.WsTailscale -> PeerTransport.Tailscale
                 else -> PeerTransport.Lan
@@ -698,18 +719,19 @@ fun ConnectionsScreen(pairLink: PairingLink?, onPairLinkConsumed: () -> Unit, ca
         }
     }
 
-    fun openAddressSheet(seed: PairingLink? = null, tab: PeerTransport = PeerTransport.Lan) {
+    fun openAddressSheet(
+        seed: PairingLink? = null,
+        tab: PeerTransport = PeerTransport.Lan,
+        name: String = "",
+    ) {
         addressHintTab = tab
         pairing = seed
+        pairPrefName = name
         showPair = true
     }
 
     val compatibility by Pocket.compatibility.collectAsState()
-    val needNearbyPerm = NearbyDiscoveryPermissionPolicy.shouldRequest(
-        apiLevel = Build.VERSION.SDK_INT,
-        granted = nearbyGranted,
-        previouslyDeclined = Pocket.prefs.nearbyWifiDeclined,
-    )
+    val lanLabel = PeerTransport.Lan.label(en)
     Column(Modifier.fillMaxSize().background(Conn.Bg).systemBarsPadding().verticalScroll(rememberScrollState())) {
         ConnHeader(
             title = L.connections(),
@@ -736,26 +758,25 @@ fun ConnectionsScreen(pairLink: PairingLink?, onPairLinkConsumed: () -> Unit, ca
             ConnHairline()
         }
 
-        if (needNearbyPerm || nearby.isNotEmpty()) {
-            ConnSectionTitle(L.nearbyComputers())
-            when {
-                needNearbyPerm -> ConnActionRow(
-                    title = L.allowNearby(),
-                    icon = D.link,
-                    divider = false,
-                    onClick = { showNearbyPerm = true },
+        // 附近设备 — mDNS unpaired only; hide entirely when empty (no placeholder).
+        if (nearby.isNotEmpty()) {
+            ConnSectionTitle(L.nearbyDevices())
+            nearby.forEachIndexed { i, h ->
+                ConnDeviceRow(
+                    name = h.deviceName,
+                    statusLine = lanLabel,
+                    detail = "${h.host}:${h.port}",
+                    warn = false,
+                    divider = i < nearby.lastIndex,
+                    onClick = {
+                        openAddressSheet(
+                            PairingLink(h.host, h.port, ""),
+                            PeerTransport.Lan,
+                            name = h.deviceName,
+                        )
+                    },
+                    leading = { Icon(Icons.Outlined.Computer, null, tint = Conn.Accent, modifier = Modifier.size(18.dp)) },
                 )
-                else -> nearby.forEachIndexed { i, h ->
-                    ConnDeviceRow(
-                        name = h.deviceName,
-                        statusLine = "LAN",
-                        detail = "${h.host}:${h.port}",
-                        warn = false,
-                        divider = i < nearby.lastIndex,
-                        onClick = { openAddressSheet(PairingLink(h.host, h.port, ""), PeerTransport.Lan) },
-                        leading = { Icon(Icons.Outlined.Computer, null, tint = Conn.Accent, modifier = Modifier.size(18.dp)) },
-                    )
-                }
             }
             ConnHairline()
         }
@@ -787,16 +808,18 @@ fun ConnectionsScreen(pairLink: PairingLink?, onPairLinkConsumed: () -> Unit, ca
     if (showOverflow) {
         ConnOverflowSheet(
             onDismiss = { showOverflow = false },
+            showNearbyAllow = needNearbyPerm,
+            onNearbyAllow = { showOverflow = false; showNearbyPerm = true },
             onDiagnostics = { showOverflow = false; showDiagnostics = true },
         )
     }
     if (showDiagnostics) DiagnosticsSheet(onDismiss = { showDiagnostics = false })
     if (showPair) PairSheet(
         link = pairing,
-        prefName = repairTarget?.name.orEmpty(),
+        prefName = repairTarget?.name?.takeIf { it.isNotBlank() } ?: pairPrefName,
         addressHint = peerAddressHint(addressHintTab, en),
-        onDismiss = { showPair = false; repairTarget = null },
-    ) { p -> showPair = false; repairTarget = null; Pocket.connect(p.id); onConnected() }
+        onDismiss = { showPair = false; repairTarget = null; pairPrefName = "" },
+    ) { p -> showPair = false; repairTarget = null; pairPrefName = ""; Pocket.connect(p.id); onConnected() }
     if (showScan) ScanPairFlow(
         onResult = { link -> pairing = link; showScan = false; showPair = true },
         onDismiss = { showScan = false },
@@ -811,6 +834,7 @@ fun ConnectionsScreen(pairLink: PairingLink?, onPairLinkConsumed: () -> Unit, ca
             onRepair = {
                 manageId = null
                 repairTarget = p
+                pairPrefName = ""
                 pairing = if (!p.needsRepair) PairingLink(p.host, p.port, "") else null
                 addressHintTab = if (PeerTransport.Tailscale.matchesProfile(p)) PeerTransport.Tailscale else PeerTransport.Lan
                 showPair = true
@@ -959,9 +983,15 @@ private fun buildConnStatusLine(dot: Dot?, routeLabel: String, isCurrent: Boolea
 }
 
 @Composable
-fun ConnOverflowSheet(onDismiss: () -> Unit, onDiagnostics: () -> Unit) {
+fun ConnOverflowSheet(
+    onDismiss: () -> Unit,
+    onDiagnostics: () -> Unit,
+    showNearbyAllow: Boolean = false,
+    onNearbyAllow: () -> Unit = {},
+) {
     ConnSheet(onDismiss) {
         ConnSheetTitle(L.moreActions())
+        if (showNearbyAllow) ConnOptionRow(L.allowNearby(), icon = D.link, onClick = onNearbyAllow)
         ConnOptionRow(L.diagnostics(), icon = D.inspect, onClick = onDiagnostics)
     }
 }
@@ -1062,7 +1092,7 @@ private fun dotLabel(d: Dot?) = when (d) {
 @Composable
 fun NearbyWifiPermissionSheet(onDismiss: () -> Unit, onAllow: () -> Unit) {
     ConnSheet(onDismiss) {
-        ConnSheetTitle(L.nearbyComputers())
+        ConnSheetTitle(L.nearbyDevices())
         Row(Modifier.padding(horizontal = 22.dp, vertical = 16.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
             OutlinedButton(
                 onDismiss, Modifier.weight(1f).height(48.dp), shape = Conn.R12,
