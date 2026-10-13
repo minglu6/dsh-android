@@ -71,6 +71,27 @@ class MarkdownTest {
         assertTrue(lit.spanStyles.isNotEmpty())
     }
 
+    @Test fun pathLikeInlineCodeStaysLiteralWhileStreamingAndComplete() {
+        val values = listOf(
+            "/Users/felix/Documents",
+            "/Users/felix/Documents/",
+            "/Users/felix/project.json",
+            "src/Main.kt",
+            "README.md",
+            "C:\\Users\\felix\\Documents",
+            "application/json",
+            "feature/fix",
+            "/tmp/a%20b.kt",
+        )
+        for (streaming in listOf(true, false)) {
+            for (value in values) {
+                val paragraph = parseMarkdown("`$value`", streaming).single() as MdBlock.Paragraph
+                assertEquals("inline code: $value, streaming: $streaming",
+                    listOf(MdSpan.Code(value)), paragraph.spans)
+            }
+        }
+    }
+
     @Test fun parseFileLinkRejectsHttp() {
         assertEquals(null, parseFileLink("https://example.com/a.yml"))
         assertEquals("cordis.patch.yml", parseFileLink("cordis.patch.yml"))

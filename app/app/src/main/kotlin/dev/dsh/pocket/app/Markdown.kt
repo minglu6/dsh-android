@@ -105,9 +105,6 @@ private val MD_PARSER: Parser = Parser.builder()
     .extensions(listOf(TablesExtension.create()))
     .build()
 
-private val FILE_PATH = Regex("""^(?:[A-Za-z]:[\\/]|~[/\\]|[.]{0,2}[/\\])?[^\s`]+?\.[A-Za-z0-9]{1,12}$""")
-private val FILE_EXT = Regex("""\.(ya?ml|json|jsonl|toml|md|txt|kt|kts|java|js|jsx|ts|tsx|mjs|cjs|py|rs|go|c|h|cpp|hpp|cs|swift|rb|php|sh|bash|zsh|css|scss|html|xml|gradle|properties|proto|sql|svg|png|jpe?g|gif|webp|pdf)$""", RegexOption.IGNORE_CASE)
-
 /**
  * Parse GFM markdown into [MdBlock]s. Handles streaming partial text: an unclosed
  * top-level fence is emitted as an incomplete code block (desktop MarkdownText stream path).
@@ -196,14 +193,6 @@ internal fun parseFileLink(destination: String): String? {
     return path
 }
 
-private fun looksLikeFilePath(value: String): Boolean {
-    val v = value.trim()
-    if (v != value || v.length < 3 || v.length > 200) return false
-    if (v.contains(' ') || v.contains('`')) return false
-    if (parseFileLink(v) == null && !FILE_PATH.matches(v)) return false
-    return FILE_EXT.containsMatchIn(v) || v.contains('/') || v.contains('\\')
-}
-
 private fun convertBlock(node: Node): MdBlock? = when (node) {
     is Paragraph -> MdBlock.Paragraph(inlineSpans(node))
     is Heading -> MdBlock.Heading(node.level, inlineSpans(node))
@@ -284,12 +273,8 @@ private fun inlineSpans(parent: Node, bold: Boolean = false, italic: Boolean = f
             is SoftLineBreak, is HardLineBreak -> out += MdSpan.Text("\n", bold, italic)
             is StrongEmphasis -> out += inlineSpans(c, bold = true, italic = italic)
             is Emphasis -> out += inlineSpans(c, bold = bold, italic = true)
-            is Code -> {
-                val lit = c.literal
-                val path = lit.takeIf { looksLikeFilePath(it) }?.let { parseFileLink(it) ?: it }
-                out += if (path != null) MdSpan.FileChip(path, path.substringAfterLast('/').substringAfterLast('\\'))
-                else MdSpan.Code(lit)
-            }
+            // Code is authored text, not evidence that a path names a file.
+            is Code -> out += MdSpan.Code(c.literal)
             is Link -> {
                 val dest = c.destination.orEmpty()
                 val label = plainText(c).ifBlank { dest }

@@ -46,6 +46,8 @@ Data: `sessionController.follow` / `page` event stream (pocket `follow` / `histo
 Desktop renderer (ui-chat / primitives): headings, lists, tables, fenced code (Meslo), inline code, links, images, footnotes (`markdown.footnotes`), truncation (`markdown.truncatedCharacters`).  
 Android: `Markdown.kt` covers the common subset; keep aligning to desktop tokenizer, not a third-party “pretty” theme.
 
+Inline code preserves its full literal text and is not promoted to a file chip based on slashes or extensions; directory paths therefore remain non-navigating. Explicit local Markdown links still open file previews. Desktop additionally resolves inline mentions through an owner-supplied file vocabulary; Android does not infer that vocabulary from path-shaped text.
+
 ### 1.3 Thinking blocks
 
 - Reasoning uses the official Think icon and a one-line `思考 · preview` disclosure. Expanding one reasoning row renders its recorded Markdown independently; it does not open all reasoning blocks.
