@@ -33,9 +33,10 @@ Plugin surface: `dsh-plugin-pocket` WebSocket ops (+ optional Cordis injects).
 | Composer + → 压缩 | `/compact` | implement | done | `commands.execute` `/compact`. |
 | Composer + → 权限 / 模型 | Permission presets / model catalog | keep | done | |
 | Composer + → 下载日志 | Session export | implement | done | Same `session.export`. |
-| Drawer 插件 | Plugin manager | implement | done | Settings → 插件 (native); local-path install still hide. |
-| Drawer 自动化任务 | Schedule panel | implement | done | Settings → 自动化任务 (native catalog/CRUD/history). |
-| Drawer 工作区 / 会话 | Group by cwd; open session | keep | done | |
+| Drawer 插件 | Plugin manager | implement | done | Under 新会话 (pinwheel icon → native Plugins); Settings entry kept; local-path install hide. |
+| Drawer 自动化任务 | Schedule panel | implement | done | Under 新会话 (clock icon → native Schedules); Settings entry kept. |
+| Drawer 会话 header | Search / view options / add workspace | implement | done | Desktop ui-workspace icons + locales; view options sheet; add workspace via host path (no OS picker). |
+| Drawer 工作区 / 会话 | Group by cwd; open session | keep | done | groupBy / orderBy / archivedFilter prefs mirror desktop. |
 | New-chat 工作区 chip | Workspace picker | implement (limited) | done | Known session `cwd`s only; no OS directory dialog. |
 | New-chat / settings Agent 预设 | Preset roster | keep | done | |
 | Settings → 通用设置 | Locale, theme, font, transcript, collapse, busy-send, performance | implement | done | Phone-local prefs; official labels/values. |

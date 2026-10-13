@@ -80,6 +80,8 @@ private fun Root(deepLink: MutableStateFlow<PairingLink?>) {
     val profiles by Pocket.profiles.collectAsState()
     val link by deepLink.collectAsState()
     var screen by remember { mutableStateOf(if (Pocket.active.value == null) Screen.Connections else Screen.Chat) }
+    /** Plugins / Schedule can open from Settings or the drawer; back returns to the source. */
+    var panelReturn by remember { mutableStateOf(Screen.Settings) }
     val drawer = rememberDrawerState(DrawerValue.Closed)
     val scope = rememberCoroutineScope()
     val snack = remember { SnackbarHostState() }
@@ -115,7 +117,8 @@ private fun Root(deepLink: MutableStateFlow<PairingLink?>) {
 
     BackHandler(screen != Screen.Chat && active != null) {
         screen = when (screen) {
-            Screen.General, Screen.Models, Screen.Plugins, Screen.Schedule, Screen.Credentials -> Screen.Settings
+            Screen.General, Screen.Models, Screen.Credentials -> Screen.Settings
+            Screen.Plugins, Screen.Schedule -> panelReturn
             else -> Screen.Chat
         }
     }
@@ -133,14 +136,14 @@ private fun Root(deepLink: MutableStateFlow<PairingLink?>) {
                 onGeneral = { screen = Screen.General },
                 onConnections = { screen = Screen.Connections },
                 onModels = { screen = Screen.Models },
-                onPlugins = { screen = Screen.Plugins },
-                onSchedule = { screen = Screen.Schedule },
+                onPlugins = { panelReturn = Screen.Settings; screen = Screen.Plugins },
+                onSchedule = { panelReturn = Screen.Settings; screen = Screen.Schedule },
                 onCredentials = { screen = Screen.Credentials },
             )
             Screen.General -> GeneralSettingsScreen(onBack = { screen = Screen.Settings })
             Screen.Models -> ModelsSettingsScreen(onBack = { screen = Screen.Settings })
-            Screen.Plugins -> PluginsSettingsScreen(onBack = { screen = Screen.Settings })
-            Screen.Schedule -> ScheduleSettingsScreen(onBack = { screen = Screen.Settings })
+            Screen.Plugins -> PluginsSettingsScreen(onBack = { screen = panelReturn })
+            Screen.Schedule -> ScheduleSettingsScreen(onBack = { screen = panelReturn })
             Screen.Credentials -> CredentialsSettingsScreen(onBack = { screen = Screen.Settings })
             Screen.Chat -> {
                 val drawerContent: @Composable () -> Unit = {
@@ -150,6 +153,16 @@ private fun Root(deepLink: MutableStateFlow<PairingLink?>) {
                         onNew = { Pocket.closeChat(); if (!twoPane) scope.launch { drawer.close() } },
                         onSettings = { screen = Screen.Settings; if (!twoPane) scope.launch { drawer.close() } },
                         onConnections = { screen = Screen.Connections; if (!twoPane) scope.launch { drawer.close() } },
+                        onPlugins = {
+                            panelReturn = Screen.Chat
+                            screen = Screen.Plugins
+                            if (!twoPane) scope.launch { drawer.close() }
+                        },
+                        onSchedule = {
+                            panelReturn = Screen.Chat
+                            screen = Screen.Schedule
+                            if (!twoPane) scope.launch { drawer.close() }
+                        },
                         onMenuOpenChange = { drawerMenuOpen = it },
                     )
                 }

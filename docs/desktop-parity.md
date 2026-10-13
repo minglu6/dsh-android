@@ -184,12 +184,13 @@ Packages: `ui-sidebar`, `ui-workspace`, `ui-plugin-manager`, `ui-schedule`.
 | Brand / connection | — | pocket profiles | keep |
 | 新会话 | `session.new` | `sessions.create` | keep |
 | 工作区 section | `section.workspaces` 工作区 | session cwd groups | keep |
-| Group / order / filter | `groupBy.*`, `orderBy.*`, `viewOptions.*` | workspace registry | feasible (subset) / archive filter **needs-plugin** |
-| Search | `search.placeholder` 搜索会话名称 | `sessionController.search` | **needs-plugin** |
+| Group / order / filter | `groupBy.*`, `orderBy.*`, `viewOptions.*` | workspace registry | **done** — drawer sliders menu + prefs |
+| Search | `search.placeholder` 搜索会话名称 | `sessionController.search` | **done** — header search expands; `sessions.search` |
+| Add workspace | `workspace.add` 添加工作区 | Host directory + `workspaces.create` | **done** (path sheet / known cwds; OS picker **hide**) |
 | Rename / delete workspace | `rename.*`, `delete.workspace` | workspace controller | delete workspace **hide**/limited; rename session **feasible** |
-| Session row menu: fork / archive / pin | `menu.fork`, `menu.archiveSession`, `menu.pinSession` | `fork`; `workspace/{un,}archiveSession`; `workspace/{un,}pinSession` | **needs-plugin** |
-| 插件 | plugin-manager locales | local plugin UI | **hide** |
-| 自动化任务 | schedule locales | schedule CRUD | **hide** |
+| Session row menu: fork / archive / pin | `menu.fork`, `menu.archiveSession`, `menu.pinSession` | `fork`; `workspace/{un,}archiveSession`; `workspace/{un,}pinSession` | **done** |
+| 插件 | plugin-manager `panel` 插件 | pinwheel → native Plugins | **done** (drawer panellist under 新会话) |
+| 自动化任务 | schedule `panel` 自动化任务 | clock → native Schedules | **done** (drawer panellist under 新会话) |
 | 设置 | settings `trigger` 设置 | — | keep |
 
 Empty: `empty.none` 暂无会话 / `empty.noMatches` 无匹配结果.
@@ -300,7 +301,8 @@ Appearance values from `ui-theme` locales. Performance: `settings.performance.{c
 | Drawer width / workspaces / new session | present | — |
 | Session search | **done** (`sessions.search`) | was needs-plugin |
 | Archive / pin / fork from sidebar | **done** (workspace archive/pin + row ⋯ / long-press) | was needs-plugin |
-| 插件 / 自动化任务 | **done** (Settings nav → Plugins / Scheduled tasks; drawer entries still omit desktop chrome installers) | was hide |
+| 插件 / 自动化任务 | **done** (drawer under 新会话 + Settings; pinwheel/clock icons from ui-primitives) | was hide |
+| Drawer search / view options / add workspace | **done** (ui-workspace header icons + locales) | was needs-plugin / subset |
 | Files / terminal / jobs / todo sheets | present | — |
 | Browser | hidden | hide |
 | Settings general rows | present | — |

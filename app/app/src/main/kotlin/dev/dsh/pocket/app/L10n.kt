@@ -80,8 +80,10 @@ object L {
     fun planChip() = if (en) "Plan" else "计划"
     fun planModeOn() = if (en) "Plan mode on — tap to turn off" else "计划模式已开启 — 点击关闭"
 
-    // Search / archive / pin
-    fun searchSessions() = if (en) "Search session titles" else "搜索会话名称"
+    // Search / archive / pin (ui-workspace + common)
+    fun search() = if (en) "Search" else "搜索"
+    fun searchSessionsAria() = if (en) "Search sessions" else "搜索会话"
+    fun searchSessions() = if (en) "Search session names" else "搜索会话名称"
     fun searchingSessions() = if (en) "Searching session history…" else "正在搜索会话历史…"
     fun noMatchingSessions() = if (en) "No matching sessions" else "无匹配会话"
     fun clearSearch() = if (en) "Clear search" else "清除搜索"
@@ -93,6 +95,28 @@ object L {
     fun pinned() = if (en) "Pinned" else "已置顶"
     fun archivedToast() = if (en) "Session archived; you can " else "会话已归档，可"
     fun undo() = if (en) "Undo" else "撤销"
+
+    // Sidebar workspace browser (ui-workspace)
+    fun sectionSessions() = if (en) "Sessions" else "会话"
+    fun sectionWorkspaces() = if (en) "Workspaces" else "工作区"
+    fun viewOptions() = if (en) "View options" else "视图选项"
+    fun groupByLabel() = if (en) "Group by" else "分组方式"
+    fun groupByWorkspace() = if (en) "WorkSpace" else "按工作区"
+    fun groupByWorkspaceTree() = if (en) "Workspace Tree" else "按工作区树"
+    fun groupByFlat() = if (en) "In one list" else "单列表"
+    fun orderByLabel() = if (en) "Order by" else "排序方式"
+    fun orderByManual() = if (en) "Manual" else "手动排序"
+    fun orderByUpdated() = if (en) "Last updated" else "最近更新"
+    fun filterByLabel() = if (en) "Filter sessions" else "筛选会话"
+    fun hideArchived() = if (en) "Hide archived" else "隐藏已归档"
+    fun showArchived() = if (en) "All conversations (show archived)" else "全部对话（显示已归档）"
+    fun onlyArchived() = if (en) "Archived only" else "仅显示已归档"
+    fun addWorkspace() = if (en) "Add workspace" else "添加工作区"
+    fun addWorkspaceEllipsis() = if (en) "Add workspace…" else "添加工作区…"
+    fun workspacePathPlaceholder() = if (en) "Host directory path" else "主机目录路径"
+    fun emptySessions() = if (en) "No sessions yet" else "暂无会话"
+    fun emptyArchivedSessions() = if (en) "No archived sessions yet" else "暂无已归档会话"
+    fun ungrouped() = if (en) "Ungrouped" else "未分组"
 
     // File attach
     fun pendingFiles() = if (en) "Pending files" else "待发送文件"
