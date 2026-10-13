@@ -5,8 +5,12 @@ import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.ClipboardManager
+import androidx.compose.ui.unit.dp
 import dev.dsh.pocket.protocol.Item
+import dev.dsh.pocket.protocol.StepRecord
+import dev.dsh.pocket.protocol.StepUsage
 import dev.dsh.pocket.protocol.ToolStatus
+import dev.dsh.pocket.protocol.TurnRecord
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Before
@@ -74,6 +78,25 @@ class MessageActionsTest {
         rule.onAllNodesWithTag("messageBranch").assertCountEquals(1)
     }
 
+    @Test fun settledTurnDoesNotAppendSeparateUsageRow() {
+        val answer = Item.Text("a1", "回答正文", false, at = System.currentTimeMillis(),
+            seq = 3, messageId = "m1", turn = 1, step = 1)
+        val state = Pocket.chat.value!!.copy(
+            items = listOf(answer),
+            turns = listOf(TurnRecord(1, 1, 4, 1000, 2000, "completed")),
+            steps = listOf(StepRecord(
+                seq = 3, turn = 1, step = 1, stepStartTime = 1000, messageTime = 2000,
+                replyText = answer.text, reasoningText = "",
+                usage = StepUsage(inputTokens = 202_000, outputTokens = 2_000),
+                provider = "deepseek", model = "flash", toolCallIds = emptyList(),
+            )),
+        )
+        rule.setContent { PocketTheme { Transcript(state, {}) } }
+        rule.onNodeWithText(answer.text).assertIsDisplayed()
+        rule.onNodeWithTag("messageCopy").assertIsDisplayed()
+        rule.onNodeWithTag("turnUsage:1").assertDoesNotExist()
+    }
+
     @Test fun actionOrderClipboardAndCallbacksRemainFunctional() {
         var branch: Long? = null
         var like: String? = null
@@ -94,11 +117,17 @@ class MessageActionsTest {
         controls.zipWithNext().forEach { (left, right) ->
             assertTrue(left.fetchSemanticsNode().boundsInRoot.right <= right.fetchSemanticsNode().boundsInRoot.left)
         }
-        copies[1].performClick()
+        controls.dropLast(1).zipWithNext().forEach { (left, right) ->
+            val leftBounds = left.getUnclippedBoundsInRoot()
+            val rightBounds = right.getUnclippedBoundsInRoot()
+            assertTrue("Message actions must remain a compact cluster",
+                rightBounds.left - leftBounds.left <= 40.dp)
+        }
+        copies[1].performTouchInput { click() }
         rule.runOnIdle { assertEquals("你好！有什么可以帮你的吗？", clipboard.getText()?.text) }
-        rule.onNodeWithTag("messageLike").performClick()
-        rule.onNodeWithTag("messageDislike").performClick()
-        rule.onNodeWithTag("messageBranch").performClick()
+        rule.onNodeWithTag("messageLike").performTouchInput { click() }
+        rule.onNodeWithTag("messageDislike").performTouchInput { click() }
+        rule.onNodeWithTag("messageBranch").performTouchInput { click() }
         rule.runOnIdle {
             assertEquals("m1", like)
             assertEquals("m1", dislike)

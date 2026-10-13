@@ -231,29 +231,3 @@ private fun statisticsDuration(milliseconds: Double): String {
     val whole = floor(seconds + 0.5).toLong()
     return "${whole / 60}m${whole % 60}s"
 }
-
-/** A turn reading uses only that turn's settled step facts, not whole-session projections. */
-@Composable
-internal fun TurnUsageStats(turn: Int, steps: List<dev.dsh.pocket.protocol.StepRecord>, complete: Boolean) {
-    val facts = remember(turn, steps) { steps.filter { it.turn == turn } }
-    if (facts.isEmpty()) return
-    val input = facts.mapNotNull { it.usage.inputTokens }.takeIf { it.size == facts.size }?.sum()
-    val output = facts.mapNotNull { it.usage.outputTokens }.takeIf { it.size == facts.size }?.sum()
-    val cache = facts.mapNotNull { it.usage.cacheReadTokens }.takeIf { it.size == facts.size }?.sum()
-    if (input == null && output == null) return
-    var expanded by remember(turn) { mutableStateOf(false) }
-    val title = if (complete) "本轮用量" else "本轮已加载用量"
-    TextButton({ expanded = true }, modifier = Modifier.testTag("turnUsage:$turn")) {
-        Text("$title · ${listOfNotNull(input?.let { "输入 ${statisticsTokens(it.toDouble())}" }, output?.let { "输出 ${statisticsTokens(it.toDouble())}" }).joinToString(" · ")}",
-            color = T.Text3, fontSize = 12.sp)
-    }
-    if (expanded) AlertDialog(onDismissRequest = { expanded = false }, title = { Text(title) }, text = {
-        Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            StatisticsDetail("已加载步骤", facts.size.toString())
-            input?.let { StatisticsDetail("输入", statisticsExact(it)) }
-            cache?.let { StatisticsDetail("其中缓存读取", statisticsExact(it)) }
-            output?.let { StatisticsDetail("输出", statisticsExact(it)) }
-            if (!complete) Text("当前历史窗口可能未包含本轮全部步骤，以上不是完整轮次总量。", color = T.Text3, fontSize = 12.sp)
-        }
-    }, confirmButton = { TextButton({ expanded = false }) { Text("关闭") } }, containerColor = T.Surface)
-}

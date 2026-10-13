@@ -117,12 +117,12 @@ Slash menu pick consumes the typed `/` (desktop `slash/input-consume-token`) the
 | Copy | common `copy` 复制 / `copied` 复制成功 | clipboard |
 | Branch / fork | `message.branch` 在新对话中分支; `message.branchUnavailable` | `sessionController.fork({sessionId, atSeq?})` |
 | Like / dislike | `feedback.action.like` 好的回答; `action.dislike` 有问题的回答; dialog `feedback.dialog.*` | message-feedback Host service + `/feedback` |
-| Turn usage pill | `message.turnUsage.*` | projections / step usage |
+| Turn usage pill (desktop only) | `message.turnUsage.*` | shown in the action row only for detailed performance/usage mode with turn token data; Android does not add a standalone turn-usage row |
 | Clock | `clock.md` / `clock.ymd` | event `time` |
 
 Retry is **display** of Host `llm/retry` chains (`message.retry.*`), not a user button.
 
-**Icon chrome (desktop MessageIconActions / MessageFeedbackActions):** Android uses the official ui-primitives Regular SVG paths. User messages show clock → copy, without a branch control. Assistant messages show copy → like/dislike → branch → clock; copy/branch are 17dp and feedback icons 15dp, with tertiary `T.Text3` tint. Feedback selection swaps outline/fill rather than inventing blue/red colors. Touch targets remain 48dp for phones; unavailable branch actions retain their disabled state and reason. Locale strings remain accessibility labels/tooltips, not visible text buttons. Process/reasoning chevrons use vector artwork and rotate on expansion instead of text glyphs.
+**Icon chrome (desktop MessageIconActions / MessageFeedbackActions):** Android uses the official ui-primitives Regular SVG paths. User messages show clock → copy, without a branch control. Assistant messages show copy → like/dislike → branch → clock; copy/branch are 17dp and feedback icons 15dp, with tertiary `T.Text3` tint. Feedback selection swaps outline/fill rather than inventing blue/red colors. Controls occupy 36dp horizontally with no extra inter-button gap, retain a 48dp-high touch area, and leave 8dp before/after the clock; unavailable branch actions retain their disabled state and reason. Locale strings remain accessibility labels/tooltips, not visible text buttons. No standalone “本轮用量” row is appended below answers; composer statistics and trajectory usage details remain available. Process/reasoning chevrons use vector artwork and rotate on expansion instead of text glyphs.
 
 ### 1.9 Timestamps
 
@@ -395,7 +395,7 @@ Source: harness `d743267` / `0.2.1-alpha.2` `@deepseek-ai/dsh-client-ui-primitiv
 | Sidebar / sheet OptionRows | Icon + text label (menus) | Icon + text | OK — menus keep text; not IconActions chrome |
 | Tool sheet 「复制结果 / 复制参数」 | Desktop inspector uses code-card copy icons in-place | Full-width outlined text buttons | **Keep** — phone sheet primary actions stay labeled buttons (touch); not an IconActions row |
 | Connections Devices glyph | N/A (phone-only) | Material `Devices` | **Keep** — no matching ui-primitives glyph; phone-only surface |
-| Turn usage pill | Icon + usage text | Not on phone action row | **hide** / later — optional endInfo slot |
+| Turn usage pill | Icon + usage text in detailed mode | Not on phone action row | **Hidden** — no separate turn-usage text row; composer statistics and trajectory usage details remain available |
 | Request chip / todo / trajectory detail tabs | Mostly text chrome or already icon+label | Aligned | OK |
 
 **Drawables added this pass:** `dsh_branch`, `dsh_like`, `dsh_like_fill`, `dsh_dislike`, `dsh_dislike_fill`, `dsh_wrap`, `dsh_nowrap`, `dsh_wrap_lines` (JsonTree/optional). Wired on `D` in `DshIcons.kt`.

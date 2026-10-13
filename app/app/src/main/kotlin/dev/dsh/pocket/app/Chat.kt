@@ -638,7 +638,6 @@ internal fun Transcript(
     val rows = remember(st.items, st.turns, st.running, livePolicy) {
         foldChatItems(st.items, livePolicy, st.running, turnRecords = st.turns)
     }
-    val closingAnswers = remember(rows) { rows.filterIsInstance<ChatRow.Answer>().mapNotNull { row -> row.item.turn?.let { it to row.key } }.toMap() }
     val n = rows.size
     val lastLen = (st.items.lastOrNull() as? Item.Text)?.text?.length ?: 0
     // Desktop: branch only on the last message of a completed turn.
@@ -716,12 +715,6 @@ internal fun Transcript(
                             onLike = mid?.let { { onLike(it) } },
                             onDislike = mid?.let { { onDislike(it) } },
                         )
-                        val turn = row.item.turn
-                        if (!row.item.live && turn != null && closingAnswers[turn] == row.key) {
-                            val boundary = st.turns.firstOrNull { it.turn == turn }
-                            val startSeq = boundary?.startSeq
-                            TurnUsageStats(turn, st.steps, startSeq != null && startSeq >= st.firstSeq && boundary?.endSeq != null)
-                        }
                     }
                 }
                 is ChatRow.Notice -> SelectableOutput {
@@ -791,12 +784,11 @@ private fun MessageActions(
                 color = T.Text3,
                 maxLines = 1,
                 softWrap = false,
-                modifier = Modifier.padding(end = 20.dp).testTag("messageClock"),
+                modifier = Modifier.padding(end = 8.dp).testTag("messageClock"),
             )
         }
         Row(
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             ActionIconButton(
                 icon = if (copied) D.check else D.copy,
@@ -852,13 +844,13 @@ private fun MessageActions(
                 color = T.Text3,
                 maxLines = 1,
                 softWrap = false,
-                modifier = Modifier.padding(start = 16.dp).testTag("messageClock"),
+                modifier = Modifier.padding(start = 8.dp).testTag("messageClock"),
             )
         }
     }
 }
 
-/** Keep Android's 48dp touch target while retaining the official icon sizes. */
+/** Compact horizontal rhythm with a 48dp-high touch area and unchanged official glyph sizes. */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun ActionIconButton(
@@ -881,7 +873,8 @@ private fun ActionIconButton(
     ) {
         Box(
             modifier
-                .size(48.dp)
+                .width(36.dp)
+                .height(48.dp)
                 .clip(T.R8)
                 .then(if (enabled) Modifier.clickable(role = Role.Button, onClick = onClick) else Modifier)
                 .semantics {
