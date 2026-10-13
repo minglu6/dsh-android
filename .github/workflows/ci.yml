@@ -249,12 +249,14 @@ jobs:
           target: google_apis
           disable-animations: true
           working-directory: app
+          # android-emulator-runner invokes /bin/sh (dash); avoid bashisms like pipefail.
           script: |
-            set -euo pipefail
+            set -eu
             ./gradlew --no-daemon :app:connectedDebugAndroidTest
             adb install -r app/build/outputs/apk/release/app-release.apk
             adb shell am force-stop dev.dsh.pocket || true
-            adb shell am start -W -n dev.dsh.pocket/dev.dsh.pocket.app.MainActivity | tee /tmp/dsh-release-start.txt
+            adb shell am start -W -n dev.dsh.pocket/dev.dsh.pocket.app.MainActivity > /tmp/dsh-release-start.txt
+            cat /tmp/dsh-release-start.txt
             grep -E 'Status: ok|Success' /tmp/dsh-release-start.txt
             # Give Compose a moment; crash would leave the process dead.
             sleep 3
