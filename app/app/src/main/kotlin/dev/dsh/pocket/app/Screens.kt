@@ -60,9 +60,18 @@ private fun Header(title: String, onBack: (() -> Unit)?) {
     }
 }
 
+/** Desktop settings card: `--dsw-alias-settings-card-fill` + stroke + `--dsw-radius-lg`. */
 @Composable
 private fun Card(content: @Composable ColumnScope.() -> Unit) =
-    Column(Modifier.padding(horizontal = 18.dp, vertical = 6.dp).fillMaxWidth().clip(T.R16).border(1.dp, T.Border, T.R16), content = content)
+    Column(
+        Modifier
+            .padding(horizontal = 18.dp, vertical = 6.dp)
+            .fillMaxWidth()
+            .clip(T.R16)
+            .background(T.SettingsCard)
+            .border(1.dp, T.SettingsCardStroke, T.R16),
+        content = content,
+    )
 
 @Composable
 private fun Row2(title: String, sub: String? = null, icon: ImageVector? = null, value: String? = null, enabled: Boolean = true, divider: Boolean = true,
@@ -630,7 +639,7 @@ private fun DrawerItem(icon: ImageVector, text: String, enabled: Boolean = true,
     }
 }
 
-// ---------- Connections (desktop settings list rows · Tokyo Night) ----------
+// ---------- Connections (desktop settings list rows · --dsw-alias-*) ----------
 
 @Composable
 fun ConnectionsScreen(
@@ -742,57 +751,61 @@ fun ConnectionsScreen(
 
         if (sorted.isNotEmpty()) {
             ConnSectionTitle(L.pairedDevices())
-            sorted.forEachIndexed { i, p ->
-                val d = status[p.id]
-                val routeLabel = routes[p.id]?.label ?: p.kind
-                ConnDeviceRow(
-                    name = p.name,
-                    statusLine = buildConnStatusLine(d, routeLabel, isCurrent = p.id == active, warn = p.needsRepair),
-                    detail = p.subtitle.takeIf { !p.needsRepair },
-                    warn = p.needsRepair,
-                    divider = i < sorted.lastIndex,
-                    onClick = { manageId = p.id },
-                    leading = { StatusDot(d) },
-                )
+            Card {
+                sorted.forEachIndexed { i, p ->
+                    val d = status[p.id]
+                    val routeLabel = routes[p.id]?.label ?: p.kind
+                    ConnDeviceRow(
+                        name = p.name,
+                        statusLine = buildConnStatusLine(d, routeLabel, isCurrent = p.id == active, warn = p.needsRepair),
+                        detail = p.subtitle.takeIf { !p.needsRepair },
+                        warn = p.needsRepair,
+                        divider = i < sorted.lastIndex,
+                        onClick = { manageId = p.id },
+                        leading = { StatusDot(d) },
+                    )
+                }
             }
-            ConnHairline()
         }
 
         // 附近设备 — mDNS unpaired only; hide entirely when empty (no placeholder).
         if (nearby.isNotEmpty()) {
             ConnSectionTitle(L.nearbyDevices())
-            nearby.forEachIndexed { i, h ->
-                ConnDeviceRow(
-                    name = h.deviceName,
-                    statusLine = lanLabel,
-                    detail = "${h.host}:${h.port}",
-                    warn = false,
-                    divider = i < nearby.lastIndex,
-                    onClick = {
-                        openAddressSheet(
-                            PairingLink(h.host, h.port, ""),
-                            PeerTransport.Lan,
-                            name = h.deviceName,
-                        )
-                    },
-                    leading = { Icon(Icons.Outlined.Computer, null, tint = Conn.Accent, modifier = Modifier.size(18.dp)) },
-                )
+            Card {
+                nearby.forEachIndexed { i, h ->
+                    ConnDeviceRow(
+                        name = h.deviceName,
+                        statusLine = lanLabel,
+                        detail = "${h.host}:${h.port}",
+                        warn = false,
+                        divider = i < nearby.lastIndex,
+                        onClick = {
+                            openAddressSheet(
+                                PairingLink(h.host, h.port, ""),
+                                PeerTransport.Lan,
+                                name = h.deviceName,
+                            )
+                        },
+                        leading = { Icon(Icons.Outlined.Computer, null, tint = Conn.Accent, modifier = Modifier.size(18.dp)) },
+                    )
+                }
             }
-            ConnHairline()
         }
 
-        ConnActionRow(
-            title = L.scanQr(),
-            icon = Icons.Outlined.QrCodeScanner,
-            divider = true,
-            onClick = { showScan = true },
-        )
-        ConnActionRow(
-            title = L.enterAddress(),
-            icon = D.link,
-            divider = false,
-            onClick = { openAddressSheet() },
-        )
+        Card {
+            ConnActionRow(
+                title = L.scanQr(),
+                icon = Icons.Outlined.QrCodeScanner,
+                divider = true,
+                onClick = { showScan = true },
+            )
+            ConnActionRow(
+                title = L.enterAddress(),
+                icon = D.link,
+                divider = false,
+                onClick = { openAddressSheet() },
+            )
+        }
         Spacer(Modifier.height(24.dp))
     }
 
@@ -867,9 +880,9 @@ private fun ConnSectionTitle(title: String) {
 @Composable
 private fun ConnHairline() {
     HorizontalDivider(
-        Modifier.padding(horizontal = 22.dp),
+        Modifier.padding(horizontal = 16.dp),
         thickness = 0.5.dp,
-        color = Conn.Border.copy(alpha = 0.55f),
+        color = T.Border,
     )
 }
 
@@ -890,7 +903,7 @@ private fun ConnDeviceRow(
         Modifier
             .fillMaxWidth()
             .clickable(onClick = onClick)
-            .padding(horizontal = 22.dp, vertical = 16.dp),
+            .padding(horizontal = 16.dp, vertical = 15.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         leading()
@@ -898,8 +911,8 @@ private fun ConnDeviceRow(
         Column(Modifier.weight(1f).fillMaxWidth()) {
             Text(
                 name,
-                fontSize = 14.sp,
-                lineHeight = 20.sp,
+                fontSize = 16.sp,
+                lineHeight = 22.sp,
                 color = if (warn) Conn.Warn else Conn.Fg,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
@@ -911,7 +924,7 @@ private fun ConnDeviceRow(
                 color = Conn.FgDim,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.padding(top = 4.dp),
+                modifier = Modifier.padding(top = 2.dp),
             )
             detail?.let {
                 Text(
@@ -923,15 +936,9 @@ private fun ConnDeviceRow(
                 )
             }
         }
-        Icon(D.chevronRight, null, tint = Conn.FgMute, modifier = Modifier.size(18.dp))
+        Icon(D.chevronRight, null, tint = Conn.FgMute, modifier = Modifier.size(20.dp))
     }
-    if (divider) {
-        HorizontalDivider(
-            Modifier.padding(horizontal = 22.dp),
-            thickness = 0.5.dp,
-            color = Conn.Border.copy(alpha = 0.55f),
-        )
-    }
+    if (divider) ConnHairline()
 }
 
 /** Desktop settingsRow action: icon + title + chevron. */
@@ -946,21 +953,15 @@ private fun ConnActionRow(
         Modifier
             .fillMaxWidth()
             .clickable(onClick = onClick)
-            .padding(horizontal = 22.dp, vertical = 16.dp),
+            .padding(horizontal = 16.dp, vertical = 15.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Icon(icon, null, tint = Conn.Fg, modifier = Modifier.size(18.dp))
         Spacer(Modifier.width(12.dp))
-        Text(title, fontSize = 14.sp, lineHeight = 20.sp, color = Conn.Fg, modifier = Modifier.weight(1f))
-        Icon(D.chevronRight, null, tint = Conn.FgMute, modifier = Modifier.size(18.dp))
+        Text(title, fontSize = 16.sp, lineHeight = 22.sp, color = Conn.Fg, modifier = Modifier.weight(1f))
+        Icon(D.chevronRight, null, tint = Conn.FgMute, modifier = Modifier.size(20.dp))
     }
-    if (divider) {
-        HorizontalDivider(
-            Modifier.padding(horizontal = 22.dp),
-            thickness = 0.5.dp,
-            color = Conn.Border.copy(alpha = 0.55f),
-        )
-    }
+    if (divider) ConnHairline()
 }
 
 /** Clear status line: `在线 · Tailscale · 当前` (desktop deviceMeta pattern). */
@@ -996,13 +997,9 @@ fun ConnOverflowSheet(
     }
 }
 
+/** Desktop primary CTA — `--dsw-alias-button-primary-fill` / label-primary-foreground. */
 @Composable
-fun ConnPrimaryColors() = ButtonDefaults.buttonColors(
-    containerColor = Conn.Accent,
-    contentColor = Conn.Bg,
-    disabledContainerColor = Conn.Border,
-    disabledContentColor = Conn.FgMute,
-)
+fun ConnPrimaryColors() = PrimaryColors()
 
 /** Device manage sheet: 重命名 / 重新配对 / 删除, matching desktop ManagePanel. */
 @Composable
@@ -1100,7 +1097,7 @@ fun NearbyWifiPermissionSheet(onDismiss: () -> Unit, onAllow: () -> Unit) {
                 colors = ButtonDefaults.outlinedButtonColors(contentColor = Conn.Fg),
             ) { Text(L.cancel()) }
             Button(onAllow, Modifier.weight(1f).height(48.dp), shape = Conn.R12, colors = ConnPrimaryColors()) {
-                Text(L.allowNearby(), color = Conn.Bg)
+                Text(L.allowNearby(), color = T.OnPrimary)
             }
         }
     }
@@ -1215,7 +1212,7 @@ fun PairSheet(
                 if (busy) {
                     CircularProgressIndicator(
                         Modifier.size(16.dp).testTag("pairBusy"),
-                        color = Conn.Bg,
+                        color = T.OnPrimary,
                         strokeWidth = 2.dp,
                     )
                 }
@@ -1223,7 +1220,7 @@ fun PairSheet(
                     if (busy) L.pairingBusy() else L.pairAction(),
                     fontSize = 14.sp,
                     lineHeight = 22.sp,
-                    color = Conn.Bg,
+                    color = T.OnPrimary,
                 )
             }
         }
@@ -1235,7 +1232,14 @@ fun PairSheet(
 private fun ConnField(label: String, v: String, hint: String, mono: Boolean = false, onChange: (String) -> Unit) {
     Column(Modifier.padding(horizontal = 18.dp, vertical = 4.dp)) {
         Text(label, fontSize = 12.sp, color = Conn.FgMute, modifier = Modifier.padding(start = 4.dp, bottom = 4.dp))
-        Box(Modifier.fillMaxWidth().clip(Conn.R12).background(Conn.Elevated).padding(horizontal = 14.dp, vertical = 12.dp)) {
+        Box(
+            Modifier
+                .fillMaxWidth()
+                .clip(Conn.R12)
+                .background(Conn.Elevated)
+                .border(0.5.dp, Conn.Border, Conn.R12)
+                .padding(horizontal = 14.dp, vertical = 12.dp),
+        ) {
             if (v.isEmpty()) {
                 Text(hint, color = Conn.FgMute, style = if (mono) Conn.Mono.copy(fontSize = 14.sp, color = Conn.FgMute) else TextStyle.Default.copy(fontSize = 14.sp, color = Conn.FgMute))
             }
@@ -1297,7 +1301,7 @@ fun SettingsScreen(
             }
             Row2("Agent 预设", icon = D.agentPreset, value = "标准模式", divider = false, onClick = { sheet = true })
         }
-        Text("dsh-android", fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(start = 22.dp, top = 12.dp, bottom = 2.dp))
+        Text("dsh-android", fontSize = 13.sp, color = T.Text3, modifier = Modifier.padding(start = 22.dp, top = 12.dp, bottom = 2.dp))
         Card {
             Row2("连接", icon = D.rightUp, value = profile?.name ?: "未连接", onClick = onConnections)
             Row2(L.diagnostics(), icon = D.inspect, onClick = { diagnostics = true })
@@ -1306,13 +1310,13 @@ fun SettingsScreen(
                     notify,
                     { notify = it; Pocket.prefs.approvalNotify = it },
                     colors = SwitchDefaults.colors(
-                        checkedTrackColor = MaterialTheme.colorScheme.onSurface,
-                        checkedThumbColor = MaterialTheme.colorScheme.surface,
+                        checkedTrackColor = T.PrimaryButton,
+                        checkedThumbColor = T.OnPrimary,
                     ),
                 )
             })
         }
-        Text("当前版本：${BuildConfig.VERSION_NAME}${profile?.let { " · ${it.name}" } ?: ""}", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant,
+        Text("当前版本：${BuildConfig.VERSION_NAME}${profile?.let { " · ${it.name}" } ?: ""}", fontSize = 12.sp, color = T.Caption,
             textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth().padding(16.dp))
     }
     if (sheet) PresetSheet("standard", editable = false, onDismiss = { sheet = false }) {}
@@ -1372,7 +1376,7 @@ fun DiagnosticsSheet(onDismiss: () -> Unit) {
                 enabled = !report.isNullOrBlank(),
                 shape = T.R12,
                 colors = PrimaryColors(),
-            ) { Text(L.diagnosticsCopy(), color = Color.White) }
+            ) { Text(L.diagnosticsCopy(), color = T.OnPrimary) }
         }
     }
 }

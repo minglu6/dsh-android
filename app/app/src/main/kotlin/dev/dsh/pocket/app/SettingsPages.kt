@@ -37,11 +37,10 @@ import kotlinx.serialization.json.JsonElement
 
 @Composable
 private fun SettingsScaffold(title: String, onBack: () -> Unit, content: @Composable ColumnScope.() -> Unit) {
-    val cs = MaterialTheme.colorScheme
     Column(
         Modifier
             .fillMaxSize()
-            .background(cs.background)
+            .background(T.Bg)
             .systemBarsPadding()
             .verticalScroll(rememberScrollState()),
     ) {
@@ -50,23 +49,24 @@ private fun SettingsScaffold(title: String, onBack: () -> Unit, content: @Compos
             verticalAlignment = Alignment.CenterVertically,
         ) {
             IconButton(onBack) {
-                Icon(D.chevronLeft, "返回", tint = cs.onSurface)
+                Icon(D.chevronLeft, "返回", tint = T.Ink)
             }
-            Text(title, fontSize = 20.sp, color = cs.onSurface)
+            Text(title, fontSize = 20.sp, color = T.Ink)
         }
         content()
     }
 }
 
+/** Desktop settings card fill/stroke (`--dsw-alias-settings-card-*`) + radius-lg. */
 @Composable
 private fun SettingsCard(content: @Composable ColumnScope.() -> Unit) {
-    val cs = MaterialTheme.colorScheme
     Column(
         Modifier
             .padding(horizontal = 18.dp, vertical = 6.dp)
             .fillMaxWidth()
             .clip(T.R16)
-            .border(1.dp, cs.outlineVariant, T.R16),
+            .background(T.SettingsCard)
+            .border(1.dp, T.SettingsCardStroke, T.R16),
         content = content,
     )
 }
@@ -79,55 +79,53 @@ private fun SettingsNavRow(
     divider: Boolean = true,
     onClick: () -> Unit,
 ) {
-    val cs = MaterialTheme.colorScheme
     Row(
         Modifier.fillMaxWidth().clickable(onClick = onClick).padding(horizontal = 16.dp, vertical = 15.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         icon?.let {
-            Icon(it, null, tint = cs.onSurface, modifier = Modifier.size(18.dp))
+            Icon(it, null, tint = T.Ink, modifier = Modifier.size(18.dp))
             Spacer(Modifier.width(12.dp))
         }
-        Text(title, fontSize = 16.sp, color = cs.onSurface, modifier = Modifier.weight(1f))
+        Text(title, fontSize = 16.sp, color = T.Ink, modifier = Modifier.weight(1f))
         value?.let {
-            Text(it, fontSize = 15.sp, color = cs.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(it, fontSize = 15.sp, color = T.Text2, maxLines = 1, overflow = TextOverflow.Ellipsis)
             Spacer(Modifier.width(6.dp))
         }
-        Icon(D.chevronRight, null, tint = cs.onSurfaceVariant, modifier = Modifier.size(20.dp))
+        Icon(D.chevronRight, null, tint = T.Text3, modifier = Modifier.size(20.dp))
     }
-    if (divider) HorizontalDivider(Modifier.padding(horizontal = 16.dp), color = cs.outlineVariant.copy(alpha = 0.5f))
+    if (divider) HorizontalDivider(Modifier.padding(horizontal = 16.dp), color = T.Border)
 }
 
 /** Label above control — phone adaptation of desktop settings field layout. */
 @Composable
 fun LabeledField(label: String, content: @Composable () -> Unit) {
-    val cs = MaterialTheme.colorScheme
     Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp)) {
-        Text(label, fontSize = 13.sp, color = cs.onSurfaceVariant, modifier = Modifier.padding(bottom = 6.dp))
+        Text(label, fontSize = 13.sp, color = T.Text3, modifier = Modifier.padding(bottom = 6.dp))
         content()
     }
 }
 
 @Composable
 fun SettingsTextField(value: String, onChange: (String) -> Unit, hint: String = "", mono: Boolean = false) {
-    val cs = MaterialTheme.colorScheme
     Box(
         Modifier
             .fillMaxWidth()
             .clip(T.R12)
-            .background(cs.surfaceVariant.copy(alpha = 0.45f))
+            .background(T.Input)
+            .border(0.5.dp, T.Border, T.R12)
             .padding(horizontal = 14.dp, vertical = 13.dp),
     ) {
-        if (value.isEmpty()) Text(hint, color = cs.onSurfaceVariant.copy(alpha = 0.6f), fontSize = 15.sp)
+        if (value.isEmpty()) Text(hint, color = T.Caption, fontSize = 15.sp)
         BasicTextField(
             value,
             onChange,
             singleLine = true,
             textStyle = (if (mono) T.Mono else MaterialTheme.typography.bodyMedium).copy(
                 fontSize = 15.sp,
-                color = cs.onSurface,
+                color = T.Ink,
             ),
-            cursorBrush = SolidColor(cs.primary),
+            cursorBrush = SolidColor(T.Accent),
             modifier = Modifier.fillMaxWidth(),
         )
     }
@@ -135,12 +133,11 @@ fun SettingsTextField(value: String, onChange: (String) -> Unit, hint: String = 
 
 @Composable
 private fun ErrorOrEmpty(message: String, onRetry: (() -> Unit)? = null) {
-    val cs = MaterialTheme.colorScheme
     Column(Modifier.fillMaxWidth().padding(24.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-        Text(message, color = cs.onSurfaceVariant, fontSize = 14.sp)
+        Text(message, color = T.Text3, fontSize = 14.sp)
         if (onRetry != null) {
             Spacer(Modifier.height(12.dp))
-            TextButton(onRetry) { Text(L.retry()) }
+            TextButton(onRetry) { Text(L.retry(), color = T.Accent) }
         }
     }
 }
@@ -188,18 +185,18 @@ fun ModelsSettingsScreen(onBack: () -> Unit) {
         SettingsScaffold(L.providerDetail(), onBack = { detail = null; keyDraft = "" }) {
             SettingsCard {
                 LabeledField(L.modelsNav()) {
-                    Text(row["displayName"].str() ?: provider, fontSize = 16.sp, color = MaterialTheme.colorScheme.onSurface)
+                    Text(row["displayName"].str() ?: provider, fontSize = 16.sp, color = T.Ink)
                 }
-                HorizontalDivider(Modifier.padding(horizontal = 16.dp), color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+                HorizontalDivider(Modifier.padding(horizontal = 16.dp), color = T.Border)
                 LabeledField(L.apiKey()) {
                     Text(
                         if (configured) L.credentialConfigured() else L.credentialMissing(),
                         fontSize = 14.sp,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        color = T.Text3,
                     )
                     Spacer(Modifier.height(8.dp))
                     SettingsTextField(keyDraft, { keyDraft = it }, hint = if (configured) L.maskedSecret() else L.apiKeyPlaceholder(), mono = true)
-                    Text(L.keyBlankKeep(), fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 6.dp))
+                    Text(L.keyBlankKeep(), fontSize = 12.sp, color = T.Text3, modifier = Modifier.padding(top = 6.dp))
                 }
             }
             val ref = row["apiKeyEnv"].str()
@@ -218,8 +215,10 @@ fun ModelsSettingsScreen(onBack: () -> Unit) {
                             }
                         },
                         enabled = !busy && keyDraft.isNotBlank(),
-                        modifier = Modifier.weight(1f),
-                    ) { Text(L.save()) }
+                        modifier = Modifier.weight(1f).height(48.dp),
+                        shape = T.R12,
+                        colors = PrimaryColors(),
+                    ) { Text(L.save(), color = T.OnPrimary) }
                     if (configured && "credentials.unset" in ops) {
                         OutlinedButton(
                             onClick = {
@@ -239,14 +238,14 @@ fun ModelsSettingsScreen(onBack: () -> Unit) {
             }
             val models = row["profile"]["models"].arr().orEmpty()
             if (models.isNotEmpty()) {
-                Text(L.modelsCatalog(), fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(start = 22.dp, top = 8.dp, bottom = 4.dp))
+                Text(L.modelsCatalog(), fontSize = 13.sp, color = T.Text3, modifier = Modifier.padding(start = 22.dp, top = 8.dp, bottom = 4.dp))
                 SettingsCard {
                     models.forEachIndexed { i, m ->
                         LabeledField(m["id"].str() ?: m["name"].str() ?: "model") {
-                            Text(m["name"].str() ?: m["id"].str().orEmpty(), fontSize = 15.sp, color = MaterialTheme.colorScheme.onSurface)
+                            Text(m["name"].str() ?: m["id"].str().orEmpty(), fontSize = 15.sp, color = T.Ink)
                         }
                         if (i < models.lastIndex) {
-                            HorizontalDivider(Modifier.padding(horizontal = 16.dp), color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+                            HorizontalDivider(Modifier.padding(horizontal = 16.dp), color = T.Border)
                         }
                     }
                 }
@@ -256,7 +255,7 @@ fun ModelsSettingsScreen(onBack: () -> Unit) {
     }
 
     SettingsScaffold(L.modelsTitle(), onBack) {
-        Text(L.modelsIntro(), fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(horizontal = 22.dp, vertical = 4.dp))
+        Text(L.modelsIntro(), fontSize = 13.sp, color = T.Text3, modifier = Modifier.padding(horizontal = 22.dp, vertical = 4.dp))
         when {
             loading -> ErrorOrEmpty(L.loading())
             error != null -> ErrorOrEmpty(error!!, onRetry = ::reload)
@@ -325,15 +324,15 @@ fun PluginsSettingsScreen(onBack: () -> Unit) {
         SettingsScaffold(title, onBack = { detail = null }) {
             SettingsCard {
                 LabeledField(L.pluginsTitle()) {
-                    Text(title, fontSize = 16.sp, color = MaterialTheme.colorScheme.onSurface)
+                    Text(title, fontSize = 16.sp, color = T.Ink)
                     row["description"].str()?.let {
-                        Text(it, fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 4.dp))
+                        Text(it, fontSize = 13.sp, color = T.Text3, modifier = Modifier.padding(top = 4.dp))
                     }
                     row["version"].str()?.let {
-                        Text("v$it", style = T.Mono.copy(color = MaterialTheme.colorScheme.onSurfaceVariant), modifier = Modifier.padding(top = 4.dp))
+                        Text("v$it", style = T.Mono.copy(color = T.Text3), modifier = Modifier.padding(top = 4.dp))
                     }
                 }
-                HorizontalDivider(Modifier.padding(horizontal = 16.dp), color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+                HorizontalDivider(Modifier.padding(horizontal = 16.dp), color = T.Border)
                 LabeledField(if (enabled) L.enabled() else L.disabled()) {
                     Switch(
                         enabled,
@@ -353,22 +352,22 @@ fun PluginsSettingsScreen(onBack: () -> Unit) {
                         },
                         enabled = !readOnly && "plugins.setEnabled" in ops,
                         colors = SwitchDefaults.colors(
-                            checkedTrackColor = MaterialTheme.colorScheme.onSurface,
-                            checkedThumbColor = MaterialTheme.colorScheme.surface,
+                            checkedTrackColor = T.PrimaryButton,
+                            checkedThumbColor = T.OnPrimary,
                         ),
                     )
                 }
             }
             val parts = row["rows"].arr().orEmpty()
             if (parts.isNotEmpty()) {
-                Text(L.builtinPluginsNav(), fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(start = 22.dp, top = 12.dp))
+                Text(L.builtinPluginsNav(), fontSize = 13.sp, color = T.Text3, modifier = Modifier.padding(start = 22.dp, top = 12.dp))
                 SettingsCard {
                     parts.forEachIndexed { i, p ->
                         LabeledField(p["moduleName"].str() ?: p["rowId"].str().orEmpty()) {
-                            Text(p["rowId"].str().orEmpty(), style = T.Mono.copy(fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant))
+                            Text(p["rowId"].str().orEmpty(), style = T.Mono.copy(fontSize = 12.sp, color = T.Text3))
                         }
                         if (i < parts.lastIndex) {
-                            HorizontalDivider(Modifier.padding(horizontal = 16.dp), color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+                            HorizontalDivider(Modifier.padding(horizontal = 16.dp), color = T.Border)
                         }
                     }
                 }
@@ -378,14 +377,14 @@ fun PluginsSettingsScreen(onBack: () -> Unit) {
     }
 
     SettingsScaffold(L.pluginsTitle(), onBack) {
-        Text(L.pluginsIntro(), fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(horizontal = 22.dp, vertical = 4.dp))
+        Text(L.pluginsIntro(), fontSize = 13.sp, color = T.Text3, modifier = Modifier.padding(horizontal = 22.dp, vertical = 4.dp))
         when {
             loading -> ErrorOrEmpty(L.loading())
             error != null -> ErrorOrEmpty(error!!, onRetry = ::reload)
             bundles.isEmpty() && plugins.isEmpty() -> ErrorOrEmpty(L.emptyPlugins(), onRetry = ::reload)
             else -> {
                 if (bundles.isNotEmpty()) {
-                    Text("${bundles.size} ${L.countUnit()}", fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(start = 22.dp, top = 8.dp))
+                    Text("${bundles.size} ${L.countUnit()}", fontSize = 13.sp, color = T.Text3, modifier = Modifier.padding(start = 22.dp, top = 8.dp))
                     SettingsCard {
                         bundles.forEachIndexed { i, b ->
                             val name = b["meta"]["title"]["zh"].str()
@@ -401,7 +400,7 @@ fun PluginsSettingsScreen(onBack: () -> Unit) {
                     }
                 }
                 if (plugins.isNotEmpty()) {
-                    Text(L.builtinPluginsNav(), fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(start = 22.dp, top = 12.dp))
+                    Text(L.builtinPluginsNav(), fontSize = 13.sp, color = T.Text3, modifier = Modifier.padding(start = 22.dp, top = 12.dp))
                     SettingsCard {
                         plugins.forEachIndexed { i, p ->
                             SettingsNavRow(
@@ -461,9 +460,9 @@ fun ScheduleSettingsScreen(onBack: () -> Unit) {
         SettingsScaffold(L.createSchedule(), onBack = { creating = false }) {
             SettingsCard {
                 LabeledField(L.scheduleTitleField()) { SettingsTextField(title, { title = it }) }
-                HorizontalDivider(Modifier.padding(horizontal = 16.dp), color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+                HorizontalDivider(Modifier.padding(horizontal = 16.dp), color = T.Border)
                 LabeledField(L.schedulePromptField()) { SettingsTextField(prompt, { prompt = it }) }
-                HorizontalDivider(Modifier.padding(horizontal = 16.dp), color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+                HorizontalDivider(Modifier.padding(horizontal = 16.dp), color = T.Border)
                 LabeledField(L.scheduleAfterSeconds()) { SettingsTextField(afterSec, { afterSec = it }, mono = true) }
             }
             val sessionId = Pocket.chat.value?.sessionId ?: Pocket.sessions.value.firstOrNull()?.sessionId
@@ -503,19 +502,19 @@ fun ScheduleSettingsScreen(onBack: () -> Unit) {
         SettingsScaffold(row["title"].str() ?: id, onBack = { detail = null; history = emptyList() }) {
             SettingsCard {
                 LabeledField(L.scheduleTitleField()) {
-                    Text(row["title"].str().orEmpty(), fontSize = 16.sp, color = MaterialTheme.colorScheme.onSurface)
+                    Text(row["title"].str().orEmpty(), fontSize = 16.sp, color = T.Ink)
                 }
-                HorizontalDivider(Modifier.padding(horizontal = 16.dp), color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+                HorizontalDivider(Modifier.padding(horizontal = 16.dp), color = T.Border)
                 LabeledField(L.schedulePromptField()) {
-                    Text(row["prompt"].str().orEmpty(), fontSize = 14.sp, color = MaterialTheme.colorScheme.onSurface)
+                    Text(row["prompt"].str().orEmpty(), fontSize = 14.sp, color = T.Ink)
                 }
-                HorizontalDivider(Modifier.padding(horizontal = 16.dp), color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+                HorizontalDivider(Modifier.padding(horizontal = 16.dp), color = T.Border)
                 LabeledField(L.nextRun()) {
-                    Text(row["scheduledAt"].str().orEmpty(), style = T.Mono.copy(fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant))
+                    Text(row["scheduledAt"].str().orEmpty(), style = T.Mono.copy(fontSize = 13.sp, color = T.Text3))
                 }
-                HorizontalDivider(Modifier.padding(horizontal = 16.dp), color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+                HorizontalDivider(Modifier.padding(horizontal = 16.dp), color = T.Border)
                 LabeledField(if (status == "active") L.statusActive() else L.statusInactive()) {
-                    Text(status, fontSize = 14.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text(status, fontSize = 14.sp, color = T.Text3)
                 }
             }
             Row(Modifier.padding(18.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -557,14 +556,14 @@ fun ScheduleSettingsScreen(onBack: () -> Unit) {
                 }
             }
             if (history.isNotEmpty()) {
-                Text(L.deliveryHistory(), fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(start = 22.dp))
+                Text(L.deliveryHistory(), fontSize = 13.sp, color = T.Text3, modifier = Modifier.padding(start = 22.dp))
                 SettingsCard {
                     history.forEachIndexed { i, h ->
                         LabeledField(h["deliveredAt"].str() ?: h["scheduledAt"].str().orEmpty()) {
-                            Text(h["prompt"].str() ?: "—", fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurface, maxLines = 3, overflow = TextOverflow.Ellipsis)
+                            Text(h["prompt"].str() ?: "—", fontSize = 13.sp, color = T.Ink, maxLines = 3, overflow = TextOverflow.Ellipsis)
                         }
                         if (i < history.lastIndex) {
-                            HorizontalDivider(Modifier.padding(horizontal = 16.dp), color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+                            HorizontalDivider(Modifier.padding(horizontal = 16.dp), color = T.Border)
                         }
                     }
                 }
@@ -653,7 +652,7 @@ fun CredentialsSettingsScreen(onBack: () -> Unit) {
         SettingsScaffold(L.addCredential(), onBack = { adding = false; refDraft = ""; valueDraft = "" }) {
             SettingsCard {
                 LabeledField(L.refName()) { SettingsTextField(refDraft, { refDraft = it }, mono = true) }
-                HorizontalDivider(Modifier.padding(horizontal = 16.dp), color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+                HorizontalDivider(Modifier.padding(horizontal = 16.dp), color = T.Border)
                 LabeledField(L.apiKey()) { SettingsTextField(valueDraft, { valueDraft = it }, hint = L.apiKeyPlaceholder(), mono = true) }
             }
             Button(
@@ -680,14 +679,14 @@ fun CredentialsSettingsScreen(onBack: () -> Unit) {
         SettingsScaffold(ref, onBack = { detail = null; valueDraft = "" }) {
             SettingsCard {
                 LabeledField(L.refName()) {
-                    Text(ref, style = T.Mono.copy(fontSize = 14.sp, color = MaterialTheme.colorScheme.onSurface))
+                    Text(ref, style = T.Mono.copy(fontSize = 14.sp, color = T.Ink))
                 }
-                HorizontalDivider(Modifier.padding(horizontal = 16.dp), color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+                HorizontalDivider(Modifier.padding(horizontal = 16.dp), color = T.Border)
                 LabeledField(L.apiKey()) {
                     Text(
                         if (configured) "${L.credentialConfigured()} · ${L.maskedSecret()}" else L.credentialMissing(),
                         fontSize = 14.sp,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        color = T.Text3,
                     )
                     Spacer(Modifier.height(8.dp))
                     SettingsTextField(valueDraft, { valueDraft = it }, hint = L.apiKeyPlaceholder(), mono = true)
@@ -726,7 +725,7 @@ fun CredentialsSettingsScreen(onBack: () -> Unit) {
 
     SettingsScaffold(L.credentialsTitle(), onBack) {
         Row(Modifier.padding(horizontal = 18.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-            Text(L.credentialsNav(), fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.weight(1f))
+            Text(L.credentialsNav(), fontSize = 13.sp, color = T.Text3, modifier = Modifier.weight(1f))
             if ("credentials.set" in ops) TextButton({ adding = true }) { Text(L.add()) }
         }
         when {

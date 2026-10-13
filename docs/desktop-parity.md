@@ -326,6 +326,7 @@ Appearance values from `ui-theme` locales. Performance: `settings.performance.{c
 |---|---|
 | Folder attach | desktop-only (**hide**) |
 | Appearance theme tokens | **done** — full `--dsw-alias-*` / `--dsw-specific-*` from ui-theme design-platform.css @ d743267 → `DswColors` + theme-aware `T.*`; Appearance Light/Dark/System drives chrome |
+| Connections / pair / settings chrome | **done** — `Conn` aliases `T.*` (no Tokyo Night); settings cards use `--dsw-alias-settings-card-*`; pair sheet = PocketSheet + primary CTA |
 | Document preview (text / image / PDF) | **done** — tap file path/link in chat or trajectory → `FilePreviewSheet` via `files.read` / `files.readBytes`; copy uses common `copy`/`copied`; PDF via `PdfRenderer` (no GMS) |
 | Wide / foldable layout | **done** — ≥600dp two-pane sidebar (desktop-like) + Layout Auto/Phone/Desktop pref |
 | Drawer tap / safe-area | **done** — session row closes drawer; workspace collapse does not; drawer session menu is `DropdownMenu` (first tap not eaten); sheets/nav use system bar insets |
