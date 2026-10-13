@@ -223,10 +223,12 @@ Phone adaptation: themed bottom sheets.
 | Page | Locale | Decision |
 |---|---|---|
 | 通用设置 | `general.nav` 通用设置; language / appearance / font / transcript / collapse / busy-send / performance | feasible (mostly done, phone-local) |
-| 模型 | settings-models | **hide** credentials UI |
-| 内置插件 / 插件 | plugin inventory | **hide** |
+| 模型 | settings-models | **done** — native Compose + `models.providers` / `models.settingsMutate` / credentials for API keys |
+| 内置插件 / 插件 | plugin-manager + inventory | **done** — list / enable / detail; local-path install stays **hide** (OS picker) |
+| 自动化任务 | ui-schedule | **done** — catalog / create / edit / delete / history; no pause toggle (desktop `inactive` = ended) |
+| 凭证 | credentials describe/set/unset | **done** — list/add/edit/delete; values masked (`configured` only) |
 | Agent 预设 | agent-preset | keep roster info |
-| 打开配置文件 | `openDocument` | **hide** |
+| 打开配置文件 | `openDocument` | **hide** (local desktop editor) |
 | Shell / 终端 limits | settings-shell | optional **needs-plugin** |
 | Web search / subagent / agent-loop / account / session-log | respective locales | hide or limited |
 | 连接 / 审批通知 | phone Connections + notify pref | keep |
@@ -296,12 +298,13 @@ Appearance values from `ui-theme` locales. Performance: `settings.performance.{c
 | Drawer width / workspaces / new session | present | — |
 | Session search | **done** (`sessions.search`) | was needs-plugin |
 | Archive / pin / fork from sidebar | **done** (workspace archive/pin + row ⋯ / long-press) | was needs-plugin |
-| 插件 / 自动化任务 | removed | hide |
+| 插件 / 自动化任务 | **done** (Settings nav → Plugins / Scheduled tasks; drawer entries still omit desktop chrome installers) | was hide |
 | Files / terminal / jobs / todo sheets | present | — |
 | Browser | hidden | hide |
 | Settings general rows | present | — |
 | Language / appearance prefs | **done** (labels wired via L; en for new surfaces) | was feasible (partial) |
-| Models / plugins / open config | removed | hide |
+| Models / plugins / credentials / schedules | **done** (native Compose; ops gated by hello `ops`) | was hide |
+| Open config file / local-path plugin install | hidden | hide (desktop OS chrome) |
 
 ---
 
@@ -311,15 +314,22 @@ Appearance values from `ui-theme` locales. Performance: `settings.performance.{c
 
 **Added in this pass (parity-ops):** `sessions.search`, `workspace.state` / `archiveSession` / `unarchiveSession` / `pinSession` / `unpinSession`, `feedback.get` / `feedback.set`, `references.files` / `references.sessions`, `session.attachment`, `attachments.upload`, `userQuestions.answer` (+ push `user-question` / `user-question.closed`).
 
+**Settings ops (this pass):** `models.providers` / `models.providerGet` / `models.settingsMutate` / `models.discover`; `plugins.list` / `plugins.setEnabled` / `plugins.install` / `plugins.inventory`; `schedule.catalog` / `list` / `create` / `update` / `delete` / `history`; `credentials.list` / `describe` / `set` / `unset` / `deleteRecord`. Host injects: `llm`, `settings`/`settingsController`, `credentials`, `pluginManager`, `schedule`.
+
 **Still limited / unfinished:**
 
 | Gap | Notes |
 |---|---|
 | Folder attach | desktop-only (**hide**) |
-| Appearance theme tokens | prefs + labels done; UI chrome still light `T.*` (Material dark follows Appearance pref) |
-| OS workspace picker / browser / plugin manager / schedules / credentials | **hide** |
+| Appearance theme tokens | prefs + labels done; new settings pages use `MaterialTheme.colorScheme` (parallel theme-token agent) |
+| OS workspace picker / browser / open-config / local-path plugin install | **hide** (desktop OS chrome) |
+| Schedule pause toggle | desktop has no pause — `inactive` means ended after delivery |
+| Plugin schema ConfigForm editors | desktop `configForms` is client-side over settings namespaces; phone shows enable/detail/parts. Full schema-driven forms stay limited — use `models.settingsMutate` / Host settings when a namespace is known |
+| `settings.openSettingsDocument` | desktop OS editor (**hide**) |
 
 **Also added:** `workspaceChanges.summary` → Host `workspaceChanges.summary(sessionId, seq)` to enrich changed-file cards; `@` mention pick inserts into composer.
+
+**Adapted from dsh-mobile (Apache-2.0):** list→detail fullscreen Settings chrome and Host `pluginManager` / schedule call shapes studied from [saya-ch/dsh-mobile](https://github.com/saya-ch/dsh-mobile); see `docs/THIRD_PARTY_NOTICES.md`.
 
 ---
 

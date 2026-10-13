@@ -16,6 +16,9 @@ import {
   searchOps, workspaceOps, feedbackOps, fileReferenceOps, sessionReferenceOps,
   attachmentOps, workspaceChangesOps, uploadOps, userQuestionOps,
 } from './src/parity-ops.js'
+import {
+  modelsSettingsOps, pluginsOps, pluginInventoryOps, scheduleOps, credentialsOps,
+} from './src/settings-ops.js'
 import { registerPairRoute } from './src/web-route.js'
 import { createManageApi, pairingUri, pairingString, connectionTypeForHost } from './src/manage.js'
 import { startIrohSidecar } from './src/iroh.js'
@@ -172,6 +175,38 @@ export function apply(ctx, config = {}) {
     c.effect(() => server.registerOps(userQuestionOps(c.userQuestions, c.agents, {
       settleOffer: (callId, answer) => server.settleUserQuestion(callId, answer),
     })))
+  })
+  // Desktop settings surfaces (models providers / plugins / schedules / credentials).
+  // Each inject is optional; ops appear in hello only while the Host service is live.
+  ctx.inject(['llm'], (c) => {
+    c.effect(() => {
+      const settings = c.get?.('settings') ?? null
+      const settingsController = c.get?.('settingsController') ?? null
+      const credentials = c.get?.('credentials') ?? null
+      server.registerOps(modelsSettingsOps({
+        llm: c.llm, settings, settingsController, credentials,
+      }))
+    })
+  })
+  ctx.inject(['pluginManager'], (c) => {
+    c.effect(() => {
+      server.registerOps(pluginsOps(c.pluginManager))
+      const inventory = c.get?.('pluginInventory') ?? null
+      server.registerOps(pluginInventoryOps(inventory, c.pluginManager))
+    })
+  })
+  ctx.inject(['schedule'], (c) => {
+    c.effect(() => server.registerOps(scheduleOps(c.schedule)))
+  })
+  ctx.inject(['credentials'], (c) => {
+    c.effect(() => {
+      const llm = c.get?.('llm') ?? null
+      const settings = c.get?.('settings') ?? null
+      const settingsController = c.get?.('settingsController') ?? null
+      server.registerOps(credentialsOps({
+        credentials: c.credentials, llm, settings, settingsController,
+      }))
+    })
   })
   ctx.inject(['webServer'], (webCtx) => registerPairRoute(webCtx, manage))
 

@@ -20,7 +20,10 @@ import dev.dsh.pocket.protocol.PairingLink
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
 
-enum class Screen { Chat, Connections, Settings, General }
+enum class Screen {
+    Chat, Connections, Settings, General,
+    Models, Plugins, Schedule, Credentials,
+}
 
 class MainActivity : ComponentActivity() {
     /** Asked only once a desktop is connected (approval notifications need it). */
@@ -104,7 +107,12 @@ private fun Root(deepLink: MutableStateFlow<PairingLink?>) {
     }
     LaunchedEffect(link) { if (link != null) screen = Screen.Connections }
 
-    BackHandler(screen != Screen.Chat && active != null) { screen = if (screen == Screen.General) Screen.Settings else Screen.Chat }
+    BackHandler(screen != Screen.Chat && active != null) {
+        screen = when (screen) {
+            Screen.General, Screen.Models, Screen.Plugins, Screen.Schedule, Screen.Credentials -> Screen.Settings
+            else -> Screen.Chat
+        }
+    }
     BackHandler(drawer.isOpen) { scope.launch { drawer.close() } }
 
     Box(Modifier.fillMaxSize()) {
@@ -114,8 +122,20 @@ private fun Root(deepLink: MutableStateFlow<PairingLink?>) {
                 canBack = active != null, onBack = { screen = Screen.Chat },
                 onConnected = { screen = Screen.Chat },
             )
-            Screen.Settings -> SettingsScreen(onBack = { screen = Screen.Chat }, onGeneral = { screen = Screen.General }, onConnections = { screen = Screen.Connections })
+            Screen.Settings -> SettingsScreen(
+                onBack = { screen = Screen.Chat },
+                onGeneral = { screen = Screen.General },
+                onConnections = { screen = Screen.Connections },
+                onModels = { screen = Screen.Models },
+                onPlugins = { screen = Screen.Plugins },
+                onSchedule = { screen = Screen.Schedule },
+                onCredentials = { screen = Screen.Credentials },
+            )
             Screen.General -> GeneralSettingsScreen(onBack = { screen = Screen.Settings })
+            Screen.Models -> ModelsSettingsScreen(onBack = { screen = Screen.Settings })
+            Screen.Plugins -> PluginsSettingsScreen(onBack = { screen = Screen.Settings })
+            Screen.Schedule -> ScheduleSettingsScreen(onBack = { screen = Screen.Settings })
+            Screen.Credentials -> CredentialsSettingsScreen(onBack = { screen = Screen.Settings })
             Screen.Chat -> ModalNavigationDrawer(
                 drawerState = drawer,
                 drawerContent = {
