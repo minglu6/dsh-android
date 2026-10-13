@@ -1,7 +1,6 @@
 package dev.dsh.pocket.app
 
 import androidx.compose.ui.test.*
-import androidx.compose.ui.test.junit4.createComposeRule
 import dev.dsh.pocket.protocol.*
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.flow.emptyFlow

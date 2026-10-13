@@ -2,7 +2,6 @@ package dev.dsh.pocket.app
 
 import androidx.compose.runtime.*
 import androidx.compose.ui.test.*
-import androidx.compose.ui.test.junit4.createComposeRule
 import org.junit.Before
 import org.junit.Rule
 import org.junit.Test

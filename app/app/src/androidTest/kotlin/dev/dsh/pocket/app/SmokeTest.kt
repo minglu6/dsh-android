@@ -2,23 +2,25 @@ package dev.dsh.pocket.app
 
 import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
-import androidx.test.ext.junit.runners.AndroidJUnit4
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
+import androidx.test.ext.junit.runners.AndroidJUnit4
 
 @RunWith(AndroidJUnit4::class)
 class SmokeTest {
     @get:Rule val rule = createAndroidComposeRule<MainActivity>()
 
     @Test fun launchesToConnectionsAndOpensPairSheet() {
-        rule.onNodeWithText("连接").assertIsDisplayed()
-        // Desktop-parity list rows (no boxed LAN / Tailscale tabs).
-        rule.onNodeWithText("扫码").assertIsDisplayed()
-        rule.onNodeWithText("输入地址").performClick()
+        rule.waitUntil(10_000) {
+            rule.onAllNodesWithTag("connectionsScreen").fetchSemanticsNodes().isNotEmpty()
+        }
+        rule.onNodeWithTag("connectionsScreen").assertIsDisplayed()
+        rule.onNodeWithText(L.scanQr()).assertIsDisplayed()
+        rule.onNodeWithText(L.enterAddress()).performClick()
         rule.waitUntil(10_000) {
             rule.onAllNodesWithText("192.168.x.x:7690").fetchSemanticsNodes().isNotEmpty()
         }
-        rule.onNode(hasText("开始配对") and hasClickAction()).assertExists()
+        rule.onNode(hasText(L.pairAction()) and hasClickAction()).assertExists()
     }
 }

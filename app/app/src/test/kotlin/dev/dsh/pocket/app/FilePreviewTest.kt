@@ -15,7 +15,7 @@ import kotlin.test.assertTrue
 
 @RunWith(RobolectricTestRunner::class)
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
-@Config(sdk = [34])
+@Config(sdk = [34], qualifiers = "w412dp-h915dp-xxhdpi")
 class FilePreviewTest {
     // Actual PDF page rendering and descriptor lifetime are covered by PdfPreviewInstrumentedTest.
     @Test fun htmlAllowsEmbeddedSubresourcesButNeverNavigationOrExternalResources() {

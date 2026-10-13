@@ -94,8 +94,13 @@ private fun RunningWhale(color: Color, modifier: Modifier) {
 @Composable
 internal fun RunningStatus(since: Long?, showDivider: Boolean) {
     var now by remember(since) { mutableLongStateOf(System.currentTimeMillis()) }
-    LaunchedEffect(since) {
-        if (since != null) while (true) { delay(1000); now = System.currentTimeMillis() }
+    val tickClock = since != null && ValueAnimator.areAnimatorsEnabled()
+    LaunchedEffect(since, tickClock) {
+        // The elapsed-time clock is an infinite recomposition source. Espresso/Compose
+        // waitForIdle treats delay+state as pending work, so tests and animator-off
+        // stay on a single snapshot instead of advancing forever.
+        if (!tickClock) return@LaunchedEffect
+        while (true) { delay(1000); now = System.currentTimeMillis() }
     }
     val en = Pocket.prefs.language == AppLanguage.En
     val status = if (en) "Deep diving" else "深度求索中"

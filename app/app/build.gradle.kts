@@ -1,3 +1,5 @@
+import java.time.Duration
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
@@ -100,4 +102,16 @@ dependencies {
     testImplementation("io.github.takahirom.roborazzi:roborazzi-compose:1.39.0")
     testImplementation(platform("androidx.compose:compose-bom:2024.10.01"))
     testImplementation("androidx.compose.ui:ui-test-junit4")
+    testImplementation("androidx.test.espresso:espresso-core:3.6.1")
+}
+
+tasks.withType<org.gradle.api.tasks.testing.Test>().configureEach {
+    // Idle regressions used to look like a 40-minute hang (60s Espresso policy × dozens of tests).
+    // Keep the suite bounded so a future spinner/clock leak fails the job in minutes.
+    timeout.set(Duration.ofMinutes(12))
+    // Robolectric NATIVE Skia/Choreographer state leaks across classes in one JVM and
+    // makes later Compose waitForIdle spin until Espresso times out. MessageActionsTest
+    // is the first class that trips that leak after a handful of NATIVE Compose suites;
+    // one class per worker keeps the leak from accumulating.
+    forkEvery = 1
 }

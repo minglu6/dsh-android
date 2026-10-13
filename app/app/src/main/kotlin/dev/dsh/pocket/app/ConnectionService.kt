@@ -16,7 +16,7 @@ import androidx.core.app.NotificationManagerCompat
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.combine
 
-class PocketApp : Application() {
+open class PocketApp : Application() {
     override fun onCreate() {
         super.onCreate()
         Pocket.init(this)

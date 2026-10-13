@@ -2,7 +2,6 @@ package dev.dsh.pocket.app
 
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.test.*
-import androidx.compose.ui.test.junit4.createComposeRule
 import dev.dsh.pocket.protocol.jsonOf
 import org.junit.Assert.*
 import org.junit.Before

@@ -17,7 +17,7 @@ import java.util.UUID
 import kotlin.test.*
 
 @RunWith(RobolectricTestRunner::class)
-@Config(sdk = [34])
+@Config(sdk = [34], qualifiers = "w412dp-h915dp-xxhdpi")
 class TerminalSessionsTest {
     private val host = "terminal-test-${UUID.randomUUID()}"
     private lateinit var client: PocketClient

@@ -11,6 +11,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.ui.platform.LocalInspectionMode
 import androidx.compose.ui.platform.LocalView
 import androidx.core.view.WindowCompat
 import androidx.compose.ui.text.TextStyle
@@ -160,17 +161,21 @@ fun PocketTheme(content: @Composable () -> Unit) {
     val appearance = runCatching { Pocket.prefs.appearance }.getOrDefault(Appearance.Light)
     val dark = resolveDarkAppearance(appearance, isSystemInDarkTheme())
     val view = LocalView.current
-    SideEffect {
-        ThemeState.setDark(dark)
-        (view.context as? Activity)?.window?.let { window ->
-            WindowCompat.getInsetsController(window, view).apply {
-                isAppearanceLightStatusBars = !dark
-                isAppearanceLightNavigationBars = !dark
+    val inspection = LocalInspectionMode.current
+    // First frame T.* reads must match [dark] before SideEffect. Inspection/preview
+    // skips the window write; the snapshot write still happens immediately below.
+    ThemeState.setDark(dark)
+    if (!inspection) {
+        SideEffect {
+            ThemeState.setDark(dark)
+            (view.context as? Activity)?.window?.let { window ->
+                WindowCompat.getInsetsController(window, view).apply {
+                    isAppearanceLightStatusBars = !dark
+                    isAppearanceLightNavigationBars = !dark
+                }
             }
         }
     }
-    // Also set immediately so the first frame's T.* reads are correct (SideEffect runs after).
-    ThemeState.setDark(dark)
     val colors = if (dark) DswColors.Dark else DswColors.Light
     val textFont = LocalFonts.text
     val typography = remember(textFont) {

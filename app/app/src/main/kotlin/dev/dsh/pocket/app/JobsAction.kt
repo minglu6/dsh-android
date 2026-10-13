@@ -34,13 +34,15 @@ internal fun JobsAction(hostId: String?, sessionId: String, available: Boolean, 
             try {
                 while (true) {
                     try {
-                        jobs = Pocket.listJobs(sessionId)["jobs"].arr().orEmpty().filterIsInstance<JsonObject>()
+                        val next = Pocket.listJobs(sessionId)["jobs"].arr().orEmpty().filterIsInstance<JsonObject>()
+                        // Structural equality: identical snapshots must not invalidate idle.
+                        if (jobs != next) jobs = next
                         failed = false
                     } catch (e: CancellationException) {
                         throw e
                     } catch (_: Exception) {
                         // Unknown is not zero, and a stale running count must not survive a failed refresh.
-                        jobs = null
+                        if (jobs != null) jobs = null
                         failed = true
                     }
                     delay(3_000)

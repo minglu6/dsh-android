@@ -22,7 +22,7 @@ import kotlin.test.assertTrue
 
 /** Exercises the real Pocket actor while Host unsubscribe/follow replies are deliberately delayed. */
 @RunWith(RobolectricTestRunner::class)
-@Config(sdk = [34])
+@Config(sdk = [34], qualifiers = "w412dp-h915dp-xxhdpi")
 class PocketFollowTest {
     private lateinit var client: PocketClient
     private val requests = Channel<JsonObject>(Channel.UNLIMITED)

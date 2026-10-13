@@ -11,8 +11,8 @@ import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
 
 @RunWith(RobolectricTestRunner::class)
-@Config(sdk = [34])
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
+@Config(sdk = [34], qualifiers = "w412dp-h915dp-xxhdpi")
 class FontPreferencesTest {
     @Test fun normalizesDesktopFamilyListsWithoutChangingPriority() {
         assertEquals("serif, monospace", normalizeFontFamily("  serif , monospace  "))
