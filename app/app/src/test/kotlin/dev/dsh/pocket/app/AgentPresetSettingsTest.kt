@@ -27,6 +27,7 @@ class AgentPresetSettingsTest {
     private var previousHost: String? = null
     private var previousOps = emptySet<String>()
     private var previousRoster = emptyList<JsonObject>()
+    private var previousSettingsRevision = 0L
     private val clients = mutableListOf<PocketClient>()
     private lateinit var preferences: HostSettingsFixture
     private val requests = mutableListOf<JsonElement>()
@@ -47,6 +48,7 @@ class AgentPresetSettingsTest {
         previousHost = Pocket.active.value
         previousOps = Pocket.ops.value
         previousRoster = Pocket.presetRoster.value
+        previousSettingsRevision = Pocket.modelSettingsRevision.value
         preferences = installHostSettingsFixture()
         preferences.desktopSet(SharedSetting.CodeWork, JsonPrimitive(true))
         Pocket.active.value = "preset-test"
@@ -68,6 +70,7 @@ class AgentPresetSettingsTest {
         Pocket.active.value = previousHost
         Pocket.ops.value = previousOps
         Pocket.presetRoster.value = previousRoster
+        Pocket.modelSettingsRevision.value = previousSettingsRevision
     }
 
     private fun roster(): JsonElement = buildJsonObject {
@@ -119,6 +122,59 @@ class AgentPresetSettingsTest {
         assertEquals(7L, (args["expectedRevision"] as JsonPrimitive).long)
         assertEquals("agent-preset-registry", args["ns"].str())
         assertEquals(listOf("presets.settings", "models.settingsMutate", "presets.settings"), requests.map { it["op"].str() })
+    }
+
+    @Test fun desktopDefaultChangeUpdatesOpenPageAndNextWriteUsesFreshRevision() {
+        mount()
+        rule.runOnIdle {
+            revision = 8L
+            default = "ptc"
+            Pocket.modelSettingsRevision.value++
+        }
+        rule.onNodeWithTag("preset-select-ptc").assertIsSelected()
+        rule.onNodeWithTag("preset-select-standard").assertIsNotSelected()
+        assertTrue(writes().isEmpty())
+        select("standard")
+        assertEquals(8L, (writes().single()["args"]["expectedRevision"] as JsonPrimitive).long)
+        rule.onNodeWithTag("preset-select-standard").assertIsSelected()
+    }
+
+    @Test fun notificationDuringSaveWaitsForReadbackAndPreservesConflict() {
+        val release = CompletableDeferred<Unit>()
+        mutate = {
+            release.await()
+            jsonOf("ok" to false, "error" to jsonOf("message" to "settings/conflict"))
+        }
+        mount()
+        select("ptc")
+        rule.runOnIdle {
+            revision = 8L
+            default = "minimal"
+            Pocket.modelSettingsRevision.value++
+        }
+        rule.waitForIdle()
+        // No external refresh may race the in-flight write's authoritative read-back.
+        assertEquals(1, requests.count { it["op"].str() == "presets.settings" })
+        rule.runOnIdle { release.complete(Unit) }
+        rule.onNodeWithTag("preset-select-minimal").assertIsSelected()
+        rule.onNodeWithText("settings/conflict").assertExists()
+        select("standard")
+        assertEquals(8L, (writes().last()["args"]["expectedRevision"] as JsonPrimitive).long)
+    }
+
+    @Test fun externalRefreshKeepsOpenPresetHelp() {
+        mount()
+        rule.onNodeWithTag("preset-usage-standard").performScrollTo().performClick()
+        rule.runOnIdle {
+            revision++
+            default = "ptc"
+            Pocket.modelSettingsRevision.value++
+        }
+        rule.onNodeWithTag("presetGuideDialog").assertExists()
+        rule.onNodeWithTag("presetGuideTabUsage").assertIsSelected()
+        rule.onNodeWithTag("presetGuideClose").performClick()
+        rule.onNodeWithTag("preset-select-ptc").assertIsSelected()
+        assertTrue(writes().isEmpty())
     }
 
     @Test fun conflictReadsNewRevisionAndRetryDoesNotReuseStaleCas() {

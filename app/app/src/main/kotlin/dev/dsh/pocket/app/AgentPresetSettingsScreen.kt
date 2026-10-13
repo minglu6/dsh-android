@@ -38,6 +38,7 @@ import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import dev.dsh.pocket.protocol.*
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.*
 
@@ -70,6 +71,7 @@ private class PresetSettingsState {
 internal fun AgentPresetSettingsScreen(onBack: () -> Unit, onCreator: (() -> Unit)? = null) {
     val host by Pocket.active.collectAsState()
     val ops by Pocket.ops.collectAsState()
+    val settingsRevision by Pocket.modelSettingsRevision.collectAsState()
     val client = Pocket.clientOrNull()
     val state = remember(host, client, ops) { PresetSettingsState() }
     val scope = rememberCoroutineScope()
@@ -89,10 +91,10 @@ internal fun AgentPresetSettingsScreen(onBack: () -> Unit, onCreator: (() -> Uni
         state.revisionFresh = true
         Pocket.presetRoster.value = value["presets"].arr().orEmpty().filterIsInstance<JsonObject>()
     }
-    suspend fun load() {
+    suspend fun load(clearError: Boolean = true) {
         state.loading = true
         state.revisionFresh = false
-        state.error = null
+        if (clearError) state.error = null
         try { adopt(readRoster()) }
         catch (t: Throwable) { if (current()) state.error = settingsFailure(t) }
         finally { if (current()) state.loading = false }
@@ -113,7 +115,11 @@ internal fun AgentPresetSettingsScreen(onBack: () -> Unit, onCreator: (() -> Uni
             }
         }
     }
-    LaunchedEffect(state) { load() }
+    LaunchedEffect(state, settingsRevision) {
+        // Coalesce notifications during a save; its read-back and error must settle first.
+        snapshotFlow { state.busy }.first { !it }
+        load(clearError = false)
+    }
     val rows = state.data["presets"].arr().orEmpty()
     val revision = (state.data["namespace"]["revision"] as? JsonPrimitive)?.longOrNull
     val writable = state.revisionFresh && state.data["writable"].bool() == true && revision != null && "models.settingsMutate" in ops
