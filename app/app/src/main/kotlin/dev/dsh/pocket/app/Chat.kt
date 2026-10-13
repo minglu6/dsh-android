@@ -151,7 +151,8 @@ fun ChatRoot(onMenu: () -> Unit) {
     val showPanel = "files.list" in ops || "jobs.list" in ops || "terminal.create" in ops || (chat?.todos?.isNotEmpty() == true)
 
     Column(Modifier.fillMaxSize().background(Color.White).systemBarsPadding().imePadding()) {
-        TopBar(summary?.title ?: chat?.title, sid != null, dot, onMenu, onMore = { sheet = Sheet.More },
+        // Connection status lives in the drawer only (desktop session header has no pocket status dot).
+        TopBar(summary?.title ?: chat?.title, sid != null, onMenu, onMore = { sheet = Sheet.More },
             onPanel = if (showPanel) ({ sheet = Sheet.Panel }) else null,
             onTeam = { sheet = Sheet.Team }, onPreset = { sheet = Sheet.Preset }, preset = "standard", onNew = { Pocket.closeChat() })
         if (chat == null) {
@@ -213,6 +214,7 @@ fun ChatRoot(onMenu: () -> Unit) {
             approvals.firstOrNull { it.sessionId == null || it.sessionId == st.sessionId }?.let { ApprovalCard(it) }
             Composer(
                 "发消息或创建任务, / 调用指令, @ 文件或对话", st.running, curPerm, curModel, enabled = dot == Dot.Online,
+                planMode = st.planMode,
                 pendingImages = pendingImages, pendingFiles = pendingFiles,
                 onPlus = { sheet = Sheet.Plus }, onPerm = { sheet = Sheet.Permission }, onModel = { sheet = Sheet.Model },
                 onRemoveImage = { i -> pendingImages = pendingImages.toMutableList().also { it.removeAt(i) } },
@@ -230,6 +232,7 @@ fun ChatRoot(onMenu: () -> Unit) {
                 },
                 onSlash = { sheet = Sheet.Commands },
                 onMention = { sheet = Sheet.Mentions },
+                onExitPlan = { Pocket.executeCommand("/plan off") },
                 onSend = { text ->
                     val ready = pendingFiles.filter { it.status == AttachStatus.Ready && it.receiptId != null }
                     val imgs = pendingImages
@@ -286,7 +289,17 @@ fun ChatRoot(onMenu: () -> Unit) {
                 sheet = Sheet.None; feedbackTarget = null
             },
         )
-        Sheet.Commands -> CommandPopupSheet(onDismiss = { sheet = Sheet.None })
+        Sheet.Commands -> CommandPopupSheet(
+            onDismiss = { sheet = Sheet.None },
+            onFile = { pickFiles.launch("*/*") },
+            onGoal = { sheet = Sheet.Goal },
+            onPlan = { Pocket.executeCommand("/plan") },
+            onFeedback = { sheet = Sheet.Feedback },
+            onCompact = { Pocket.executeCommand("/compact") },
+            onPerm = { sheet = Sheet.Permission },
+            onModel = { sheet = Sheet.Model },
+            onExport = { doExport() },
+        )
         Sheet.Mentions -> MentionPopupSheet(onDismiss = { sheet = Sheet.None })
         Sheet.Files -> sid?.let { FilesSheet(it, onDismiss = { sheet = Sheet.None }) } ?: run { sheet = Sheet.None }
         Sheet.Jobs -> sid?.let { JobsSheet(it, onDismiss = { sheet = Sheet.None }) } ?: run { sheet = Sheet.None }
@@ -297,7 +310,7 @@ fun ChatRoot(onMenu: () -> Unit) {
 }
 
 @Composable
-private fun TopBar(title: String?, inChat: Boolean, dot: Dot?, onMenu: () -> Unit, onMore: () -> Unit, onPanel: (() -> Unit)?, onTeam: () -> Unit, onPreset: () -> Unit, preset: String, onNew: () -> Unit = {}) {
+private fun TopBar(title: String?, inChat: Boolean, onMenu: () -> Unit, onMore: () -> Unit, onPanel: (() -> Unit)?, onTeam: () -> Unit, onPreset: () -> Unit, preset: String, onNew: () -> Unit = {}) {
     Row(Modifier.fillMaxWidth().height(56.dp).padding(horizontal = 6.dp), verticalAlignment = Alignment.CenterVertically) {
         IconButton(onMenu) { Icon(D.panelLeft, L.menu(), tint = T.Ink, modifier = Modifier.size(20.dp)) }
         // One weighted region: the title takes what the gray links leave (no competing spacer).
@@ -310,7 +323,6 @@ private fun TopBar(title: String?, inChat: Boolean, dot: Dot?, onMenu: () -> Uni
                 GrayLink(D.agentPreset, presetLabel(preset), onPreset)
             }
         }
-        StatusDot(dot, Modifier.padding(horizontal = 6.dp))
         IconButton(onMore, Modifier.size(40.dp)) { Icon(D.ellipsis, "更多", tint = T.Ink) }
         if (!inChat) IconButton(onNew, Modifier.size(40.dp)) { Icon(D.newChat, "新会话", tint = T.Ink) }
         if (onPanel != null) IconButton(onPanel, Modifier.size(40.dp)) { Icon(D.panelRight, "右侧面板", tint = T.Ink, modifier = Modifier.size(20.dp)) }
@@ -942,6 +954,7 @@ private fun Composer(
     perm: String,
     model: ModelChoice?,
     enabled: Boolean,
+    planMode: Boolean = false,
     pendingImages: List<PromptImage> = emptyList(),
     pendingFiles: List<PendingAttach> = emptyList(),
     onPlus: () -> Unit,
@@ -952,20 +965,28 @@ private fun Composer(
     onRetryFile: (Int) -> Unit = {},
     onSlash: () -> Unit = {},
     onMention: () -> Unit = {},
+    onExitPlan: () -> Unit = {},
     onSend: (String) -> Unit,
     onStop: () -> Unit,
 ) {
     var text by remember { mutableStateOf("") }
     LaunchedEffect(Unit) {
         Pocket.composerInsert.collect { token ->
-            val base = text.trimEnd()
+            // Empty → consume slash trigger; leading `/` → claim/replace draft; else @-mention insert.
             text = when {
-                base.isEmpty() || base == "@" || base.endsWith("@") -> {
-                    val bare = token.removePrefix("@")
-                    if (base.endsWith("@") || base == "@") base.removeSuffix("@") + "@$bare "
-                    else "@$bare "
+                token.isEmpty() -> if (text == "/" || text.trim() == "/") "" else text
+                token.startsWith("/") -> token
+                else -> {
+                    val base = text.trimEnd()
+                    when {
+                        base.isEmpty() || base == "@" || base.endsWith("@") -> {
+                            val bare = token.removePrefix("@")
+                            if (base.endsWith("@") || base == "@") base.removeSuffix("@") + "@$bare "
+                            else "@$bare "
+                        }
+                        else -> "$base ${if (token.startsWith("@")) token else "@$token"} "
+                    }
                 }
-                else -> "$base ${if (token.startsWith("@")) token else "@$token"} "
             }
         }
     }
@@ -1013,6 +1034,23 @@ private fun Composer(
             Box(Modifier.size(32.dp).clip(CircleShape).background(T.Fill).clickable(onClick = onPlus), contentAlignment = Alignment.Center) { Icon(D.plus, L.sectionAdd(), tint = T.Ink, modifier = Modifier.size(18.dp)) }
             Spacer(Modifier.width(8.dp))
             Row(Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically) {
+                if (planMode) {
+                    // Desktop PlanChip: visible while plan mode is on; tap exits via `/plan off`.
+                    Row(
+                        Modifier
+                            .clip(T.R8)
+                            .background(T.Fill2)
+                            .clickable(onClick = onExitPlan)
+                            .padding(horizontal = 8.dp, vertical = 6.dp)
+                            .testTag("planChip"),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Icon(D.plan, L.planModeOn(), tint = T.Accent, modifier = Modifier.size(16.dp))
+                        Spacer(Modifier.width(4.dp))
+                        Text(L.planChip(), fontSize = 14.sp, color = T.Accent, maxLines = 1)
+                    }
+                    Spacer(Modifier.width(6.dp))
+                }
                 val danger = perm == "danger-full-access"
                 // Desktop always shows shield + permission label (e.g. 工作区内修改).
                 Row(Modifier.clip(T.R8).clickable(onClick = onPerm).padding(horizontal = 6.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {

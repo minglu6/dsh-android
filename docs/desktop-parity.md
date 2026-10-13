@@ -99,6 +99,8 @@ Phone: image picker → `prompt` images (done). Non-image files via `attachments
 
 Phone: Plus sheet + live `/` CommandPopupSheet + `@` MentionPopupSheet (`references.files` / `references.sessions`, insert into composer) — **done**.
 
+Slash menu pick consumes the typed `/` (desktop `slash/input-consume-token`) then runs the same actions as Plus / desktop: file picker, Goal/Feedback sheets, `/plan` toggle (+ PlanChip from host `plan` projection), `/compact`, permission/model pickers, session export. Connection status green dot stays in the **drawer** only — not the chat top bar (desktop session header has no pocket status dot).
+
 ### 1.8 Message actions (copy / like / retry / fork)
 
 | Action | Locale | Data |

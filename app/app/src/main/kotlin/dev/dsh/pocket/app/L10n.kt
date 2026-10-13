@@ -77,6 +77,8 @@ object L {
     fun approvePlan() = if (en) "Approve" else "同意执行"
     fun declinePlan() = if (en) "Refuse" else "拒绝"
     fun requestChanges() = if (en) "Request changes" else "要求修改"
+    fun planChip() = if (en) "Plan" else "计划"
+    fun planModeOn() = if (en) "Plan mode on — tap to turn off" else "计划模式已开启 — 点击关闭"
 
     // Search / archive / pin
     fun searchSessions() = if (en) "Search session titles" else "搜索会话名称"

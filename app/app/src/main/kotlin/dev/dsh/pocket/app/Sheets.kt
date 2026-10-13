@@ -201,17 +201,22 @@ fun PlusSheet(
     val cmds = "commands.execute" in Pocket.ops.value
     val export = "session.export" in Pocket.ops.value
     val inChat = Pocket.chat.collectAsState().value != null
+    fun pick(then: () -> Unit) {
+        // Clear a leftover `/` if the slash sheet was dismissed without picking.
+        Pocket.consumeComposerSlash()
+        then()
+    }
     PocketSheet(onDismiss) {
         SectionLabel(L.sectionAdd())
-        OptionRow(L.file(), icon = D.paperclip, code = "file", enabled = inChat) { onFile(); onDismiss() }
-        OptionRow("目标", icon = D.goal, code = "goal", trailing = "设置或查看长期任务目标", enabled = cmds && inChat) { onGoal() }
-        OptionRow("计划", icon = D.plan, code = "plan", trailing = "进入或退出计划模式", enabled = cmds && inChat) { onPlan(); onDismiss() }
-        OptionRow("反馈", icon = D.send, code = "feedback", trailing = "发送关于当前会话的反馈", enabled = cmds && inChat) { onFeedback() }
+        OptionRow(L.file(), icon = D.paperclip, code = "file", enabled = inChat) { pick { onFile(); onDismiss() } }
+        OptionRow("目标", icon = D.goal, code = "goal", trailing = "设置或查看长期任务目标", enabled = cmds && inChat) { pick { onGoal() } }
+        OptionRow("计划", icon = D.plan, code = "plan", trailing = "进入或退出计划模式", enabled = cmds && inChat) { pick { onPlan(); onDismiss() } }
+        OptionRow("反馈", icon = D.send, code = "feedback", trailing = "发送关于当前会话的反馈", enabled = cmds && inChat) { pick { onFeedback() } }
         SectionLabel(L.sectionCommands())
-        OptionRow("压缩", icon = D.compact, code = "compact", trailing = "压缩以上对话内容", enabled = cmds && inChat) { onCompact(); onDismiss() }
-        OptionRow("权限", icon = D.shield, code = "permission", trailing = "切换权限预设") { onPerm() }
-        OptionRow("模型", icon = D.database, code = "model", trailing = "选择本会话使用的模型") { onModel() }
-        OptionRow("下载日志", icon = D.download, code = "export", trailing = "将当前会话导出为 ZIP", enabled = export && inChat) { onExport(); onDismiss() }
+        OptionRow("压缩", icon = D.compact, code = "compact", trailing = "压缩以上对话内容", enabled = cmds && inChat) { pick { onCompact(); onDismiss() } }
+        OptionRow("权限", icon = D.shield, code = "permission", trailing = "切换权限预设") { pick { onPerm() } }
+        OptionRow("模型", icon = D.database, code = "model", trailing = "选择本会话使用的模型") { pick { onModel() } }
+        OptionRow("下载日志", icon = D.download, code = "export", trailing = "将当前会话导出为 ZIP", enabled = export && inChat) { pick { onExport(); onDismiss() } }
     }
 }
 
@@ -507,22 +512,55 @@ fun TeamSheet(onDismiss: () -> Unit) {
     }
 }
 
-/** `/` command popup — built-in commands (desktop command sections). */
+/**
+ * `/` command popup — same sections/rows as desktop `ui-commands` (add + commands).
+ * Each pick consumes the typed `/` (desktop `slash/input-consume-token`) then runs the
+ * matching action (pickers / sheets / host execute), mirroring [PlusSheet].
+ */
 @Composable
-fun CommandPopupSheet(onDismiss: () -> Unit) {
+fun CommandPopupSheet(
+    onDismiss: () -> Unit,
+    onFile: () -> Unit,
+    onGoal: () -> Unit,
+    onPlan: () -> Unit,
+    onFeedback: () -> Unit,
+    onCompact: () -> Unit,
+    onPerm: () -> Unit,
+    onModel: () -> Unit,
+    onExport: () -> Unit,
+) {
     val cmds = "commands.execute" in Pocket.ops.value
     val export = "session.export" in Pocket.ops.value
     val inChat = Pocket.chat.collectAsState().value != null
+    fun pick(then: () -> Unit) {
+        Pocket.consumeComposerSlash()
+        then()
+    }
     PocketSheet(onDismiss) {
-        SheetTitle(L.sectionCommands())
         SectionLabel(L.sectionAdd())
-        OptionRow("目标", icon = D.goal, enabled = cmds && inChat) { Pocket.executeCommand("/goal"); onDismiss() }
-        OptionRow("计划", icon = D.plan, enabled = cmds && inChat) { Pocket.executeCommand("/plan"); onDismiss() }
-        OptionRow("反馈", icon = D.send, enabled = cmds && inChat) { Pocket.executeCommand("/feedback"); onDismiss() }
+        OptionRow(L.file(), icon = D.paperclip, code = "file", enabled = inChat) { pick { onFile(); onDismiss() } }
+        OptionRow("目标", icon = D.goal, code = "goal", trailing = "设置或查看长期任务目标", enabled = cmds && inChat) {
+            pick { onGoal() }
+        }
+        OptionRow("计划", icon = D.plan, code = "plan", trailing = "进入或退出计划模式", enabled = cmds && inChat) {
+            pick { onPlan(); onDismiss() }
+        }
+        OptionRow("反馈", icon = D.send, code = "feedback", trailing = "发送关于当前会话的反馈", enabled = cmds && inChat) {
+            pick { onFeedback() }
+        }
         SectionLabel(L.sectionCommands())
-        OptionRow("压缩", icon = D.compact, enabled = cmds && inChat) { Pocket.executeCommand("/compact"); onDismiss() }
-        OptionRow("权限", icon = D.shield, enabled = inChat) { onDismiss() }
-        OptionRow("下载日志", icon = D.download, enabled = export && inChat) { onDismiss() }
+        OptionRow("压缩", icon = D.compact, code = "compact", trailing = "压缩以上对话内容", enabled = cmds && inChat) {
+            pick { onCompact(); onDismiss() }
+        }
+        OptionRow("权限", icon = D.shield, code = "permission", trailing = "切换权限预设") {
+            pick { onPerm() }
+        }
+        OptionRow("模型", icon = D.database, code = "model", trailing = "选择本会话使用的模型") {
+            pick { onModel() }
+        }
+        OptionRow("下载日志", icon = D.download, code = "export", trailing = "将当前会话导出为 ZIP", enabled = export && inChat) {
+            pick { onExport(); onDismiss() }
+        }
         if (!cmds && !export) Text(L.noOptions(), fontSize = 14.sp, color = T.Text3, modifier = Modifier.padding(22.dp))
     }
 }

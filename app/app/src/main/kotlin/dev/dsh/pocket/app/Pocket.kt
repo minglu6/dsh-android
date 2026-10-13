@@ -29,6 +29,8 @@ data class ChatState(
     val loadingOlder: Boolean = false,
     /** Latest agent todo list (`todo/write` / projections.todos). */
     val todos: List<TodoItem> = emptyList(),
+    /** Host `plan` projection — plan mode is on (desktop PlanChip). */
+    val planMode: Boolean = false,
 )
 
 data class ModelChoice(val provider: String, val model: String, val name: String, val effort: String?)
@@ -88,7 +90,12 @@ object Pocket {
     val errors = MutableSharedFlow<String>(extraBufferCapacity = 8)
     /** Transient toast-style notices (archive undo, feedback thanks, …). */
     val notices = MutableSharedFlow<String>(extraBufferCapacity = 8)
-    /** One-shot text to insert into the open composer (e.g. `@path` mention). */
+    /**
+     * One-shot composer edits:
+     * - empty string → consume a lone `/` slash trigger (desktop `slash/input-consume-token`)
+     * - starts with `/` → claim/replace the draft (desktop leadingInput claim, e.g. `/计划 `)
+     * - otherwise → insert an `@` mention token
+     */
     val composerInsert = MutableSharedFlow<String>(extraBufferCapacity = 4)
     /** Live host PTY emulator for the open terminal sheet. */
     val terminal = AnsiTerminal(80, 24)
@@ -375,6 +382,7 @@ object Pocket {
             firstSeq = reducer.firstSeq,
             runStartedAt = if (reducer.running) (if (wasRunning) st.runStartedAt else System.currentTimeMillis()) else null,
             todos = reducer.todos(),
+            planMode = reducer.planMode,
         )
     }
 
@@ -524,6 +532,16 @@ object Pocket {
         runCatching {
             val r = c.executeCommand(st.sessionId, line)
             r["result"]["text"].str()?.takeIf { it.isNotBlank() }?.let { errors.tryEmit(it) }
+            // Optimistic PlanChip: host `plan/mode` may arrive later; mirror toggle immediately.
+            val trimmed = line.trim()
+            when {
+                trimmed == "/plan off" || trimmed.startsWith("/plan off ") ->
+                    chat.value = chat.value?.copy(planMode = false)
+                trimmed == "/plan" ->
+                    chat.value = chat.value?.copy(planMode = !(chat.value?.planMode ?: false))
+                trimmed.startsWith("/plan ") ->
+                    chat.value = chat.value?.copy(planMode = true)
+            }
         }.onFailure { errors.tryEmit(it.message ?: "指令失败") }
     }
 
@@ -683,6 +701,17 @@ object Pocket {
     /** Insert a mention token into the open composer (`@path` / session mention). */
     fun insertComposer(token: String) {
         if (token.isNotBlank()) composerInsert.tryEmit(token)
+    }
+
+    /** Clear a typed `/` trigger after a slash-menu pick (desktop consume-token). */
+    fun consumeComposerSlash() {
+        composerInsert.tryEmit("")
+    }
+
+    /** Replace the draft with a claimed slash command token (e.g. `/目标 `). */
+    fun claimComposerCommand(token: String) {
+        val t = token.trim()
+        if (t.isNotEmpty()) composerInsert.tryEmit(if (t.endsWith(' ')) t else "$t ")
     }
 
     /**
