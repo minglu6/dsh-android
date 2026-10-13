@@ -32,6 +32,8 @@ APK **不再**包含 `libpocket_iroh.so`；连接只走 host:port WebSocket。he
 3. 「附近设备」自动发现局域网 mDNS 主机；已配对设备显示地址、状态和 `Tailscale` / `LAN` 路由。旧 iroh 配置需重新配对。
 4. token 用 Android Keystore 的 AES-GCM 密钥加密保存。
 
+设置 →「连接诊断」显示主机的完整诊断报告，不遮盖网络地址或截断实例 ID。点击「复制诊断报告」复制全文，也可长按报告文字选择并复制局部内容。
+
 ## 功能对齐
 
 见 [docs/feature-parity.md](../docs/feature-parity.md)。界面与操作以官方桌面端为准，不因 Host 暴露 API 就新增产品功能：插件支持分组管理、安装检查/取消/卸载及配置；自动化任务支持搜索、规则编辑、投递记录和删除，新建跳转会话。仅隐藏真正依赖桌面本地 UI 的功能（本机编辑器/目录选择器）；第三方插件自定义 React 界面仍需 Web，公开的 Host 配置可在手机编辑。主机 PTY 终端、浏览器、会话数据诊断、模型设置、轨迹、指令、导出、工作区文件、后台任务、通用设置和 `parentSessionId` 子会话均已有原生入口。

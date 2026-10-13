@@ -1,9 +1,9 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { collectConnectionDiagnostics, listInterfacesRedacted } from '../src/diagnostics.js'
+import { networkInterfaces } from 'node:os'
+import { collectConnectionDiagnostics, listInterfaces } from '../src/diagnostics.js'
 
-// Re-export probe via collect with injectable probe.
-test('collectConnectionDiagnostics redacts hosts and reports checks', async () => {
+test('collectConnectionDiagnostics preserves complete addresses and instance identity', async () => {
   const report = await collectConnectionDiagnostics({
     version: '0.1.0',
     plugin: 'dsh-plugin-pocket',
@@ -21,12 +21,16 @@ test('collectConnectionDiagnostics redacts hosts and reports checks', async () =
   })
   assert.equal(report.version, 1)
   assert.equal(report.overall, 'ok')
-  assert.match(report.report, /192\.168\.1\.x/)
-  assert.doesNotMatch(report.report, /192\.168\.1\.20/)
+  assert.match(report.report, /192\.168\.1\.20:7690/)
+  assert.equal(report.facts.host, '192.168.1.20')
   assert.ok(report.checks.some((c) => c.id === 'port' && c.status === 'ok'))
   assert.ok(report.checks.some((c) => c.id === 'mdns' && c.status === 'ok'))
-  assert.equal(report.facts.instanceIdPrefix, 'aaaaaaaa')
-  assert.equal(listInterfacesRedacted().every((i) => typeof i.address === 'string'), true)
+  assert.equal(report.facts.instanceId, 'a'.repeat(64))
+  assert.ok(report.report.includes(`实例: ${'a'.repeat(64)}\n`))
+  const expected = Object.entries(networkInterfaces()).flatMap(([name, entries]) =>
+    (entries ?? []).filter((entry) => entry.family === 'IPv4' || entry.family === 4)
+      .map((entry) => `${name}=${entry.address}`))
+  assert.deepEqual(listInterfaces().map((entry) => `${entry.name}=${entry.address}`), expected)
 })
 
 test('failed reachability marks overall error', async () => {

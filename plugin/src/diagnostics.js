@@ -1,5 +1,5 @@
 /**
- * Connection diagnostics snapshot (secrets redacted).
+ * Connection diagnostics snapshot.
  *
  * Adapted from dsh-mobile src/diagnostics.ts
  * (https://github.com/saya-ch/dsh-mobile), Apache-2.0.
@@ -10,24 +10,10 @@ import { isTailscaleHost } from './advertise-host.js'
 import { DISCOVERY_PROTOCOL } from './mdns-advertise.js'
 
 /**
- * @param {string | undefined} host
- * @returns {string}
- */
-function maskHost(host) {
-  if (!host) return '未分配'
-  if (host.endsWith('.ts.net')) return '*.ts.net'
-  const octets = host.split('.')
-  if (octets.length === 4 && octets.every((p) => /^\d+$/.test(p))) {
-    return `${octets[0]}.${octets[1]}.${octets[2]}.x`
-  }
-  return '地址已脱敏'
-}
-
-/**
- * List non-internal IPv4 interfaces with addresses partially redacted.
+ * List IPv4 interfaces with their complete addresses.
  * @returns {{ name: string, address: string, family: string, internal: boolean }[]}
  */
-export function listInterfacesRedacted() {
+export function listInterfaces() {
   const out = []
   for (const [name, list] of Object.entries(networkInterfaces())) {
     for (const n of list ?? []) {
@@ -35,7 +21,7 @@ export function listInterfacesRedacted() {
       if (family !== 'IPv4') continue
       out.push({
         name,
-        address: n.internal ? n.address : maskHost(n.address),
+        address: n.address,
         family,
         internal: Boolean(n.internal),
         tailscale: isTailscaleHost(n.address),
@@ -79,7 +65,7 @@ export function tailscaleState() {
       const family = n.family
       if (family !== 'IPv4' && family !== 4) continue
       if (n.internal) continue
-      if (isTailscaleHost(n.address)) return { present: true, host: maskHost(n.address) }
+      if (isTailscaleHost(n.address)) return { present: true, host: n.address }
     }
   }
   return { present: false }
@@ -104,7 +90,7 @@ export function tailscaleState() {
  */
 export async function collectConnectionDiagnostics(snapshot) {
   const reach = snapshot.probes?.reachability ?? probePortReachability
-  const interfaces = listInterfacesRedacted()
+  const interfaces = listInterfaces()
   const ts = tailscaleState()
   const reachability = snapshot.running
     ? await reach(snapshot.host === '0.0.0.0' ? '127.0.0.1' : snapshot.host, snapshot.port)
@@ -142,7 +128,7 @@ export async function collectConnectionDiagnostics(snapshot) {
       status: reachability.ok ? 'ok' : 'error',
       label: '端口可达性',
       detail: reachability.ok
-        ? `本机 ${maskHost(snapshot.host)}:${snapshot.port} 可达，约 ${reachability.latencyMs ?? 0} ms`
+        ? `本机 ${snapshot.host}:${snapshot.port} 可达，约 ${reachability.latencyMs ?? 0} ms`
         : `无法连接本机监听端口（${reachability.error ?? 'error'}）`,
     },
     {
@@ -164,8 +150,8 @@ export async function collectConnectionDiagnostics(snapshot) {
     `生成时间: ${new Date().toISOString()}`,
     `版本: plugin=${snapshot.plugin}@${snapshot.version}`,
     `传输: ${snapshot.transport} / ${snapshot.connectionType}`,
-    `实例: ${snapshot.instanceId.slice(0, 8)}…`,
-    `端点: ${maskHost(snapshot.host)}:${snapshot.port}`,
+    `实例: ${snapshot.instanceId}`,
+    `端点: ${snapshot.host}:${snapshot.port}`,
     `协议: discovery=${DISCOVERY_PROTOCOL}`,
     ...checks.map((c) => `[${c.status.toUpperCase()}] ${c.label}: ${c.detail}`),
   ].join('\n')
@@ -182,9 +168,9 @@ export async function collectConnectionDiagnostics(snapshot) {
       pluginVersion: snapshot.version,
       transport: snapshot.transport,
       connectionType: snapshot.connectionType,
-      host: maskHost(snapshot.host),
+      host: snapshot.host,
       port: snapshot.port,
-      instanceIdPrefix: snapshot.instanceId.slice(0, 8),
+      instanceId: snapshot.instanceId,
       running: snapshot.running,
       mdns: Boolean(snapshot.mdns),
       interfaces,

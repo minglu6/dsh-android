@@ -7,6 +7,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.automirrored.rounded.CallMade
@@ -1316,11 +1317,13 @@ fun DiagnosticsSheet(onDismiss: () -> Unit) {
         when {
             loading -> Text(L.diagnosticsChecking(), fontSize = 14.sp, color = T.Text3, modifier = Modifier.padding(22.dp))
             err != null -> Text(err!!, fontSize = 14.sp, color = T.Err, modifier = Modifier.padding(22.dp))
-            else -> Text(
-                report.orEmpty(),
-                style = T.Mono.copy(fontSize = 12.sp, color = T.Text2, lineHeight = 18.sp),
-                modifier = Modifier.padding(horizontal = 22.dp, vertical = 8.dp).testTag("diagnosticsReport"),
-            )
+            else -> SelectionContainer {
+                Text(
+                    report.orEmpty(),
+                    style = T.Mono.copy(fontSize = 12.sp, color = T.Text2, lineHeight = 18.sp),
+                    modifier = Modifier.padding(horizontal = 22.dp, vertical = 8.dp).testTag("diagnosticsReport"),
+                )
+            }
         }
         Row(Modifier.padding(horizontal = 22.dp, vertical = 16.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
             OutlinedButton(

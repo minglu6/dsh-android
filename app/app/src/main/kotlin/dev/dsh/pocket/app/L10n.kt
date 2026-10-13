@@ -135,7 +135,7 @@ object L {
     // Connection diagnostics (desktop pocket locales)
     fun diagnostics() = if (en) "Connection diagnostics" else "连接诊断"
     fun openDiagnostics() = if (en) "Open connection diagnostics" else "打开连接诊断"
-    fun diagnosticsCopy() = if (en) "Copy redacted report" else "复制脱敏报告"
+    fun diagnosticsCopy() = if (en) "Copy diagnostic report" else "复制诊断报告"
     fun diagnosticsCopied() = if (en) "Copied" else "已复制"
     fun diagnosticsChecking() = if (en) "Checking…" else "正在检查…"
     fun diagnosticsUnavailable() = if (en) "Diagnostics unavailable" else "诊断服务暂不可用"

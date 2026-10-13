@@ -1527,7 +1527,7 @@ object Pocket {
         }
     }
 
-    /** Fetch redacted diagnostics from the active (or given) host:port HTTP endpoint. */
+    /** Fetch diagnostics from the active (or given) host:port HTTP endpoint. */
     suspend fun fetchDiagnostics(host: String? = null, port: Int? = null): String = withContext(Dispatchers.IO) {
         val p = activeProfile
         val h = host ?: p?.host ?: error("未连接")

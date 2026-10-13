@@ -113,7 +113,7 @@ const zh = {
 	refresh: "刷新",
 	close: "关闭",
 	diagnostics: "连接诊断",
-	diagnosticsCopy: "复制脱敏报告"
+	diagnosticsCopy: "复制诊断报告"
 };
 const en = {
 	entry: "Phone connection",
@@ -152,7 +152,7 @@ const en = {
 	refresh: "Refresh",
 	close: "Close",
 	diagnostics: "Connection diagnostics",
-	diagnosticsCopy: "Copy redacted report"
+	diagnosticsCopy: "Copy diagnostic report"
 };
 
 //#endregion
@@ -556,6 +556,8 @@ const styles = {
 		margin: 0,
 		whiteSpace: "pre-wrap",
 		overflowWrap: "anywhere",
+		userSelect: "text",
+		WebkitUserSelect: "text",
 		fontSize: 12,
 		lineHeight: "20px",
 		color: muted
