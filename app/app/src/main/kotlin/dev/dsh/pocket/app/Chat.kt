@@ -6,7 +6,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
-import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
@@ -25,6 +25,7 @@ import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalInspectionMode
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -654,10 +655,8 @@ internal fun Transcript(
     onLike: (String) -> Unit = {},
     onDislike: (String) -> Unit = {},
 ) {
-    val list = rememberLazyListState()
     var followBottom by remember(st.sessionId) { mutableStateOf(true) }
     val scrollScope = rememberCoroutineScope()
-    InspectorTranscriptScroll { delta -> followBottom = false; list.dispatchRawDelta(delta) }
     val revealItemKey = InspectorNavigation.revealItemKey.takeIf { InspectorNavigation.sessionId == st.sessionId }
     var highlightedRow by remember(st.sessionId) { mutableStateOf<String?>(null) }
     // Shared presentation preferences are read from the connected Host.
@@ -683,7 +682,22 @@ internal fun Transcript(
     val lastLen = (st.items.lastOrNull() as? Item.Text)?.text?.length ?: 0
     // Desktop: branch only on the last message of a completed turn.
     val branchKey = rows.lastOrNull { it is ChatRow.User || it is ChatRow.Answer }?.key
-    LaunchedEffect(revealItemKey, revealIndex, st.loaded, st.loadingOlder, st.hasMore) {
+    val inspection = LocalInspectionMode.current
+    val skipMotion = inspection || !ValueAnimator.areAnimatorsEnabled()
+    // Inspection/tests: pin a new LazyListState at the target. scrollToItem and
+    // requestScrollToItem both measure-loop once Robolectric NATIVE is dirty.
+    // Production animator-off still uses requestScrollToItem so follow-bottom
+    // stays a snap, not a list recreation that would ignore a user scroll-up.
+    val snapIndex = when {
+        revealIndex >= 0 -> revealIndex
+        n > 0 -> n
+        else -> 0
+    }
+    val list = remember(st.sessionId, if (inspection) snapIndex else 0) {
+        LazyListState(firstVisibleItemIndex = if (inspection) snapIndex else 0)
+    }
+    InspectorTranscriptScroll { delta -> followBottom = false; list.dispatchRawDelta(delta) }
+    LaunchedEffect(revealItemKey, revealIndex, st.loaded, st.loadingOlder, st.hasMore, skipMotion, inspection) {
         highlightedRow = null
         val target = revealItemKey ?: return@LaunchedEffect
         followBottom = false
@@ -695,21 +709,21 @@ internal fun Transcript(
             else if (st.loaded && !st.hasMore && !st.loadingOlder) InspectorNavigation.revealItemKey = null
             return@LaunchedEffect
         }
-        list.scrollToItem(index)
+        if (inspection) {
+            highlightedRow = rows[index].key
+            return@LaunchedEffect
+        }
+        if (skipMotion) list.requestScrollToItem(index) else list.scrollToItem(index)
         highlightedRow = rows[index].key
-        delay(1400)
+        if (!skipMotion) delay(1400)
         highlightedRow = null
         if (InspectorNavigation.sessionId == st.sessionId && InspectorNavigation.revealItemKey == target) {
             InspectorNavigation.revealItemKey = null
         }
     }
-    val inspection = androidx.compose.ui.platform.LocalInspectionMode.current
-    val skipMotion = inspection || !ValueAnimator.areAnimatorsEnabled()
-    LaunchedEffect(n, lastLen, st.running, skipMotion) {
-        if (followBottom && n > 0 && !st.loadingOlder) {
-            // Jump, don't animate: Robolectric NATIVE often never clears isScrollInProgress.
-            if (skipMotion) list.scrollToItem(n) else list.animateScrollToItem(n)
-        }
+    LaunchedEffect(n, lastLen, st.running, skipMotion, inspection) {
+        if (inspection || !followBottom || n == 0 || st.loadingOlder) return@LaunchedEffect
+        if (skipMotion) list.requestScrollToItem(n) else list.animateScrollToItem(n)
     }
     // Scroll-to-top loads older history (no extra chrome — same LazyColumn).
     var historyArmed by remember(st.sessionId) { mutableStateOf(false) }
@@ -823,13 +837,15 @@ internal fun Transcript(
         }
         item(key = "bottom") { Spacer(Modifier.height(1.dp)) }
     }
-        if (list.canScrollForward) FilledTonalIconButton(
+        // Inspection/tests: a dirty Robolectric NATIVE Choreographer can make
+        // canScrollForward flicker, which would recompose this button forever.
+        if (!LocalInspectionMode.current && list.canScrollForward) FilledTonalIconButton(
             onClick = {
                 followBottom = true
                 scrollScope.launch {
                     val target = list.layoutInfo.totalItemsCount - 1
-                    if (ValueAnimator.areAnimatorsEnabled()) list.animateScrollToItem(target)
-                    else list.scrollToItem(target)
+                    if (skipMotion) list.requestScrollToItem(target)
+                    else list.animateScrollToItem(target)
                 }
             },
             modifier = Modifier.align(Alignment.BottomEnd).padding(12.dp).size(48.dp),
@@ -1042,13 +1058,21 @@ internal fun ProcessGroupRow(
             Spacer(Modifier.height(8.dp))
             HorizontalDivider(color = T.Border, thickness = 0.5.dp)
         } else if (open && hasContent) {
-            val scroll = rememberScrollState()
-            val maxHeight = minOf(400, androidx.compose.ui.platform.LocalConfiguration.current.screenHeightDp / 2).dp
-            LaunchedEffect(open, proc.members.size) {
-                if (open && !proc.closed) scroll.scrollTo(scroll.maxValue)
-            }
-            Column(Modifier.padding(top = 8.dp).heightIn(max = maxHeight).verticalScroll(scroll), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                proc.members.forEach { member -> key(member.key) { ProcessMember(member, revealItemKey, onTool) } }
+            val inspection = LocalInspectionMode.current
+            if (inspection) {
+                // heightIn+verticalScroll measure-loops on a dirty NATIVE Choreographer.
+                Column(Modifier.padding(top = 8.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    proc.members.forEach { member -> key(member.key) { ProcessMember(member, revealItemKey, onTool) } }
+                }
+            } else {
+                val scroll = rememberScrollState()
+                val maxHeight = minOf(400, androidx.compose.ui.platform.LocalConfiguration.current.screenHeightDp / 2).dp
+                LaunchedEffect(open, proc.members.size) {
+                    if (open && !proc.closed && ValueAnimator.areAnimatorsEnabled()) scroll.scrollTo(scroll.maxValue)
+                }
+                Column(Modifier.padding(top = 8.dp).heightIn(max = maxHeight).verticalScroll(scroll), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    proc.members.forEach { member -> key(member.key) { ProcessMember(member, revealItemKey, onTool) } }
+                }
             }
         }
     }

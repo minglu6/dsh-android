@@ -31,7 +31,9 @@ import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.key.*
+import android.animation.ValueAnimator
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalInspectionMode
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.*
 import androidx.compose.ui.text.TextStyle
@@ -106,11 +108,18 @@ private fun ColumnScope.SessionInspectorContent(st: ChatState, state: InspectorV
     val list = key(grouped) { rememberLazyListState() }
     val horizontal = key(grouped) { rememberScrollState() }
     val dragged by list.interactionSource.collectIsDraggedAsState()
+    val skipMotion = LocalInspectionMode.current || !ValueAnimator.areAnimatorsEnabled()
     LaunchedEffect(dragged) { if (dragged) state.follow = false }
-    LaunchedEffect(visible.lastOrNull()?.row, visible.size, state.follow, state.scrollRequest) {
-        if (state.follow && visible.isNotEmpty()) list.scrollToItem(visible.lastIndex)
+    LaunchedEffect(visible.lastOrNull()?.row, visible.size, state.follow, state.scrollRequest, skipMotion) {
+        if (state.follow && visible.isNotEmpty()) {
+            if (skipMotion) list.requestScrollToItem(visible.lastIndex) else list.scrollToItem(visible.lastIndex)
+        }
     }
-    LaunchedEffect(state.filter) { if (!state.follow && visible.isNotEmpty()) list.scrollToItem(0) }
+    LaunchedEffect(state.filter, skipMotion) {
+        if (!state.follow && visible.isNotEmpty()) {
+            if (skipMotion) list.requestScrollToItem(0) else list.scrollToItem(0)
+        }
+    }
     val picked = InspectorNavigation.pickedItemKey.takeIf { InspectorNavigation.sessionId == st.sessionId }
     LaunchedEffect(picked, rows) {
         val item = st.items.firstOrNull { it.key == picked } ?: return@LaunchedEffect
@@ -119,9 +128,11 @@ private fun ColumnScope.SessionInspectorContent(st: ChatState, state: InspectorV
         state.selectedKey = row.key; state.follow = false
         InspectorNavigation.pickedItemKey = null
     }
-    LaunchedEffect(state.selectedKey, visible.size) {
+    LaunchedEffect(state.selectedKey, visible.size, skipMotion) {
         val index = visible.indexOfFirst { it.row.key == state.selectedKey }
-        if (index >= 0 && list.layoutInfo.visibleItemsInfo.none { it.index == index }) list.scrollToItem(index)
+        if (index >= 0 && list.layoutInfo.visibleItemsInfo.none { it.index == index }) {
+            if (skipMotion) list.requestScrollToItem(index) else list.scrollToItem(index)
+        }
     }
     var modesOpen by remember { mutableStateOf(false) }
     Row(Modifier.fillMaxWidth().heightIn(min = 34.dp).padding(horizontal = 8.dp, vertical = 6.dp),

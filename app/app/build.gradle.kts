@@ -110,7 +110,8 @@ tasks.withType<org.gradle.api.tasks.testing.Test>().configureEach {
     // Keep the suite bounded so a future spinner/clock leak fails the job in minutes.
     timeout.set(Duration.ofMinutes(12))
     // Robolectric NATIVE Skia/Choreographer state leaks across classes in one JVM and
-    // makes later Compose waitForIdle spin until Espresso times out. A new worker
-    // every few methods keeps that leak from accumulating across the suite.
-    forkEvery = 25
+    // makes later Compose waitForIdle spin until Espresso times out. MessageActionsTest
+    // is the first class that trips that leak after a handful of NATIVE Compose suites;
+    // one class per worker keeps the leak from accumulating.
+    forkEvery = 1
 }
