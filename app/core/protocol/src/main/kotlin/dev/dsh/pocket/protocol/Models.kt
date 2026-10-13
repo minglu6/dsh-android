@@ -191,24 +191,11 @@ data class UploadReceipt(val receiptId: String, val name: String? = null, val at
  *
  * Happy path: `dshpocket://pair?h=<host:port>&c=<6-digit>`
  * Legacy iroh forms (`n=` / `nodeId#code`) are rejected — re-pair from the desktop UI.
+ * Parsing lives in [PairingUriPolicy] (shared contract with the plugin).
  */
 data class PairingLink(val host: String, val port: Int, val code: String) {
     companion object {
-        private val CODE = Regex("^\\d{6}$")
-
-        fun parse(text: String): PairingLink? {
-            val s = text.trim()
-            if (!s.startsWith("dshpocket://pair")) return null
-            val q = s.substringAfter('?', "").split('&')
-                .filter { it.isNotEmpty() }
-                .associate { it.substringBefore('=') to java.net.URLDecoder.decode(it.substringAfter('=', ""), "UTF-8") }
-            val c = q["c"]?.takeIf { CODE.matches(it) } ?: return null
-            // Explicitly ignore legacy iroh node-id advertisements.
-            if (!q["n"].isNullOrBlank()) return null
-            val h = q["h"]?.takeIf { it.isNotBlank() } ?: return null
-            val hp = parseHostPort(h) ?: return null
-            return PairingLink(hp.first, hp.second, c)
-        }
+        fun parse(text: String): PairingLink? = PairingUriPolicy.parse(text)
     }
 }
 

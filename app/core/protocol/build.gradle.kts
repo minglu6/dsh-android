@@ -3,6 +3,14 @@ plugins {
     id("org.jetbrains.kotlin.plugin.serialization")
 }
 kotlin { jvmToolchain(17) }
+
+// Shared language-neutral contract fixtures (also consumed by plugin node tests).
+sourceSets {
+    test {
+        resources.srcDir("${rootProject.projectDir}/../contract")
+    }
+}
+
 dependencies {
     api("org.jetbrains.kotlinx:kotlinx-serialization-json:1.7.3")
     api("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.9.0")

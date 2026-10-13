@@ -88,6 +88,8 @@ object Pocket {
     val permission = MutableStateFlow<Map<String, String>>(emptyMap())
     val model = MutableStateFlow<Map<String, ModelChoice>>(emptyMap())
     val errors = MutableSharedFlow<String>(extraBufferCapacity = 8)
+    /** Handshake version mismatch for the active profile (plugin/app too old). */
+    val compatibility = MutableStateFlow<CompatibilityIssue?>(null)
     /** Transient toast-style notices (archive undo, feedback thanks, …). */
     val notices = MutableSharedFlow<String>(extraBufferCapacity = 8)
     /**
@@ -120,18 +122,27 @@ object Pocket {
     /** Per-session follow attempts across reconnects; capped to stop spin loops. */
     private val followAttempts = HashMap<String, Int>()
     private const val MAX_FOLLOW_ATTEMPTS = 3
-    private const val FOLLOW_MAX_MESSAGES = 50
-    private const val HISTORY_PAGE_SIZE = 100
     /** Slow-link hello / dial budget (ref dsh-mobile SLOW_CONNECTIONS ~120s init wait). */
     private const val CONNECT_TIMEOUT_MS = 120_000L
-    /** Current reconnect backoff; reset to 1s on Online or network restore. */
-    private val backoffMs = AtomicLong(1_000L)
+    /** Current reconnect backoff; reset via [ReconnectBackoffPolicy] on Online or network restore. */
+    private val backoffMs = AtomicLong(ReconnectBackoffPolicy.INITIAL_MS)
     /** Wakes a pending reconnect delay when the network becomes available. */
     private val reconnectWake = MutableSharedFlow<Unit>(extraBufferCapacity = 1, onBufferOverflow = BufferOverflow.DROP_OLDEST)
     /** Collapses NetworkCallback bursts (adapted from dsh-mobile RestoreAttemptGate). */
     private val restoreGate = RestoreAttemptGate()
     /** Minimal task events from the host for local notification text. */
     val taskEvents = MutableSharedFlow<TaskEvent>(extraBufferCapacity = 16, onBufferOverflow = BufferOverflow.DROP_OLDEST)
+
+    private fun newClient() = PocketClient(appVersion = BuildConfig.APP_VERSION)
+
+    private fun applyCompatibility(hello: HelloResult) {
+        val handshake = hello.handshakeVersions()
+        compatibility.value = if (handshake == null) {
+            CompatibilityIssue(CompatibilityIssueKind.PROTOCOL_UNSUPPORTED)
+        } else {
+            VersionCompatibility.evaluate(BuildConfig.APP_VERSION, handshake)
+        }
+    }
 
     fun init(ctx: Context) {
         if (::prefs.isInitialized) return
@@ -186,6 +197,7 @@ object Pocket {
         sessions.value = emptyList(); chat.value = null; approvals.value = emptyList()
         userQuestions.value = emptyList(); archivedIds.value = emptySet(); pinnedIds.value = emptySet()
         feedback.value = emptyMap(); attachmentCache.clear()
+        compatibility.value = null
         setRoute(profileId, null)
         connJob = main.launch { runConnection(profileId) }
     }
@@ -196,7 +208,7 @@ object Pocket {
     }
 
     private suspend fun runConnection(profileId: String) {
-        backoffMs.set(1_000L)
+        backoffMs.set(ReconnectBackoffPolicy.reset())
         while (currentCoroutineContext().isActive) {
             val p = profiles.value.firstOrNull { it.id == profileId } ?: return
             if (p.needsRepair) {
@@ -205,7 +217,7 @@ object Pocket {
             }
             val token = tokens.get(p.id) ?: run { setDot(p.id, Dot.Unauthorized); return }
             setDot(p.id, Dot.Connecting)
-            val c = PocketClient()
+            val c = newClient()
             try {
                 val factories = factoriesFor(p)
                 if (factories.isEmpty()) {
@@ -214,9 +226,10 @@ object Pocket {
                     return
                 }
                 val hello = c.connect(factories, Auth.Token(token), CONNECT_TIMEOUT_MS)
+                applyCompatibility(hello)
                 client = c; ops.value = hello.ops
                 setRoute(p.id, c.route ?: hello.route)
-                setDot(p.id, Dot.Online); backoffMs.set(1_000L)
+                setDot(p.id, Dot.Online); backoffMs.set(ReconnectBackoffPolicy.reset())
                 val remoteInstance = hello.raw["instanceId"].str()
                 if (!remoteInstance.isNullOrBlank() && remoteInstance != p.instanceId) {
                     profiles.value = profiles.value.map {
@@ -250,7 +263,7 @@ object Pocket {
             }
             setDot(p.id, Dot.Offline)
             val wait = backoffMs.get()
-            backoffMs.updateAndGet { (it * 2).coerceAtMost(30_000) }
+            backoffMs.updateAndGet { ReconnectBackoffPolicy.next(it) }
             // NetworkCallback may wake this early after resetting backoff.
             withTimeoutOrNull(wait) { reconnectWake.first() }
         }
@@ -265,7 +278,7 @@ object Pocket {
         val dot = status.value[id]
         if (!ConnectionRestorePolicy.shouldReconnect(dot)) return
         val generation = restoreGate.begin()
-        backoffMs.set(1_000L)
+        backoffMs.set(ReconnectBackoffPolicy.reset())
         reconnectWake.tryEmit(Unit)
         // Stuck Connecting: drop the half-open client so the loop retries at once.
         if (dot == Dot.Connecting && restoreGate.isCurrent(generation)) {
@@ -396,7 +409,7 @@ object Pocket {
         followAttempts[sessionId] = attempts
         subId?.let { old -> runCatching { c.unfollow(old) } }
         subId = null
-        val sid = c.follow(sessionId, afterSeq, maxMessages = FOLLOW_MAX_MESSAGES)
+        val sid = c.follow(sessionId, afterSeq, maxMessages = HistoryPagingPolicy.FOLLOW_MAX_MESSAGES)
         subId = sid
         stray.remove(sid)?.forEach { applyFrame(it["frame"]) }
         stray.clear()
@@ -424,15 +437,15 @@ object Pocket {
     fun loadOlderHistory() = main.launch {
         val st = chat.value ?: return@launch
         val c = client ?: return@launch
-        if (!st.hasMore || st.loadingOlder || st.firstSeq < 0) return@launch
+        if (!HistoryPagingPolicy.canLoadOlder(st.hasMore, st.loadingOlder, st.firstSeq)) return@launch
         chat.value = st.copy(loadingOlder = true)
         try {
-            val through = reducer.cursor.coerceAtLeast(st.firstSeq)
+            val req = HistoryPagingPolicy.pageRequest(reducer.cursor, st.firstSeq)
             val page = c.historyPage(
                 sessionId = st.sessionId,
-                throughSeq = through,
-                beforeSeq = st.firstSeq,
-                maxMessages = HISTORY_PAGE_SIZE,
+                throughSeq = req.throughSeq,
+                beforeSeq = req.beforeSeq,
+                maxMessages = req.maxMessages,
             )
             reducer.prepend(page["records"], page["hasMore"].bool() ?: false)
             chat.value = chat.value?.copy(
@@ -836,7 +849,7 @@ object Pocket {
         if (host.isBlank() || port !in 1..65535) {
             return@withContext Result.failure(Exception("地址无效：需要 host:port（Tailscale IP 或局域网地址）"))
         }
-        val c = PocketClient()
+        val c = newClient()
         try {
             val draft = Profile("", name.ifBlank { "电脑" }, host = host, port = port)
             val factories = factoriesFor(draft)
@@ -853,7 +866,10 @@ object Pocket {
                 lastUsedAt = System.currentTimeMillis(),
             )
             tokens.put(p.id, token)
-            withContext(main.coroutineContext) { upsertProfile(p) }
+            withContext(main.coroutineContext) {
+                applyCompatibility(hello)
+                upsertProfile(p)
+            }
             Result.success(p)
         } catch (e: PocketError) {
             Result.failure(Exception(when {

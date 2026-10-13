@@ -8,6 +8,7 @@ fun JsonElement?.obj(): JsonObject? = this as? JsonObject
 fun JsonElement?.arr(): JsonArray? = this as? JsonArray
 fun JsonElement?.str(): String? = (this as? JsonPrimitive)?.takeIf { it.isString }?.content
 fun JsonElement?.long(): Long? = (this as? JsonPrimitive)?.longOrNull
+fun JsonElement?.int(): Int? = (this as? JsonPrimitive)?.intOrNull ?: long()?.toInt()
 fun JsonElement?.bool(): Boolean? = (this as? JsonPrimitive)?.booleanOrNull
 operator fun JsonElement?.get(key: String): JsonElement? = (this as? JsonObject)?.get(key)
 

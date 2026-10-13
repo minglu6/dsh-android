@@ -1,0 +1,65 @@
+{
+  "schemaVersion": 1,
+  "parse": [
+    {
+      "name": "tailscale CGNAT host:port",
+      "input": "dshpocket://pair?h=100.106.128.87%3A7690&c=482913",
+      "expected": { "host": "100.106.128.87", "port": 7690, "code": "482913" }
+    },
+    {
+      "name": "MagicDNS host:port",
+      "input": "dshpocket://pair?h=mac.tail1.ts.net%3A7690&c=654321",
+      "expected": { "host": "mac.tail1.ts.net", "port": 7690, "code": "654321" }
+    },
+    {
+      "name": "LAN IPv4 host:port (unencoded colon)",
+      "input": "dshpocket://pair?h=192.168.1.20:7690&c=111111",
+      "expected": { "host": "192.168.1.20", "port": 7690, "code": "111111" }
+    },
+    {
+      "name": "trim surrounding whitespace",
+      "input": "  dshpocket://pair?h=100.1.2.3%3A7690&c=222222  ",
+      "expected": { "host": "100.1.2.3", "port": 7690, "code": "222222" }
+    },
+    {
+      "name": "reject missing host",
+      "input": "dshpocket://pair?c=123456",
+      "expected": null
+    },
+    {
+      "name": "reject short code",
+      "input": "dshpocket://pair?h=x:1&c=12",
+      "expected": null
+    },
+    {
+      "name": "reject empty string",
+      "input": "",
+      "expected": null
+    },
+    {
+      "name": "reject https URL",
+      "input": "https://example.com",
+      "expected": null
+    },
+    {
+      "name": "reject legacy iroh n= only",
+      "input": "dshpocket://pair?n=abcdefghijklmnopqrst&c=482913",
+      "expected": null
+    },
+    {
+      "name": "reject legacy nodeId#code paste",
+      "input": "abcdefghijklmnopqrst#123456",
+      "expected": null
+    },
+    {
+      "name": "reject legacy n= even when h= is also present",
+      "input": "dshpocket://pair?n=irohNodeIdValue01&c=123456&h=192.168.1.20:7690",
+      "expected": null
+    },
+    {
+      "name": "reject out-of-range port",
+      "input": "dshpocket://pair?h=192.168.1.20:99999&c=123456",
+      "expected": null
+    }
+  ]
+}

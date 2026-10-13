@@ -16,12 +16,14 @@ Gradle 工程根目录就是 `app/`。
 
 ```bash
 cd app
-./gradlew :core:protocol:test :app:testDebugUnitTest :app:assembleDebug
+./gradlew :core:protocol:test :app:testDebugUnitTest :app:assembleDebug :app:assembleRelease
 # 对真实 dsh + 插件跑协议测试（需要 dsh、pnpm）：
 cd ../plugin && node test/integration/kotlin-live.mjs
 ```
 
-APK **不再**包含 `libpocket_iroh.so`；连接只走 host:port WebSocket。
+`assembleRelease` 开启 R8 minify + resource shrinking。未设置签名环境变量时使用 debug keystore；生产签名见仓库根 README「正式签名（CI）」——密钥来自 GitHub Secrets，切勿提交 keystore。
+
+APK **不再**包含 `libpocket_iroh.so`；连接只走 host:port WebSocket。hello/pair 会交换 `appVersion` / `version` / `minimumAppVersion`，插件过旧时 App 显示主题化提示条。
 
 ## 使用
 

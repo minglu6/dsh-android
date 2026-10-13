@@ -55,9 +55,12 @@ function mockSc(snapshot, pages = []) {
 }
 const ev = (seq) => ({ type: 'event', event: { type: 'x', seq, time: 0, data: {} } })
 
-async function setup(sc = mockSc({ type: 'snapshot', cursor: 0, records: [], hasMore: false })) {
+async function setup(sc = mockSc({ type: 'snapshot', cursor: 0, records: [], hasMore: false }), info) {
   const devices = createDeviceStore({ ownerToken: OWNER, persist: false })
-  const server = createPocketServer({ sessionController: sc, token: OWNER, port: 0, devices, pairFailDelayMs: 1 })
+  const server = createPocketServer({
+    sessionController: sc, token: OWNER, port: 0, devices, pairFailDelayMs: 1,
+    info: info ?? { plugin: 'dsh-plugin-pocket', version: '0.1.0', minimumAppVersion: '0.1.0' },
+  })
   const url = `ws://${await server.listen()}`
   return { server, url, devices }
 }
@@ -78,12 +81,17 @@ test('pair over ws issues device token; owner-only pairing.open; revoke kicks de
   await owner.call('hello', { token: OWNER })
   const { code } = (await owner.call('pairing.open')).result
   const phone = client(url); await phone.open
-  const paired = await phone.call('pair', { code, name: 'Pixel 9' })
+  const paired = await phone.call('pair', { code, name: 'Pixel 9', app: 'dsh-android', appVersion: '0.1.0-m3' })
   assert.equal(paired.ok, true)
   assert.ok(paired.result.token && paired.result.deviceId)
+  assert.equal(paired.result.version, '0.1.0')
+  assert.equal(paired.result.minimumAppVersion, '0.1.0')
   assert.equal((await phone.call('pairing.open')).error.code, 'auth/forbidden')
   const phone2 = client(url); await phone2.open
-  assert.equal((await phone2.call('hello', { token: paired.result.token })).result.device.name, 'Pixel 9')
+  const hello = await phone2.call('hello', { token: paired.result.token, app: 'dsh-android', appVersion: '0.1.0-m3' })
+  assert.equal(hello.result.device.name, 'Pixel 9')
+  assert.equal(hello.result.version, '0.1.0')
+  assert.equal(hello.result.minimumAppVersion, '0.1.0')
   const list = (await owner.call('devices.list')).result.devices
   assert.equal(list.length, 1)
   await owner.call('devices.revoke', { deviceId: paired.result.deviceId })

@@ -5,6 +5,8 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
+  # Release APK size gate (bytes). Keep aligned with a lean WS-only build (no iroh .so).
+  DSH_ANDROID_APK_MAX_BYTES: 41943040
 
 jobs:
   # Optional legacy pocket-host (desktop iroh behind config.iroh=true; not on phone path).
@@ -93,6 +95,9 @@ jobs:
         with: { node-version: 22 }
       - uses: actions/setup-java@v4
         with: { distribution: temurin, java-version: 17 }
+      - uses: android-actions/setup-android@v3
+        with:
+          packages: platform-tools
       - uses: gradle/actions/setup-gradle@v4
       - name: confirm no iroh jniLibs in tree
         run: |
@@ -114,18 +119,79 @@ jobs:
       - name: protocol client tests against real dsh + plugin
         working-directory: plugin
         run: node test/integration/kotlin-live.mjs
-      - name: unit tests + debug APK (no libpocket_iroh.so)
-        working-directory: app
-        run: ./gradlew --no-daemon :core:protocol:test :app:testDebugUnitTest -Proborazzi.test.record=true :app:assembleDebug :app:assembleDebugAndroidTest
-      - name: confirm APK has no iroh native libs; report size
+      - name: Configure release signing
+        env:
+          ANDROID_KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_B64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
         run: |
-          apk=app/app/build/outputs/apk/debug/app-debug.apk
-          ls -lh "$apk"
-          if unzip -l "$apk" | grep -E 'lib/.*/libpocket_iroh\.so'; then
-            echo "APK still contains libpocket_iroh.so" >&2
+          if [ -n "$ANDROID_KEYSTORE_B64" ] && [ -n "$ANDROID_KEYSTORE_PASSWORD" ] && \
+             [ -n "$ANDROID_KEY_ALIAS" ] && [ -n "$ANDROID_KEY_PASSWORD" ]; then
+            umask 077
+            printf '%s' "$ANDROID_KEYSTORE_B64" | base64 --decode > "$RUNNER_TEMP/dsh-android-release.jks"
+            echo "DSH_ANDROID_KEYSTORE_FILE=$RUNNER_TEMP/dsh-android-release.jks" >> "$GITHUB_ENV"
+            echo "ANDROID_KEYSTORE_PASSWORD=$ANDROID_KEYSTORE_PASSWORD" >> "$GITHUB_ENV"
+            echo "ANDROID_KEY_ALIAS=$ANDROID_KEY_ALIAS" >> "$GITHUB_ENV"
+            echo "ANDROID_KEY_PASSWORD=$ANDROID_KEY_PASSWORD" >> "$GITHUB_ENV"
+            echo "DSH_RELEASE_SIGNING=secrets" >> "$GITHUB_ENV"
+            echo "Using GitHub Secrets for release signing."
+          else
+            echo "DSH_RELEASE_SIGNING=debug-fallback" >> "$GITHUB_ENV"
+            echo "Android signing secrets absent; release APK will use the debug keystore so CI stays green."
+            echo "To publish a production-signed APK, add repository secrets:"
+            echo "  ANDROID_KEYSTORE_B64, ANDROID_KEYSTORE_PASSWORD, ANDROID_KEY_ALIAS, ANDROID_KEY_PASSWORD"
+            echo "Never commit keystore files or passwords."
+          fi
+      - name: unit tests + debug + R8 release APK
+        working-directory: app
+        run: |
+          ./gradlew --no-daemon \
+            :core:protocol:test \
+            :app:testDebugUnitTest \
+            -Proborazzi.test.record=true \
+            :app:assembleDebug \
+            :app:assembleDebugAndroidTest \
+            :app:assembleRelease
+      - name: Remove signing keystore
+        if: always()
+        run: rm -f "$RUNNER_TEMP/dsh-android-release.jks"
+      - name: confirm APKs have no iroh native libs; report sizes
+        run: |
+          debug_apk=app/app/build/outputs/apk/debug/app-debug.apk
+          release_apk=app/app/build/outputs/apk/release/app-release.apk
+          for apk in "$debug_apk" "$release_apk"; do
+            ls -lh "$apk"
+            if unzip -l "$apk" | grep -E 'lib/.*/libpocket_iroh\.so'; then
+              echo "APK still contains libpocket_iroh.so: $apk" >&2
+              exit 1
+            fi
+            echo "APK_SIZE_BYTES=$(stat -c%s "$apk") path=$apk"
+          done
+      - name: Verify release signature
+        run: |
+          apksigner="$(find "${ANDROID_HOME:-$HOME/Android/Sdk}/build-tools" -type f -name apksigner 2>/dev/null | sort -V | tail -n 1)"
+          if [ -z "$apksigner" ] || [ ! -x "$apksigner" ]; then
+            # setup-android may not install build-tools; pull a recent package
+            yes | sdkmanager "build-tools;35.0.0" >/dev/null
+            apksigner="$(find "${ANDROID_HOME:-$HOME/Android/Sdk}/build-tools" -type f -name apksigner | sort -V | tail -n 1)"
+          fi
+          test -x "$apksigner"
+          apk=app/app/build/outputs/apk/release/app-release.apk
+          "$apksigner" verify --verbose --print-certs "$apk" | tee "$RUNNER_TEMP/dsh-android-apksigner.txt"
+          grep -q 'Verified using v2 scheme' "$RUNNER_TEMP/dsh-android-apksigner.txt" \
+            || grep -q 'Verified using v3 scheme' "$RUNNER_TEMP/dsh-android-apksigner.txt" \
+            || grep -q 'Verified using v1 scheme' "$RUNNER_TEMP/dsh-android-apksigner.txt"
+      - name: Enforce release APK size gate
+        run: |
+          apk=app/app/build/outputs/apk/release/app-release.apk
+          maximum="${DSH_ANDROID_APK_MAX_BYTES}"
+          actual="$(stat -c %s "$apk")"
+          echo "release APK $actual bytes (limit $maximum); signing=$DSH_RELEASE_SIGNING"
+          if [ "$actual" -gt "$maximum" ]; then
+            echo "Android release APK is $actual bytes; limit is $maximum bytes." >&2
             exit 1
           fi
-          echo "APK_SIZE_BYTES=$(stat -c%s "$apk")"
       - uses: actions/upload-artifact@v4
         with:
           name: dsh-android-debug
@@ -133,22 +199,29 @@ jobs:
             app/app/build/outputs/apk/debug/app-debug.apk
             app/app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk
             app/app/build/screenshots/*.png
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dsh-android-release
+          path: app/app/build/outputs/apk/release/app-release.apk
       - uses: actions/download-artifact@v4
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         with:
           name: pocket-host-darwin-arm64
           path: /tmp/host-prebuilts
-      - name: publish rolling release (APK + host prebuilts)
+      - name: publish rolling release (release + debug APK + host prebuilts)
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         env: { GH_TOKEN: "${{ github.token }}" }
         run: |
+          cp app/app/build/outputs/apk/release/app-release.apk dsh-android.apk
           cp app/app/build/outputs/apk/debug/app-debug.apk dsh-android-debug.apk
           cp /tmp/host/pocket-host-linux-x64 /tmp/host-prebuilts/pocket-host-linux-x64
           chmod 755 /tmp/host-prebuilts/*
           git tag -f dsh-android-latest && git push -f origin dsh-android-latest
-          gh release view dsh-android-latest >/dev/null 2>&1 || gh release create dsh-android-latest --prerelease --title "dsh-android (latest debug)" --notes "Rolling build."
-          gh release edit dsh-android-latest --notes "Rolling debug build @ ${GITHUB_SHA::7}. APK is WS-only (Tailscale/LAN); no libpocket_iroh.so. Optional desktop sidecars: pocket-host-linux-x64, pocket-host-darwin-arm64 (config.iroh=true)."
+          gh release view dsh-android-latest >/dev/null 2>&1 || gh release create dsh-android-latest --prerelease --title "dsh-android (latest)" --notes "Rolling build."
+          notes="Rolling build @ ${GITHUB_SHA::7}. Signed release APK (R8/minify) + debug APK. WS-only (Tailscale/LAN); no libpocket_iroh.so. Signing=${DSH_RELEASE_SIGNING}. Optional desktop sidecars: pocket-host-linux-x64, pocket-host-darwin-arm64 (config.iroh=true)."
+          gh release edit dsh-android-latest --notes "$notes"
           gh release upload dsh-android-latest \
+            dsh-android.apk \
             dsh-android-debug.apk \
             /tmp/host-prebuilts/pocket-host-linux-x64 \
             /tmp/host-prebuilts/pocket-host-darwin-arm64 \
@@ -165,7 +238,10 @@ jobs:
         run: |
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
           sudo udevadm control --reload-rules && sudo udevadm trigger --name-match=kvm
-      - name: instrumented smoke test
+      - name: R8 release assemble (catch minify breakage before emulator)
+        working-directory: app
+        run: ./gradlew --no-daemon :app:assembleRelease
+      - name: instrumented smoke + release install startup check
         uses: reactivecircus/android-emulator-runner@v2
         with:
           api-level: 34
@@ -173,4 +249,15 @@ jobs:
           target: google_apis
           disable-animations: true
           working-directory: app
-          script: ./gradlew --no-daemon :app:connectedDebugAndroidTest
+          # android-emulator-runner invokes /bin/sh (dash); avoid bashisms like pipefail.
+          script: |
+            set -eu
+            ./gradlew --no-daemon :app:connectedDebugAndroidTest
+            adb install -r app/build/outputs/apk/release/app-release.apk
+            adb shell am force-stop dev.dsh.pocket || true
+            adb shell am start -W -n dev.dsh.pocket/dev.dsh.pocket.app.MainActivity > /tmp/dsh-release-start.txt
+            cat /tmp/dsh-release-start.txt
+            grep -E 'Status: ok|Success' /tmp/dsh-release-start.txt
+            # Give Compose a moment; crash would leave the process dead.
+            sleep 3
+            adb shell pidof -s dev.dsh.pocket
