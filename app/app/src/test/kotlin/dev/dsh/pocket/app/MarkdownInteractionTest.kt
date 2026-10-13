@@ -40,6 +40,7 @@ class MarkdownInteractionTest {
         val previousAppearance = Pocket.prefs.appearance
         val opened = mutableListOf<String>()
         val directory = "/Users/felix/Documents"
+        installHostSettingsFixture()
         try {
             Pocket.prefs.appearance = appearance
             rule.setContent {

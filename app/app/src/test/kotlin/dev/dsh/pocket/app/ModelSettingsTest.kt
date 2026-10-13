@@ -31,6 +31,7 @@ class ModelSettingsTest {
 
     @Before fun setup() {
         Pocket.init(RuntimeEnvironment.getApplication())
+        installHostSettingsFixture()
         Pocket.prefs.language = AppLanguage.Zh
         Pocket.prefs.appearance = Appearance.Light
         Pocket.ops.value = setOf("models.settingsMutate", "credentials.set")

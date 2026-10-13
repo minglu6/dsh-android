@@ -64,6 +64,7 @@ class ScreenshotTest {
 
     @Before fun state() {
         // Skip NEARBY_WIFI in-panel CTA so connection screenshots show empty/nearby chrome.
+        installHostSettingsFixture()
         runCatching { Pocket.prefs.nearbyWifiDeclined = true }
         runCatching { Pocket.prefs.appearance = Appearance.Light }
         val p = Profile("p1", "Mac mini", host = "100.106.128.87", port = 7690)
@@ -431,6 +432,7 @@ class ScreenshotTest {
         rule.onNodeWithTag("processHeader:turn-1-process").performClick()
         rule.waitForIdle()
         rule.onRoot().captureRoboImage(out("26-message-chrome-expanded-$suffix"))
+        rule.onNodeWithTag("processHeader:r1-group").performClick()
         rule.onNodeWithTag("reasoningHeader:r3").performClick()
         rule.waitForIdle()
         rule.onRoot().captureRoboImage(out("26-message-reasoning-expanded-$suffix"))

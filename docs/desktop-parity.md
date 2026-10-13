@@ -28,7 +28,7 @@ Data: `sessionController.follow` / `page` event stream (pocket `follow` / `histo
 |---|---|---|---|
 | User | Right-aligned bubble; optional images; pending echo until durable | — | `user/message` (typed source only) |
 | Assistant text | Markdown stream | — | `assistant/message` content blocks `type=text` |
-| Reasoning / thinking | Collapsible “思考” strip; live “深度求索中” | `message.think` 思考 / Think; `message.turnProcess.thoughtForAWhile` 已思考 / Thought for a while; `chat.deepDiving` 深度求索中 / Deep diving; `chat.deepDivingFor` 深度求索中，用时 {duration} ··· | reasoning content blocks + timing |
+| Reasoning / thinking | Independent collapsible “思考” strip; separate whole-Turn running status | `message.think` 思考 / Think; `chat.deepDiving` 深度求索中 / Deep diving; `chat.deepDivingFor` 深度求索中，用时 {duration} ··· | reasoning blocks; running clock from Host `turn/start.time` |
 | Tool call | Row with status; opens inspector | tool titles in `conversation.*` | `tool/call` + `tool/result` |
 | Tool-process group | Folded summary of a turn’s tools+thinking | `message.stepProcess.*` / `message.turnProcess.*` (see §1.4) | Derived client-side from events |
 | Notice / trigger | Non-bubble status lines | `message.trigger.*` | turn triggers (goal/job/schedule/…) |
@@ -72,9 +72,13 @@ Grouping policy keys: `settings.transcript.{compact,standard,detailed,verbose}`,
 
 Android groups by Host Turn identity rather than user-message boundaries. Completed duration is `max(1000, end.time - start.time)`, floored into seconds/minutes/hours like desktop; missing boundaries show completion without an invented number. Aborted/error turns show stopped/failed without duration. Pure-text and reasoning-only turns still get the completed-Turn header.
 
-Expanding a Turn reveals compact process groups and ordered reasoning/tool rows. Consecutive tool-bearing steps share the tool-process disclosure; the final reasoning-only step remains separate. Tool titles use the official registry and recognized recorded results provide counts/receipts; failed or malformed output is never presented as a successful zero count. Full tool input/output remains available through the detail action.
+Process groups are segmented at assistant replies, independent inputs/notices and Turn boundaries; grouping never moves a tool across a reply. The completed-Turn control is a separate row that hides process groups and intermediate replies, leaving the final answer visible. Standard/Compact process disclosures start closed; Detailed live/deferred Turns and Verbose render their members flat. Failed, aborted or interleaved-input Turns cannot hide the whole process. Tool titles use the official registry; failed or malformed output is never presented as a successful zero count.
 
 The reported greeting was replayed from its original journal: `1791882640048 - 1791882633220 = 6828ms`, displayed as 6 seconds. All three reasoning blocks and three calls retain the order `reasoning → wait_agent → reasoning → job_list → list_agents → reasoning`. Evidence: [collapsed](screenshots/real-turn-6s-collapsed.png), [expanded](screenshots/real-turn-6s-expanded.png), [dark process](screenshots/26-message-chrome-expanded-dark.png).
+
+The whole-Turn running status stays visible during reasoning and tool execution. Its clock uses the current open Host Turn's start, not the phone connection time; missing start data shows “深度求索中” without an invented duration. The official 60-frame whale artwork, blue theme tokens, shared text shimmer and output divider are rendered natively; disabling system animations uses the official static whale.
+
+Renderer evidence from deterministic Host-event replay through the reducer and Compose UI: [standard/light](screenshots/controller-status-light.png), [standard/dark](screenshots/controller-status-dark.png), [detailed/dark](screenshots/controller-status-detailed.png). This is rendering evidence, not a live-model run. Independent real-Host verification exercised phone-protocol writes updating the official Web settings page, Web UI writes pushing back to the phone protocol, and stale-revision rejection.
 
 
 ### 1.5 Approvals & permission prompts
@@ -121,6 +125,8 @@ Slash menu pick consumes the typed `/` (desktop `slash/input-consume-token`) the
 | Clock | `clock.md` / `clock.ymd` | event `time` |
 
 Retry is **display** of Host `llm/retry` chains (`message.retry.*`), not a user button.
+
+Assistant completion actions wait for the Host Turn to close and belong to its last answer, not every durable intermediate reply.
 
 **Icon chrome (desktop MessageIconActions / MessageFeedbackActions):** Android uses the official ui-primitives Regular SVG paths. User messages show clock → copy, without a branch control. Assistant messages show copy → like/dislike → branch → clock; copy/branch are 17dp and feedback icons 15dp, with tertiary `T.Text3` tint. Feedback selection swaps outline/fill rather than inventing blue/red colors. Controls occupy 36dp horizontally with no extra inter-button gap, retain a 48dp-high touch area, and leave 8dp before/after the clock; unavailable branch actions retain their disabled state and reason. Locale strings remain accessibility labels/tooltips, not visible text buttons. No standalone “本轮用量” row is appended below answers; composer statistics and trajectory usage details remain available. Process/reasoning chevrons use vector artwork and rotate on expansion instead of text glyphs.
 
@@ -182,7 +188,7 @@ Package: `ui-conversation` input bar (+ `ui-commands`, `ui-model-selection`, `ui
 | Stats pills | `stats.*` | composer dock (activity + usage) |
 | Send / queue / steer | `input.send`, `input.send.queue`, `input.send.steer` | `prompt` mode |
 | Stop | `input.stop` 停止生成 | `cancel` |
-| Busy send pref | `settings.enter.*` | phone-local prefs |
+| Busy send pref | `settings.enter.*` | shared Host `ui-conversation.busyEnter` |
 
 ### Model picker on Android
 
@@ -252,7 +258,7 @@ Guide artwork is selected from the owning feature's registry, not from generic c
 
 | Page | Locale | Decision |
 |---|---|---|
-| 通用设置 | `general.nav` 通用设置; language / appearance / font / transcript / collapse / busy-send / performance | feasible (mostly done, phone-local) |
+| 通用设置 | `general.nav` 通用设置; language / appearance / font / transcript / collapse / busy-send / performance | Shared Host preferences with revision-fenced writes, effective-value readback and live updates; only device-specific and client-lifetime options remain local. |
 | 模型 | settings-models | **done** — provider rows with API-key status and one inline editor; collapsed customized settings; native model fields/input types, restore defaults, catalog/custom creation and discovery selection. Revision-fenced writes preserve drafts on failure. No standalone credential page or JSON model editor. |
 | 内置插件 / 插件 | plugin-manager + inventory | **done with native limits** — official groups, bundle/component controls, inspect/install/cancel/uninstall, diagnostics, registry and revision-fenced configuration. Host directory specs work; Android OS directory picker does not. Custom React slots remain Web-only. |
 | 自动化任务 | ui-schedule | **done** — new conversation for creation; searchable catalog, precise rule/title/instruction editing, conflict-safe delete/history. No pause toggle (`inactive` = ended). |
@@ -263,6 +269,12 @@ Guide artwork is selected from the owning feature's registry, not from generic c
 | 连接 / 审批通知 | phone Connections + notify pref | keep |
 
 Appearance values from `ui-theme` locales. Performance: `settings.performance.{compact,detailed}`.
+
+Android is a controller of the same Host, not an independent settings store. Shared fields use the official namespaces (`ui-chat`, `ui-theme`, `locale`, `ui-conversation`, `ui-settings`, and `permission`) through `plugins.settingsDescribe/settingsMutate`. Desktop changes push `settings.changed` and update mobile consumers. Conflicting, offline, read-only and overridden writes remain failures; old local preferences never overwrite Host settings, and responses from a previous Host cannot replace the current mirror.
+
+The exposed `session-log-deepseek.enabled` toggle uses the same mirror and version-fenced write path.
+
+The missing-value transcript default follows Desktop (`standard`). Collapse timing remains explicitly client-local and in-memory because the official desktop policy has no Host setting for it.
 
 Model settings use the desktop UI, not the mere existence of Host APIs, as their feature boundary. API keys stay write-only inside provider editors. Opening a card and applying changes refresh its Host snapshot; external configuration changes require reopening the card. Saving settings never changes the current session model.
 

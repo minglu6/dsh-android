@@ -23,9 +23,11 @@ class PreferencesUiTest {
     @get:Rule val rule = createComposeRule()
     private lateinit var previousAppearance: Appearance
     private lateinit var previousLanguage: AppLanguage
+    private lateinit var host: HostSettingsFixture
 
     @Before fun setUp() {
         Pocket.init(RuntimeEnvironment.getApplication())
+        host = installHostSettingsFixture()
         previousAppearance = Pocket.prefs.appearance
         previousLanguage = Pocket.prefs.language
         Pocket.prefs.appearance = Appearance.Light
@@ -51,5 +53,22 @@ class PreferencesUiTest {
         rule.runOnIdle { assertTrue(renderedBackground.luminance() < 0.1f, "Selecting Dark must repaint the active theme immediately") }
         rule.onNodeWithText("浅色").performClick()
         rule.runOnIdle { assertTrue(renderedBackground.luminance() > 0.8f, "Selecting Light must repaint without navigation") }
+    }
+
+    @Test fun desktopChangeUpdatesThemeTokensAndOpenSettingsWithoutRemounting() {
+        var renderedToken = Color.Unspecified
+        rule.setContent {
+            PocketTheme {
+                val token = T.Bg
+                SideEffect { renderedToken = token }
+                GeneralSettingsScreen {}
+            }
+        }
+        rule.runOnIdle {
+            host.desktopSet(SharedSetting.Appearance, kotlinx.serialization.json.JsonPrimitive("dark"))
+            host.desktopSet(SharedSetting.Language, kotlinx.serialization.json.JsonPrimitive("en"))
+        }
+        rule.onNodeWithText("General settings").assertExists()
+        rule.runOnIdle { assertTrue(renderedToken.luminance() < 0.1f) }
     }
 }

@@ -13,6 +13,7 @@ import kotlinx.coroutines.runBlocking
 import androidx.compose.ui.test.performClick
 import dev.dsh.pocket.protocol.PermissionCatalog
 import dev.dsh.pocket.protocol.PermissionOption
+import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -30,6 +31,11 @@ class PermissionUiTest {
     private val team = PermissionOption("team", "团队权限", "主机提供的限制说明")
     private val auto = PermissionOption("auto", "Auto review")
     private val directory = PermissionCatalog(listOf(team, auto), listOf(team), "team")
+
+    @Before fun setUp() {
+        Pocket.init(RuntimeEnvironment.getApplication())
+        installHostSettingsFixture()
+    }
 
     private fun settle() {
         rule.mainClock.advanceTimeBy(1500)

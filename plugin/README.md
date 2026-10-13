@@ -71,6 +71,7 @@ dsh web
 - 后台任务输出通过 `jobs.follow` 推送 `job` / `job.end` / `job.error`，关闭订阅使用共享 `unfollow`，不会自动终止任务。
 - `workspace.changed`、`schedule.changed`、`plugins.changed` 驱动对应页面更新；预设名册和默认值从 Host 读取，配置写入携带观察到的 revision。
 - 模型密钥仅经提供商页面写入或清除，不提供独立凭证目录。删除提供商先完成配置 CAS，再清理该页面管理的密钥，避免冲突导致仍在使用的密钥丢失。
+- 通用设置复用 `plugins.settingsDescribe/settingsMutate`，不维护手机独立配置。`settings/document-updated` 广播 `settings.changed {ns, revision}`，驱动手机共享设置镜像更新；手机写入携带观察到的版本并回读有效值，桌面使用原有官方订阅更新。
 
 完整入口和原生边界见 [功能对齐清单](../docs/feature-parity.md)。升级 APK 不会自动重载已运行的桥接进程。
 

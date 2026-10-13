@@ -20,6 +20,7 @@ Plugin surface: `dsh-plugin-pocket` WebSocket ops (+ optional Cordis injects).
 | 后台任务 | Session-header `job-controller` list/observe/kill | implement | done | Header hidden for an empty session roster; shows live count or retained total. Foreground-only 3s refresh, session/Host-scoped state, explicit unavailable status on query failure. Task detail retains/live-streams output with byte offsets and loss notices. Termination requires separate confirmation. |
 | 任务 (清单) | conversation TodoPanel (`todo/write` / projections.todos) | implement | done | Progress row above composer → `TodoSheet`; not a right-panel guide entry. |
 | Message copy / clock / branch | IconActions + `sessions.fork` | implement | done | Desktop locale; plugin `sessions.fork`. |
+| Running status / process groups | Host Turn clock, live activity, nested process disclosures | implement | done | Official “深度求索中” with Host start time, whale/shimmer theme; groups preserve reply boundaries and obey the shared presentation policy. Completed-Turn controls retain the final answer. |
 | Turn error / max-tokens / stopped | chat notices | implement | done | Official `message.*` failure/stopped/retry copy. |
 | Full inventory | — | — | see [desktop-parity.md](desktop-parity.md) | Gap matrix: feasible / needs-plugin / hide. |
 | Top-bar 智能体团队 | Experimental agent-team UI + subagent lineage via `parentSessionId` | implement | done | List parent + children from `sessions.list`; switch session. |
@@ -44,7 +45,7 @@ Plugin surface: `dsh-plugin-pocket` WebSocket ops (+ optional Cordis injects).
 | Drawer footer connection | Settings row + remote identity | mobile adaptation | done | Settings stays on the left; the remote machine name is the only text on the right, without an address/port subtitle. The connection indicator retains its live status. Clicking the name opens connection management, where connection details remain available. Header no longer repeats it. |
 | New-chat 工作区 chip | Workspace picker | implement | done | Select/register real Host workspaces and create sessions with `workspaceId`; never open a Host-native OS picker remotely. |
 | New-chat / settings Agent 预设 | Host roster / default / composition | implement | done | Host names/descriptions, default selection with revision CAS, broken-state details and read-only YAML composition. |
-| Settings → 通用设置 | Locale, theme, font, transcript, collapse, busy-send, performance | implement | done | Phone-local prefs; official labels/values. |
+| Settings → 通用设置 | Locale, theme, font, transcript, collapse, busy-send, performance | implement | done | Host settings mirror with revision-fenced writes, effective-value readback and live desktop updates; device-specific settings remain separate. |
 | Settings → 模型 | Provider list, inline editor and API-key configuration | implement | done | Single expanded card, collapsed customized settings, native model fields/input types, restore defaults, catalog/custom creation and discovery selection. No standalone credential manager or JSON model editor. |
 | Settings → 插件 | Plugin manager | implement | done with native limits | Official Host `ChangeResult` outcomes, install cancellation/reconciliation and build-script approval; native settings with revision CAS, redacted secret-safe advanced edits. Third-party React configuration slots remain Web-only. |
 | Settings → 自动化任务 | Schedule catalog, edits and delivery history | implement | done | One-shot/interval/daily/weekdays/weekly/cron edits with time zone, exact expected-record CAS, history paging, confirmed delete, original conversation link. No pause/run-now invention. |
@@ -52,12 +53,12 @@ Plugin surface: `dsh-plugin-pocket` WebSocket ops (+ optional Cordis injects).
 | Settings → Agent 预设 | Roster, default and composition | implement | done | `presets.settings/read`; default changes use the official settings controller with observed revision. |
 | Settings → 打开配置文件 | Local editor | hide | done | Row removed. |
 | Settings → 连接 / 审批通知 | Profiles + notify flag | keep | done | |
-| General → 权限 / 繁忙发送 | Default permission; busyEnter | keep | done | Permission choices use Host `defaultOptions`; auto is current-session-only and cannot become a persistent default. |
-| General → 语言 | `locale.preference` | implement | done | Phone-local `zh` / `en` preference. |
-| General → 外观 | `ui-theme.preference` | implement | done | Official Light / Dark / System cards and artwork; observed local preferences repaint the active theme immediately. |
-| General → 字号大小 | Independent conversation/code/terminal fonts | implement | done | Phone-local ranges follow the desktop; changes affect the actual transcript, code and terminal consumers. |
-| General → 工作步骤展示 | `ui-chat.transcriptView` | implement | done | compact/standard/detailed/verbose. |
-| General → 工作步骤收起时机 | Client-only collapse timing | implement | done | Preference stored (policy hook for later fold animation). |
+| General → 权限 / 繁忙发送 | Default permission; busyEnter | keep | done | Shared `permission.defaultPreset` / `ui-conversation.busyEnter`; choices use Host `defaultOptions`. Auto is current-session-only. |
+| General → 语言 | `locale.preference` | implement | done | Shared Host preference; open pages react to desktop changes. |
+| General → 外观 | `ui-theme.preference` | implement | done | Official Light / Dark / System cards; shared Host changes repaint the active theme. |
+| General → 字号大小 | Independent conversation/code/terminal font sizes | implement | done | Shared Host values update transcript, code and terminal consumers. |
+| General → 工作步骤展示 | `ui-chat.transcriptView` | implement | done | Shared compact/standard/detailed/verbose setting; missing value follows Desktop Standard. |
+| General → 工作步骤收起时机 | Client-only collapse timing | implement | done | Observable in-memory state for the current client instance, matching official policy lifetime. |
 | General → 性能与用量 | `ui-chat.performanceUsage` | implement | done | Compact shows decode tok/s and cache hit; Detailed adds whole-log counts/token totals and breakdown dialogs. Context percentage remains independently available. |
 | 扫码配对 | Camera + deep link | — | elsewhere | PR #10; untouched. |
 | Desktop plugin account-menu | Account menu placement | — | elsewhere | PR #9; untouched. |

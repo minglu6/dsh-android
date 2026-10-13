@@ -47,6 +47,7 @@ class JobsActionTest {
 
     @Before fun setup() {
         Pocket.init(RuntimeEnvironment.getApplication())
+        installHostSettingsFixture()
         Pocket.prefs.appearance = Appearance.Light
         Pocket.prefs.language = AppLanguage.Zh
         originalClient = clientField.get(Pocket)

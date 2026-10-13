@@ -3,11 +3,21 @@ package dev.dsh.pocket.app
 import android.content.Context
 import android.content.SharedPreferences
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
 import android.util.Base64
 import dev.dsh.pocket.protocol.Route
 import dev.dsh.pocket.protocol.classifyWsRoute
+import dev.dsh.pocket.protocol.str
+import dev.dsh.pocket.protocol.int
+import dev.dsh.pocket.protocol.bool
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.builtins.serializer
@@ -154,6 +164,7 @@ enum class SessionOrderBy { Manual, Updated }
 enum class ArchivedFilter { Default, Show, Only }
 
 class AppPrefs(ctx: Context) {
+    internal val hostSettings = HostSettings(CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate))
     private val storage = ctx.getSharedPreferences("app", Context.MODE_PRIVATE)
     private val version = mutableIntStateOf(0)
     private val preferenceListener = SharedPreferences.OnSharedPreferenceChangeListener { _, _ ->
@@ -184,44 +195,57 @@ class AppPrefs(ctx: Context) {
         get() = p.getBoolean("profilesMigratedV1", false)
         set(v) = p.edit().putBoolean("profilesMigratedV1", v).apply()
     var busySend: BusySend
-        get() = runCatching { BusySend.valueOf(p.getString("busySend", null) ?: "Queue") }.getOrDefault(BusySend.Queue)
-        set(v) = p.edit().putString("busySend", v.name).apply()
+        get() = if (hostSettings.value(SharedSetting.BusySend).str() == "steer") BusySend.Steer else BusySend.Queue
+        set(v) = hostSettings.set(SharedSetting.BusySend, JsonPrimitive(v.mode))
     var defaultPermission: String
-        get() = p.getString("defaultPermission", null) ?: "workspace-write"
-        set(v) = p.edit().putString("defaultPermission", v).apply()
+        get() = hostSettings.value(SharedSetting.Permission).str() ?: "workspace-write"
+        set(v) = hostSettings.set(SharedSetting.Permission, JsonPrimitive(v))
     var approvalNotify: Boolean
         get() = p.getBoolean("approvalNotify", true)
         set(v) = p.edit().putBoolean("approvalNotify", v).apply()
     var language: AppLanguage
-        get() = runCatching { AppLanguage.valueOf(p.getString("language", null) ?: "Zh") }.getOrDefault(AppLanguage.Zh)
-        set(v) = p.edit().putString("language", v.name).apply()
+        get() = if ((hostSettings.value(SharedSetting.Language).str() ?: java.util.Locale.getDefault().language).startsWith("zh")) AppLanguage.Zh else AppLanguage.En
+        set(v) = hostSettings.set(SharedSetting.Language, JsonPrimitive(v.name.lowercase()))
     var appearance: Appearance
-        get() = runCatching { Appearance.valueOf(p.getString("appearance", null) ?: "Light") }.getOrDefault(Appearance.Light)
-        set(v) = p.edit().putString("appearance", v.name).apply()
+        get() = when (hostSettings.value(SharedSetting.Appearance).str()) { "light" -> Appearance.Light; "dark" -> Appearance.Dark; else -> Appearance.System }
+        set(v) = hostSettings.set(SharedSetting.Appearance, JsonPrimitive(v.name.lowercase()))
     var fontSize: Int
-        get() = p.getInt("fontSize", 14).coerceIn(10, 22)
-        set(v) = p.edit().putInt("fontSize", v.coerceIn(10, 22)).apply()
+        get() = hostSettings.value(SharedSetting.FontSize).int() ?: 14
+        set(v) = hostSettings.set(SharedSetting.FontSize, JsonPrimitive(v.coerceIn(10, 22)))
     var codeFontSize: Int
-        get() = p.getInt("codeFontSize", 11).coerceIn(10, 16)
-        set(v) = p.edit().putInt("codeFontSize", v.coerceIn(10, 16)).apply()
+        get() = hostSettings.value(SharedSetting.CodeFontSize).int() ?: 11
+        set(v) = hostSettings.set(SharedSetting.CodeFontSize, JsonPrimitive(v.coerceIn(10, 16)))
     var terminalFontSize: Int
-        get() = p.getInt("terminalFontSize", 13).coerceIn(10, 20)
-        set(v) = p.edit().putInt("terminalFontSize", v.coerceIn(10, 20)).apply()
+        get() = hostSettings.value(SharedSetting.TerminalFontSize).int() ?: 13
+        set(v) = hostSettings.set(SharedSetting.TerminalFontSize, JsonPrimitive(v.coerceIn(10, 20)))
+    var textFontFamily: String
+        get() = hostSettings.value(SharedSetting.TextFontFamily).str().orEmpty()
+        set(v) = hostSettings.set(SharedSetting.TextFontFamily, JsonPrimitive(normalizeFontFamily(v)))
+    var codeFontFamily: String
+        get() = hostSettings.value(SharedSetting.CodeFontFamily).str().orEmpty()
+        set(v) = hostSettings.set(SharedSetting.CodeFontFamily, JsonPrimitive(normalizeFontFamily(v)))
+    var terminalFontFamily: String
+        get() = hostSettings.value(SharedSetting.TerminalFontFamily).str().orEmpty()
+        set(v) = hostSettings.set(SharedSetting.TerminalFontFamily, JsonPrimitive(normalizeFontFamily(v)))
     var showCodeWorkView: Boolean
-        get() = p.getBoolean("showCodeWorkView", true)
-        set(v) = p.edit().putBoolean("showCodeWorkView", v).apply()
+        get() = hostSettings.value(SharedSetting.CodeWork).bool() ?: true
+        set(v) = hostSettings.set(SharedSetting.CodeWork, JsonPrimitive(v))
     var codeWordWrap: Boolean
         get() = p.getBoolean("codeWordWrap", false)
         set(v) = p.edit().putBoolean("codeWordWrap", v).apply()
     var transcriptView: TranscriptView
-        get() = runCatching { TranscriptView.valueOf(p.getString("transcriptView", null) ?: "Detailed") }.getOrDefault(TranscriptView.Detailed)
-        set(v) = p.edit().putString("transcriptView", v.name).apply()
-    var collapseTiming: CollapseTiming
-        get() = runCatching { CollapseTiming.valueOf(p.getString("collapseTiming", null) ?: "Completion") }.getOrDefault(CollapseTiming.Completion)
-        set(v) = p.edit().putString("collapseTiming", v.name).apply()
+        get() = when (hostSettings.value(SharedSetting.Transcript).str()) {
+            "compact" -> TranscriptView.Compact
+            "detailed", "normal", "expanded" -> TranscriptView.Detailed
+            "verbose" -> TranscriptView.Verbose
+            else -> TranscriptView.Standard
+        }
+        set(v) = hostSettings.set(SharedSetting.Transcript, JsonPrimitive(v.name.lowercase()))
+    /** Like desktop, collapse timing is scoped to this client instance, not persisted. */
+    var collapseTiming by mutableStateOf(CollapseTiming.Completion)
     var performanceUsage: PerformanceUsage
-        get() = runCatching { PerformanceUsage.valueOf(p.getString("performanceUsage", null) ?: "Compact") }.getOrDefault(PerformanceUsage.Compact)
-        set(v) = p.edit().putString("performanceUsage", v.name).apply()
+        get() = if (hostSettings.value(SharedSetting.Performance).str() == "detailed") PerformanceUsage.Detailed else PerformanceUsage.Compact
+        set(v) = hostSettings.set(SharedSetting.Performance, JsonPrimitive(v.name.lowercase()))
     var layoutMode: LayoutMode
         get() = runCatching { LayoutMode.valueOf(p.getString("layoutMode", null) ?: "Auto") }.getOrDefault(LayoutMode.Auto)
         set(v) = p.edit().putString("layoutMode", v.name).apply()

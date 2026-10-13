@@ -33,6 +33,7 @@ class DarkParityScreenshotTest {
     }
 
     @Before fun state() {
+        installHostSettingsFixture()
         runCatching { Pocket.prefs.nearbyWifiDeclined = true }
         runCatching { Pocket.prefs.appearance = Appearance.Dark }
         val p = Profile("p1", "Mac mini", host = "100.106.128.87", port = 7690)

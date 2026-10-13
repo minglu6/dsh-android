@@ -74,6 +74,10 @@ internal fun inspectorRawRows(records: List<JsonObject>): List<InspectorRow> {
 internal fun inspectorGroupRows(st: ChatState, policy: PresentationPolicy): List<InspectorRow> {
     val positions = st.items.mapIndexed { index, item -> item.key to index }.toMap()
     val folded = foldChatItems(st.items, policy, st.running, st.turns)
+    val controlAnchors = folded.filterIsInstance<ChatRow.Process>().filter { it.turnSummary }
+        .associate { control ->
+            control.key to st.items.indexOfFirst { it.inspectorTurn() == control.turn }.takeIf { it >= 0 }
+        }
     val covered = HashSet<String>()
     var lastPosition = -1
     val anchored = folded.map { row ->
@@ -88,13 +92,15 @@ internal fun inspectorGroupRows(st: ChatState, policy: PresentationPolicy): List
             is ChatRow.Changes -> listOf(row.item)
         }
         covered.addAll(members.map { it.key })
-        val position = members.firstOrNull()?.let { positions[it.key] } ?: lastPosition
+        val position = members.firstOrNull()?.let { positions[it.key] } ?: controlAnchors[row.key] ?: lastPosition
         lastPosition = position
         val result = if (row is ChatRow.Process) InspectorRow(
             key = "group:${row.key}", type = "ChatRow.Process",
             value = jsonOf("key" to row.key, "title" to row.title, "closed" to row.closed,
                 "defaultOpen" to row.defaultOpen, "durationMs" to row.durationMs,
                 "turnSummary" to row.turnSummary, "canCollapse" to row.canCollapse,
+                "turn" to row.turn, "grouped" to row.grouped, "controlledKeys" to row.controlledKeys.toList(),
+                "activityKind" to row.activityKind, "detail" to row.detail,
                 "members" to row.members.map { it.key }, "steps" to row.steps.map { it.key }),
             children = row.steps.map { step -> InspectorRow(
                 key = "step:${row.key}:${step.key}", type = "ProcessStep",
@@ -127,7 +133,7 @@ private fun inspectorItemRow(item: Item): InspectorRow {
             "at" to item.at, "messageSourceJson" to item.messageSourceJson)
         is Item.System -> jsonOf("label" to item.label, "text" to item.text, "at" to item.at,
             "previousText" to item.previousText, "toolsJson" to item.toolsJson, "previousToolsJson" to item.previousToolsJson)
-        is Item.Notice -> jsonOf("text" to item.text)
+        is Item.Notice -> jsonOf("text" to item.text, "turn" to item.turn)
         is Item.Compacted -> jsonOf("compactionId" to item.compactionId, "status" to item.status.name,
             "summary" to item.summary, "error" to item.error, "interrupted" to item.interrupted,
             "startedAt" to item.startedAt, "endedAt" to item.endedAt, "turn" to item.turn)
@@ -148,4 +154,15 @@ private fun inspectorItemRow(item: Item): InspectorRow {
         is Item.Changes -> "Item.Changes"
     }
     return InspectorRow("item:${item.key}", type, JsonObject(jsonOf("key" to item.key) + fields))
+}
+
+private fun Item.inspectorTurn(): Int? = when (this) {
+    is Item.Text -> turn
+    is Item.Reasoning -> turn
+    is Item.Tool -> turn
+    is Item.Notice -> turn
+    is Item.Compacted -> turn
+    is Item.Deliverable -> turn
+    is Item.Changes -> turn
+    else -> null
 }

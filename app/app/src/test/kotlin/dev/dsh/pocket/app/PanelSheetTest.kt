@@ -20,6 +20,7 @@ class PanelSheetTest {
 
     @Before fun state() {
         Pocket.init(RuntimeEnvironment.getApplication())
+        installHostSettingsFixture()
         Pocket.prefs.appearance = Appearance.Light
         Pocket.prefs.language = AppLanguage.Zh
         Pocket.ops.value = setOf("files.list", "terminal.create", "terminal.follow", "jobs.list")

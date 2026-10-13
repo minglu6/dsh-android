@@ -215,6 +215,7 @@ export function apply(ctx, config = {}) {
   })
   ctx.on('goal/activation-changed', (payload) => server.broadcastEvent('goal.activation', payload))
   ctx.on('schedule/changed', () => server.broadcastEvent('schedule.changed'))
+  ctx.on('settings/document-updated', (ns, revision) => server.broadcastEvent('settings.changed', { ns, revision }))
   ctx.on('plugin-manager/changed', () => server.broadcastEvent('plugins.changed'))
   ctx.on('agent-preset/selected', (sessionId) => server.broadcastEvent('presets.changed', { sessionId }))
   ctx.inject(['messageFeedback'], (c) => {

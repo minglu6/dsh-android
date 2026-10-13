@@ -38,6 +38,7 @@ class DrawerSidebarParityTest {
 
     @Before fun state() {
         Pocket.init(RuntimeEnvironment.getApplication())
+        installHostSettingsFixture()
         Pocket.prefs.language = AppLanguage.Zh
         Pocket.prefs.sessionGroupBy = SessionGroupBy.Workspace
         Pocket.prefs.sessionOrderBy = SessionOrderBy.Updated

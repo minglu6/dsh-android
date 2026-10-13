@@ -71,6 +71,7 @@ object D {
     val globe @Composable get() = v(R.drawable.dsh_globe)
     val rightUp @Composable get() = v(R.drawable.dsh_right_up)
     val chat @Composable get() = v(R.drawable.dsh_chat_lines)
+    val question @Composable get() = v(R.drawable.dsh_question)
     val inspect @Composable get() = v(R.drawable.dsh_inspect)
     val think @Composable get() = v(R.drawable.dsh_think)
     val sparkle @Composable get() = v(R.drawable.dsh_sparkle)

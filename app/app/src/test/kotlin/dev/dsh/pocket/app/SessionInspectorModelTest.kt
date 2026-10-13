@@ -35,10 +35,18 @@ class SessionInspectorModelTest {
         )
         val state = ChatState("s", items = items, turns = listOf(TurnRecord(8, 10, 20, 1000, 2000)))
         val policy = presentationPolicyFor(TranscriptView.Detailed)
-        val actual = foldChatItems(items, policy, false, state.turns).filterIsInstance<ChatRow.Process>().single()
+        val projected = foldChatItems(items, policy, false, state.turns).filterIsInstance<ChatRow.Process>()
+        val actual = projected.single { !it.turnSummary }
+        val control = projected.single { it.turnSummary }
         val rows = inspectorGroupRows(state, policy)
-        assertEquals(listOf("item:u", "item:context", "group:${actual.key}", "item:answer"), rows.map { it.key })
-        val group = rows.single { it.type == "ChatRow.Process" }
+        assertEquals(listOf("item:u", "item:context", "group:${control.key}", "group:${actual.key}", "item:answer"),
+            rows.map { it.key })
+        val group = rows.single { it.key == "group:${actual.key}" }
+        val controlRow = rows.single { it.key == "group:${control.key}" }
+        assertEquals(8, controlRow.value["turn"].int())
+        assertTrue(controlRow.children.isEmpty())
+        assertEquals(control.controlledKeys.toList(),
+            controlRow.value["controlledKeys"].arr().orEmpty().mapNotNull { it.str() })
         assertEquals(actual.steps.map { it.step }, group.children.map { it.value["step"].int() })
         assertEquals(actual.members.map { "item:${it.key}" }, group.children.flatMap { it.children }.map { it.key })
         assertEquals("Item.Context", rows[1].type)
@@ -55,10 +63,11 @@ class SessionInspectorModelTest {
         assertNull(group.children.single().children.single().value["turn"])
     }
 
-    @Test fun verboseProjectionDoesNotFabricateProcessGroups() {
+    @Test fun verboseProjectionKeepsProcessIdentityButDoesNotGroupItsPresentation() {
         val state = ChatState("s", items = listOf(Item.Tool("t", "c", "read", "{}", ToolStatus.Ok, turn = 1, step = 1)))
         val rows = inspectorGroupRows(state, presentationPolicyFor(TranscriptView.Verbose))
-        assertEquals(listOf("Item.Tool"), rows.map { it.type })
-        assertEquals("c", rows.single().value["callId"].str())
+        assertEquals(listOf("ChatRow.Process"), rows.map { it.type })
+        assertEquals(false, rows.single().value["grouped"].bool())
+        assertEquals("c", rows.single().children.single().children.single().value["callId"].str())
     }
 }

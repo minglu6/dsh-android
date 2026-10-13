@@ -3,6 +3,11 @@ package dev.dsh.pocket.app
 import dev.dsh.pocket.protocol.Item
 import dev.dsh.pocket.protocol.ToolStatus
 import dev.dsh.pocket.protocol.TurnRecord
+import dev.dsh.pocket.protocol.PocketJson
+import dev.dsh.pocket.protocol.arr
+import dev.dsh.pocket.protocol.obj
+import dev.dsh.pocket.protocol.str
+import java.text.BreakIterator
 
 /**
  * Desktop `@deepseek-ai/dsh-client-ui-chat` presentation policy
@@ -19,7 +24,7 @@ data class PresentationPolicy(
 )
 
 fun presentationPolicyFor(
-    mode: TranscriptView = TranscriptView.Detailed,
+    mode: TranscriptView = TranscriptView.Standard,
     collapseTiming: CollapseTiming = CollapseTiming.Completion,
 ): PresentationPolicy = when (mode) {
     TranscriptView.Compact -> PresentationPolicy(
@@ -70,8 +75,8 @@ sealed interface ChatRow {
     }
 
     /**
-     * Collapsed (or expandable) process group — desktop step/turn process seat.
-     * Members stay visible on the 轨迹 tab; chat only shows this summary unless expanded.
+     * A contiguous process segment, or a memberless whole-Turn control when [turnSummary].
+     * Whole-Turn visibility and local group disclosure are independent.
      */
     data class Process(
         override val key: String,
@@ -80,7 +85,7 @@ sealed interface ChatRow {
         /** Desktop `processTitle` / live activity label. */
         val title: String,
         val closed: Boolean,
-        /** Default disclosure: false when foldCompletedTurns hides settled process. */
+        /** Local groups start closed; Turn controls can defer their outer folding until the next input. */
         val defaultOpen: Boolean,
         val durationMs: Long? = null,
         /** Original order, never reasoning-first/tool-second. */
@@ -88,6 +93,13 @@ sealed interface ChatRow {
         val steps: List<ProcessStep> = emptyList(),
         val turnSummary: Boolean = false,
         val canCollapse: Boolean = true,
+        val turn: Int? = null,
+        /** False for Detailed live/deferred Turns and Verbose: render members without a header. */
+        val grouped: Boolean = true,
+        /** Outer Turn disclosure controls these sibling rows, never reparents their members. */
+        val controlledKeys: Set<String> = emptySet(),
+        val activityKind: String = "thinking",
+        val detail: String? = null,
     ) : ChatRow
 
     data class Deliverable(val item: Item.Deliverable) : ChatRow {
@@ -139,36 +151,53 @@ private val LIVE_LABEL = mapOf(
     "readImage" to "正在读取图片",
     "write" to "正在写入文件",
     "search" to "正在搜索代码",
-    "edit" to "正在修改文件",
-    "commands" to "正在执行命令",
+    "edit" to "正在编辑文件",
+    "commands" to "正在运行命令",
     "code" to "正在运行代码",
     "webSearch" to "正在搜索网页",
     "webFetch" to "正在访问网页",
     "subagents" to "正在协调子智能体",
     "plan" to "正在更新计划",
-    "questions" to "正在提问",
+    "questions" to "等待你的操作",
     "tools" to "正在调用工具",
+)
+
+private val DONE_LABEL_EN = mapOf(
+    "thinking" to "Analysis completed", "read" to "Read files", "readImage" to "Read images",
+    "write" to "Wrote files", "search" to "Searched code", "edit" to "Edited files",
+    "commands" to "Ran commands", "code" to "Ran code", "webSearch" to "Searched the web",
+    "webFetch" to "Visited web pages", "subagents" to "Coordinated subagents",
+    "plan" to "Updated the plan", "questions" to "Asked questions", "tools" to "Called tools",
+)
+
+private val LIVE_LABEL_EN = mapOf(
+    "thinking" to "Analyzing the request", "read" to "Reading files", "readImage" to "Reading images",
+    "write" to "Writing files", "search" to "Searching code", "edit" to "Editing files",
+    "commands" to "Running commands", "code" to "Running code", "webSearch" to "Searching the web",
+    "webFetch" to "Visiting web pages", "subagents" to "Coordinating subagents",
+    "plan" to "Updating the plan", "questions" to "Waiting for your action", "tools" to "Calling tools",
 )
 
 /**
  * Desktop `processTitle(summary, t)` — top three activity kinds, no counts.
  * zh: joinTwo = "{first}并{second}", sharedPrefix = "已", comma = "，", more = "{title}等".
  */
-fun processTitle(kinds: List<String>): String {
-    if (kinds.isEmpty()) return DONE_LABEL.getValue("thinking")
-    val labels = kinds.take(3).map { DONE_LABEL[it] ?: DONE_LABEL.getValue("tools") }
+fun processTitle(kinds: List<String>, en: Boolean = false): String {
+    val dictionary = if (en) DONE_LABEL_EN else DONE_LABEL
+    if (kinds.isEmpty()) return dictionary.getValue("thinking")
+    val labels = kinds.take(3).map { dictionary[it] ?: dictionary.getValue("tools") }
     val first = labels[0]
     if (labels.size == 1) return first
     fun continuation(label: String) = label.replaceFirstChar { it.lowercase() }
     if (labels.size == 2) {
         val second = labels[1]
         val prefix = "已"
-        val trimmed = if (first.startsWith(prefix) && second.startsWith(prefix)) second.removePrefix(prefix) else second
-        return "${first}并${continuation(trimmed)}"
+        val trimmed = if (!en && first.startsWith(prefix) && second.startsWith(prefix)) second.removePrefix(prefix) else second
+        return "$first${if (en) " and " else "并"}${continuation(trimmed)}"
     }
     val title = listOf(first) + labels.drop(1).map(::continuation)
-    val joined = title.joinToString("，")
-    return if (kinds.size > 3) "${joined}等" else joined
+    val joined = title.joinToString(if (en) ", " else "，")
+    return if (kinds.size > 3) joined + (if (en) ", etc." else "等") else joined
 }
 
 fun rankedActivityKinds(tools: List<Item.Tool>): List<String> {
@@ -182,23 +211,70 @@ fun rankedActivityKinds(tools: List<Item.Tool>): List<String> {
     return order.entries.sortedByDescending { it.value }.map { it.key }
 }
 
-fun liveProcessTitle(tools: List<Item.Tool>, reasoning: List<Item.Reasoning>): String {
-    val liveTool = tools.lastOrNull { it.status == ToolStatus.Running || it.status == ToolStatus.AwaitingApproval }
-    if (liveTool != null) return LIVE_LABEL[toolActivityKind(liveTool.name)] ?: LIVE_LABEL.getValue("tools")
-    if (reasoning.any { it.live }) return LIVE_LABEL.getValue("thinking")
-    return processTitle(rankedActivityKinds(tools))
+private fun runningTool(tools: List<Item.Tool>): Item.Tool? {
+    var latest: Item.Tool? = null
+    for (tool in tools) {
+        if (tool.status != ToolStatus.Running && tool.status != ToolStatus.AwaitingApproval) continue
+        if (latest == null || (tool.startedAt ?: Long.MIN_VALUE) >= (latest.startedAt ?: Long.MIN_VALUE)) latest = tool
+    }
+    return latest
+}
+fun liveProcessTitle(tools: List<Item.Tool>, reasoning: List<Item.Reasoning>, en: Boolean = false): String {
+    val dictionary = if (en) LIVE_LABEL_EN else LIVE_LABEL
+    val kind = runningTool(tools)?.let { toolActivityKind(it.name) } ?: "thinking"
+    return dictionary.getValue(kind)
+}
+
+private val detailWhitespace = Regex("\\s+")
+private val detailParagraph = Regex("\\r?\\n[\\t ]*\\r?\\n")
+private val detailKeys = listOf(
+    "title", "description", "objective", "task", "task_name", "name", "question", "questions",
+    "prompt", "message", "command", "cmd", "queries", "query", "pattern", "url", "uri",
+    "file_path", "path", "target", "action", "status",
+)
+
+private fun normalizeProcessDetail(text: String): String {
+    val normalized = text.replace(detailWhitespace, " ").trim()
+    if (normalized.length <= 160) return normalized
+    val iterator = BreakIterator.getCharacterInstance().apply { setText(normalized) }
+    var end = iterator.first()
+    repeat(159) {
+        val next = iterator.next()
+        if (next == BreakIterator.DONE) return normalized
+        end = next
+    }
+    if (iterator.next() == BreakIterator.DONE || iterator.next() == BreakIterator.DONE) return normalized
+    return normalized.substring(0, end).trimEnd() + "…"
+}
+
+private fun processDetail(tool: Item.Tool?, reasoning: List<Item.Reasoning>): String? {
+    if (tool == null) return reasoning.asReversed().firstNotNullOfOrNull { block ->
+        if (!block.live) null else block.text.split(detailParagraph).asReversed()
+            .firstNotNullOfOrNull { normalizeProcessDetail(it.replace("**", "")).takeIf(String::isNotEmpty) }
+    }
+    val args = runCatching { PocketJson.parseToJsonElement(tool.arguments).obj() }.getOrNull()
+    for (key in detailKeys) {
+        val value = args?.get(key) ?: continue
+        val text = if (key == "questions") {
+            value.arr()?.firstNotNullOfOrNull { it.obj()?.get("question").str()?.takeIf(String::isNotBlank) }
+        } else value.str() ?: value.arr()?.takeIf { values -> values.all { it.str() != null } }
+            ?.joinToString(", ") { it.str().orEmpty() }
+        val detail = text?.let(::normalizeProcessDetail)
+        if (!detail.isNullOrEmpty()) return detail
+    }
+    return normalizeProcessDetail(tool.name).takeIf(String::isNotEmpty)
 }
 
 /** Desktop elapsed label: floor seconds, retain zero minutes/seconds at larger units. */
-fun formatRunDuration(milliseconds: Long): String {
+fun formatRunDuration(milliseconds: Long, en: Boolean = false): String {
     val total = (milliseconds / 1000).coerceAtLeast(0)
     val hours = total / 3600
     val minutes = total / 60 % 60
     val seconds = total % 60
     return buildString {
-        if (hours > 0) append("${hours}小时")
-        if (total >= 60) append("${minutes}分")
-        append("${seconds}秒")
+        if (hours > 0) append("$hours${if (en) "h " else "小时"}")
+        if (total >= 60) append("$minutes${if (en) "m " else "分"}")
+        append("$seconds${if (en) "s" else "秒"}")
     }
 }
 
@@ -215,6 +291,7 @@ private fun Item.processTurn(): Int? = when (this) {
 private fun Item.processStep(): Int? = when (this) {
     is Item.Tool -> step
     is Item.Reasoning -> step
+    is Item.Text -> step
     else -> null
 }
 
@@ -237,134 +314,153 @@ private fun processSteps(members: List<Item>): List<ProcessStep> {
     return groups
 }
 
-/** Desktop tools disclosure spans consecutive tool-bearing steps, not reasoning-only steps. */
-fun processDisplaySteps(steps: List<ProcessStep>): List<ProcessStep> {
-    val groups = ArrayList<ProcessStep>()
-    var toolMembers = ArrayList<Item>()
-    var firstToolStep: ProcessStep? = null
-    fun flushTools() {
-        val first = firstToolStep ?: return
-        groups += first.copy(members = toolMembers)
-        toolMembers = ArrayList()
-        firstToolStep = null
-    }
-    for (step in steps) {
-        if (step.members.any { it is Item.Tool }) {
-            if (firstToolStep == null) firstToolStep = step
-            toolMembers.addAll(step.members)
-        } else {
-            flushTools()
-            groups += step
-        }
-    }
-    flushTools()
-    return groups
-}
 
 /**
- * Fold by Host turn identity, not User rows (inbox and steering are not turn boundaries).
- * Only Host turn/end closes a known turn; neither assistant completion nor tool timings do.
+ * Segment in transcript order first. A response, independent input/notice or another Turn
+ * settles the preceding group; only Host turn/end creates the separate whole-Turn control.
  */
 fun foldChatItems(
     items: List<Item>,
     policy: PresentationPolicy,
     sessionRunning: Boolean,
     turnRecords: List<TurnRecord> = emptyList(),
+    en: Boolean = false,
 ): List<ChatRow> {
-    val out = ArrayList<ChatRow>()
     val facts = turnRecords.associateBy { it.turn }
-    val membersByTurn = LinkedHashMap<Int, MutableList<Item>>()
-    for (item in items) {
-        val turn = item.processTurn() ?: continue
-        val members = membersByTurn.getOrPut(turn) { ArrayList() }
-        if (item is Item.Tool || item is Item.Reasoning) members += item
+    val visible = items.filterNot {
+        it is Item.Context || it is Item.System || it is Item.Compacted ||
+            it is Item.Reasoning && it.text.isBlank() || it is Item.Text && it.text.isBlank()
     }
-    val latestTurn = membersByTurn.keys.maxOrNull()
-    val latestInputSeq = items.filterIsInstance<Item.User>().mapNotNull { it.seq }.maxOrNull()
-    val pendingInput = items.any { it is Item.User && it.pending }
-    val closedTurns = turnRecords.filter { it.closed }.sortedBy { it.turn }
-    var nextClosed = 0
-    val plainOpenTurn = policy.stepGrouping == "none" ||
-        policy.stepGrouping == "history" && policy.liveProcessDetail && sessionRunning
-    val emitted = HashSet<Int>()
-    val unowned = ArrayList<Item>()
-
-    fun emitProcess(key: String, members: List<Item>, fact: TurnRecord?, deferCollapse: Boolean) {
+    val positions = visible.withIndex().associate { it.value.key to it.index }
+    val byTurn = visible.filter { it.processTurn() != null }.groupBy { it.processTurn()!! }
+    val latestTurn = (byTurn.keys + facts.keys).maxOrNull()
+    val latestInputSeq = visible.filterIsInstance<Item.User>().mapNotNull { it.seq }.maxOrNull()
+    val lastInputIndex = visible.indexOfLast { it is Item.User }
+    fun deferCollapse(turn: Int?): Boolean {
+        if (turn == null || policy.collapseTiming != CollapseTiming.NextInput) return false
+        val fact = facts[turn]
+        val lastTurnIndex = byTurn[turn]?.lastOrNull()?.let { positions[it.key] } ?: -1
+        val followingInput = lastInputIndex > lastTurnIndex ||
+            fact?.endSeq?.let { end -> latestInputSeq != null && latestInputSeq > end } == true
+        return turn == latestTurn && !followingInput
+    }
+    val out = ArrayList<ChatRow>()
+    var pending = ArrayList<Item>()
+    var pendingTurn: Int? = null
+    fun flush(boundary: Boolean) {
+        if (pending.isEmpty()) return
+        val members = pending
+        pending = ArrayList()
         val tools = members.filterIsInstance<Item.Tool>()
         val reasoning = members.filterIsInstance<Item.Reasoning>()
-        val closed = fact?.closed == true
-        if (!closed && members.isEmpty()) return
-        if (!closed && plainOpenTurn) {
-            members.forEach { emitPlain(out, it) }
-            return
-        }
-        val duration = fact?.durationMs
-        val failed = fact?.endReason == "error" || fact?.endReason == "aborted"
-        val canCollapse = members.isNotEmpty() && !failed && policy.foldCompletedTurns
-        val title = if (closed) when (fact?.endReason) {
-            "aborted" -> "已停止"
-            "error" -> "处理失败"
-            else -> duration?.let { "已完成，用时 ${formatRunDuration(it)}" } ?: "已完成"
-        } else liveProcessTitle(tools, reasoning)
+        val fact = facts[pendingTurn]
+        val turnClosed = fact?.closed == true
+        val closed = boundary || turnClosed
+        val grouped = policy.stepGrouping == "collapsed" ||
+            policy.stepGrouping == "history" && turnClosed && !deferCollapse(pendingTurn)
+        val running = runningTool(tools)
+        val ranked = if (closed) rankedActivityKinds(tools) else emptyList()
         out += ChatRow.Process(
-            key = key,
-            tools = tools,
-            reasoning = reasoning,
-            title = title,
-            closed = closed,
-            defaultOpen = !canCollapse || if (closed) deferCollapse else policy.mode != TranscriptView.Compact,
-            durationMs = duration,
-            members = members.toList(),
-            steps = processSteps(members),
-            turnSummary = closed,
-            canCollapse = canCollapse,
+            key = "${members.first().key}-group", tools = tools, reasoning = reasoning,
+            title = if (closed) processTitle(ranked, en) else liveProcessTitle(tools, reasoning, en),
+            closed = closed, defaultOpen = false, members = members, steps = processSteps(members),
+            turn = pendingTurn, grouped = grouped, canCollapse = grouped,
+            activityKind = if (closed) ranked.firstOrNull() ?: "thinking"
+                else running?.let { toolActivityKind(it.name) } ?: "thinking",
+            detail = if (!closed && policy.liveProcessDetail) processDetail(running, reasoning) else null,
         )
     }
-
-    fun flushUnowned() {
-        if (unowned.isEmpty()) return
-        // Partial/legacy payloads have no proven turn identity or endpoints: no elapsed label.
-        emitProcess(unowned.first().key + "-group", unowned, null, false)
-        unowned.clear()
-    }
-
-    fun emitTurn(turn: Int) {
-        if (!emitted.add(turn)) return
-        val fact = facts[turn]
-        val hasNextInput = latestTurn != null && latestTurn > turn || pendingInput ||
-            fact?.endSeq?.let { end -> latestInputSeq != null && latestInputSeq > end } == true
-        emitProcess(
-            "turn-$turn-process", membersByTurn[turn].orEmpty(), fact,
-            policy.collapseTiming == CollapseTiming.NextInput && !hasNextInput,
-        )
-    }
-
-    for (item in items) {
-        if (item is Item.Context || item is Item.System || item is Item.Compacted) continue
+    for (item in visible) {
         val turn = item.processTurn()
-        if (turn != null) {
-            flushUnowned()
-            // Also render empty closed turns preceding the next owned assistant content.
-            while (nextClosed < closedTurns.size && closedTurns[nextClosed].turn < turn) {
-                emitTurn(closedTurns[nextClosed++].turn)
-            }
-            if (facts[turn]?.closed != true && plainOpenTurn) {
-                emitPlain(out, item)
-                continue
-            }
-            emitTurn(turn)
-            if (item is Item.Tool || item is Item.Reasoning) continue
-        } else if (item is Item.Tool || item is Item.Reasoning) {
-            unowned += item
-            continue
+        if (pending.isNotEmpty() && pendingTurn != turn) flush(true)
+        if (item is Item.Tool || item is Item.Reasoning) {
+            pendingTurn = turn
+            pending += item
         } else {
-            flushUnowned()
+            flush(true)
+            emitPlain(out, item)
         }
-        emitPlain(out, item)
     }
-    flushUnowned()
-    while (nextClosed < closedTurns.size) emitTurn(closedTurns[nextClosed++].turn)
-    return out
+    flush(false)
+
+    fun rowTurn(row: ChatRow): Int? = when (row) {
+        is ChatRow.Process -> row.turn
+        is ChatRow.Answer -> row.item.turn
+        is ChatRow.Notice -> row.item.turn
+        is ChatRow.Deliverable -> row.item.turn
+        is ChatRow.Changes -> row.item.turn
+        else -> null
+    }
+    val rowsByTurn = out.groupBy(::rowTurn)
+    // Controls are anchored before a Turn's first visible output, never by moving its rows.
+    val controls = LinkedHashMap<Int, ChatRow.Process>()
+    for (fact in turnRecords.filter { it.closed }.sortedBy { it.turn }) {
+        val owned = byTurn[fact.turn].orEmpty()
+        val lastStep = owned.mapNotNull { it.processStep() }.maxOrNull()
+        val lastStepHasTools = owned.any { it is Item.Tool && it.step == lastStep }
+        val finalAnswer = owned.filterIsInstance<Item.Text>().lastOrNull {
+            !it.live && it.step == lastStep && !lastStepHasTools
+        }
+        val finalPosition = finalAnswer?.let { positions[it.key] }
+        val finalAnswerKeys = owned.filterIsInstance<Item.Text>().filter {
+            finalAnswer != null && it.step == finalAnswer.step
+        }.mapTo(HashSet()) { it.key }
+        val ownedPositions = owned.mapNotNull { positions[it.key] }
+        val first = ownedPositions.minOrNull()
+        val last = ownedPositions.maxOrNull()
+        val interleaved = first != null && last != null &&
+            (first..last).any { visible[it] is Item.User }
+        val controlled = rowsByTurn[fact.turn].orEmpty().filter { row ->
+            when (row) {
+                is ChatRow.Process -> true
+                is ChatRow.Answer -> row.key !in finalAnswerKeys
+                is ChatRow.Deliverable, is ChatRow.Changes ->
+                    finalPosition == null || (positions[row.key] ?: Int.MAX_VALUE) < finalPosition
+                else -> false
+            }
+        }.mapTo(LinkedHashSet()) { it.key }
+        val failed = fact.endReason == "error" || fact.endReason == "aborted"
+        val canCollapse = controlled.isNotEmpty() && !failed && !interleaved && policy.foldCompletedTurns
+        val duration = fact.durationMs
+        controls[fact.turn] = ChatRow.Process(
+            key = "turn-${fact.turn}-process", tools = emptyList(), reasoning = emptyList(),
+            title = when (fact.endReason) {
+                "aborted" -> if (en) "Stopped" else "已停止"
+                "error" -> if (en) "Failed" else "处理失败"
+                else -> duration?.let { (if (en) "Completed in " else "已完成，用时 ") + formatRunDuration(it, en) }
+                    ?: if (en) "Completed" else "已完成"
+            },
+            closed = true, defaultOpen = !canCollapse || deferCollapse(fact.turn), durationMs = duration,
+            turnSummary = true, canCollapse = canCollapse, turn = fact.turn, controlledKeys = controlled,
+        )
+    }
+    val result = ArrayList<ChatRow>(out.size + controls.size)
+    for (row in out) {
+        val turn = rowTurn(row)
+        if (turn != null) {
+            val preceding = controls.keys.takeWhile { it <= turn }
+            for (closedTurn in preceding) result += controls.remove(closedTurn)!!
+        } else if (row is ChatRow.User) {
+            val userSeq = row.item.seq
+            if (userSeq != null) {
+                val preceding = controls.keys.filter { facts[it]?.endSeq?.let { end -> end < userSeq } == true }
+                for (closedTurn in preceding) result += controls.remove(closedTurn)!!
+            }
+        }
+        result += row
+    }
+    result.addAll(controls.values)
+    return result
+}
+
+/** Apply only outer-Turn visibility; local process-group disclosure remains independent. */
+fun visibleChatRows(rows: List<ChatRow>, openTurns: Map<String, Boolean> = emptyMap()): List<ChatRow> {
+    val hidden = HashSet<String>()
+    for (row in rows) {
+        if (row is ChatRow.Process && row.turnSummary && row.canCollapse &&
+            !(openTurns[row.key] ?: row.defaultOpen)) hidden.addAll(row.controlledKeys)
+    }
+    return if (hidden.isEmpty()) rows else rows.filterNot { it.key in hidden }
 }
 
 private fun emitPlain(out: MutableList<ChatRow>, item: Item) {
@@ -380,9 +476,6 @@ private fun emitPlain(out: MutableList<ChatRow>, item: Item) {
     }
 }
 
-/** Whether a process group should render collapsed under [policy] (unit-test helper). */
-fun processCollapsedByDefault(row: ChatRow.Process, policy: PresentationPolicy): Boolean =
-    policy.foldCompletedTurns && row.closed && !row.defaultOpen
 
 internal data class ComposerTrigger(val kind: Char, val start: Int, val end: Int, val query: String, val quoted: Boolean = false)
 

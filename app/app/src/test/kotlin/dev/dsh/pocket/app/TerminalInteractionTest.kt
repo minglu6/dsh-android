@@ -35,6 +35,7 @@ class TerminalInteractionTest {
     @Before fun setup() {
         val context = RuntimeEnvironment.getApplication()
         Pocket.init(context)
+        installHostSettingsFixture()
         Pocket.prefs.language = AppLanguage.Zh
         Pocket.prefs.appearance = Appearance.Light
         clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager

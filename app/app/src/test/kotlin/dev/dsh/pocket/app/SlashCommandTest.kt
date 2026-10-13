@@ -37,6 +37,7 @@ class SlashCommandTest {
     @get:Rule val rule = createComposeRule()
 
     @Before fun state() {
+        installHostSettingsFixture()
         Pocket.profiles.value = listOf(Profile("p1", "desk", host = "100.106.128.87", port = 7690))
         Pocket.active.value = "p1"
         Pocket.status.value = mapOf("p1" to Dot.Online)

@@ -5,280 +5,240 @@ import dev.dsh.pocket.protocol.ToolStatus
 import dev.dsh.pocket.protocol.TurnRecord
 import dev.dsh.pocket.protocol.TranscriptReducer
 import dev.dsh.pocket.protocol.PocketJson
-import org.junit.Assert.assertNull
-import org.junit.Assert.assertEquals
-import org.junit.Assert.assertFalse
-import org.junit.Assert.assertTrue
+import org.junit.Assert.*
 import org.junit.Test
 
 class ChatProcessTest {
-    private fun sampleTurn(okTools: Boolean = true): List<Item> = listOf(
-        Item.User("u1", "看看配置"),
-        Item.Reasoning("r1", "先读 patch", 1000, false, turn = 1, step = 1),
-        Item.Tool("t1", "c1", "read", """{"path":"cordis.patch.yml"}""", if (okTools) ToolStatus.Ok else ToolStatus.Running,
-            startedAt = 2000, endedAt = 3000, turn = 1, step = 1),
-        Item.Tool("t2", "c2", "edit", """{"path":"cordis.patch.yml"}""", if (okTools) ToolStatus.Ok else ToolStatus.Running,
-            startedAt = 2000, endedAt = 3000, turn = 1, step = 1),
-        Item.Text("a1", SAMPLE_MARKDOWN, false, turn = 1, step = 1),
-    )
-
+    private fun thought(key: String = "r", turn: Int? = 1, step: Int? = 1, live: Boolean = false) =
+        Item.Reasoning(key, "**First** paragraph\n\nLatest thought", 900_000, live, turn, step)
+    private fun tool(key: String = "t", turn: Int? = 1, step: Int? = 2, status: ToolStatus = ToolStatus.Ok) =
+        Item.Tool(key, "call-$key", "read", """{"path":"a.kt"}""", status,
+            startedAt = 2000, endedAt = if (status == ToolStatus.Ok) 3000 else null, turn = turn, step = step)
+    private fun answer(key: String = "answer", turn: Int = 1, step: Int = 3) =
+        Item.Text(key, key, false, turn = turn, step = step)
     private fun completed(turn: Int = 1, reason: String = "completed") =
         TurnRecord(turn, turn * 10L, turn * 10L + 9, 1000, 7500, reason)
+    private fun List<ChatRow>.groups() = filterIsInstance<ChatRow.Process>().filterNot { it.turnSummary }
+    private fun List<ChatRow>.controls() = filterIsInstance<ChatRow.Process>().filter { it.turnSummary }
+    private fun List<ChatRow>.itemKeys(): List<String> = flatMap { row ->
+        if (row is ChatRow.Process) row.members.map { it.key } else listOf(row.key)
+    }
 
+    @Test fun invisibleAssistantWhitespaceDoesNotCreateResponseBoundaries() {
+        val items = listOf(thought(), answer("empty").copy(text = " \n "),
+            thought("empty-reasoning").copy(text = "\t"), tool())
+        val rows = foldChatItems(items, presentationPolicyFor(), true)
+        assertEquals(listOf("r", "t"), rows.groups().single().members.map { it.key })
+        assertFalse(rows.groups().single().closed)
+        assertTrue(rows.none { it is ChatRow.Answer })
+    }
     private fun TranscriptReducer.event(seq: Int, type: String, time: Long, data: String) {
         apply(PocketJson.parseToJsonElement(
             """{"type":"event","event":{"seq":$seq,"type":"$type","time":$time,"data":$data}}""",
         ))
     }
+    private fun TranscriptReducer.rows(mode: TranscriptView = TranscriptView.Standard) =
+        foldChatItems(items(), presentationPolicyFor(mode), running, turnRecords())
 
-    private fun TranscriptReducer.rows() =
-        foldChatItems(items(), presentationPolicyFor(), running, turnRecords())
-
-    @Test fun detailedFoldsSettledToolsIntoProcessSummary() {
-        val policy = presentationPolicyFor(TranscriptView.Detailed, CollapseTiming.Completion)
-        val rows = foldChatItems(sampleTurn(), policy, sessionRunning = false, turnRecords = listOf(completed()))
-        assertEquals(1, rows.count { it is ChatRow.User })
-        assertEquals(1, rows.count { it is ChatRow.Answer })
-        assertEquals(0, rows.count { it is ChatRow.Tool }) // tools hidden inside Process
-        val proc = rows.filterIsInstance<ChatRow.Process>().single()
-        assertEquals(2, proc.tools.size)
-        assertEquals(1, proc.reasoning.size)
-        assertTrue(proc.closed)
-        assertFalse("completion timing collapses settled process", proc.defaultOpen)
-        assertTrue(processCollapsedByDefault(proc, policy))
+    @Test fun standardSeparatesCompletedThinkingResponseAndCurrentToolsInOriginalOrder() {
+        val items = listOf(thought(), answer("opening", step = 1), tool(status = ToolStatus.Running))
+        val rows = foldChatItems(items, presentationPolicyFor(), true)
+        assertEquals(listOf("r-group", "opening", "t-group"), rows.map { it.key })
+        assertEquals(items.map { it.key }, rows.itemKeys())
+        val (thinking, current) = rows.groups()
+        assertTrue(thinking.closed)
+        assertEquals("thinking", thinking.activityKind)
+        assertFalse(current.closed)
+        assertEquals("read", current.activityKind)
+        assertEquals("a.kt", current.detail)
+        assertTrue(rows.groups().all { it.grouped && !it.defaultOpen && it.durationMs == null })
+        assertTrue(rows.controls().isEmpty())
     }
 
-    @Test fun compactAlsoFoldsAndHidesTools() {
-        val policy = presentationPolicyFor(TranscriptView.Compact, CollapseTiming.Completion)
-        val rows = foldChatItems(sampleTurn(), policy, sessionRunning = false, turnRecords = listOf(completed()))
-        assertEquals(0, rows.count { it is ChatRow.Tool })
-        assertEquals(1, rows.count { it is ChatRow.Process })
-        assertTrue(rows.filterIsInstance<ChatRow.Process>().single().let { processCollapsedByDefault(it, policy) })
-    }
-
-    @Test fun verboseKeepsIndividualToolRows() {
-        val policy = presentationPolicyFor(TranscriptView.Verbose, CollapseTiming.Completion)
-        val rows = foldChatItems(sampleTurn(), policy, sessionRunning = false)
-        assertEquals(0, rows.count { it is ChatRow.Process })
-        assertEquals(2, rows.count { it is ChatRow.Tool })
-        assertEquals(1, rows.count { it is ChatRow.Reasoning })
-        assertEquals(1, rows.count { it is ChatRow.Answer })
-    }
-
-    @Test fun nextInputDefersCollapseOnLatestTurn() {
-        val policy = presentationPolicyFor(TranscriptView.Detailed, CollapseTiming.NextInput)
-        val rows = foldChatItems(sampleTurn(), policy, sessionRunning = false, turnRecords = listOf(completed()))
-        val proc = rows.filterIsInstance<ChatRow.Process>().single()
-        assertTrue("next-input keeps latest turn open", proc.defaultOpen)
-        assertFalse(processCollapsedByDefault(proc, policy))
-    }
-
-    @Test fun nextInputStillFoldsOlderTurns() {
-        val policy = presentationPolicyFor(TranscriptView.Standard, CollapseTiming.NextInput)
-        val items = sampleTurn() + listOf(
-            Item.User("u2", "继续"),
-            Item.Tool("t3", "c3", "bash", """{"command":"ls"}""", ToolStatus.Ok, turn = 2, step = 1),
-            Item.Text("a2", "done", false, turn = 2, step = 1),
-        )
-        val rows = foldChatItems(items, policy, sessionRunning = false, turnRecords = listOf(completed(), completed(2)))
-        val procs = rows.filterIsInstance<ChatRow.Process>()
-        assertEquals(2, procs.size)
-        assertFalse("older turn folds", procs[0].defaultOpen)
-        assertTrue("latest turn stays open until next input", procs[1].defaultOpen)
-    }
-
-    @Test fun processTitleMatchesDesktopLocale() {
-        assertEquals("已调用工具", processTitle(listOf("tools")))
-        assertEquals("已读取文件并修改了文件", processTitle(listOf("read", "edit")))
-        assertEquals("已读取文件，修改了文件，执行了命令", processTitle(listOf("read", "edit", "commands")))
-        assertEquals("已读取文件，修改了文件，执行了命令等", processTitle(listOf("read", "edit", "commands", "search")))
-        assertEquals("已完成分析", processTitle(emptyList()))
-    }
-
-    @Test fun toolActivityKindsMatchDesktop() {
-        assertEquals("read", toolActivityKind("read"))
-        assertEquals("search", toolActivityKind("grep"))
-        assertEquals("commands", toolActivityKind("bash"))
-        assertEquals("edit", toolActivityKind("apply_patch"))
-        assertEquals("webSearch", toolActivityKind("web_search"))
-        assertEquals("tools", toolActivityKind("unknown_widget"))
-    }
-
-    @Test fun liveProcessShowsRunningTitle() {
-        val policy = presentationPolicyFor(TranscriptView.Standard, CollapseTiming.Completion)
-        val rows = foldChatItems(sampleTurn(okTools = false), policy, sessionRunning = true)
-        val proc = rows.filterIsInstance<ChatRow.Process>().singleOrNull()
-            ?: rows // detailed/history may expand live rows
-        // Standard groups live process under a process seat with live title.
-        if (proc is List<*>) {
-            assertTrue(rows.any { it is ChatRow.Tool || it is ChatRow.Process })
-        } else {
-            val p = rows.filterIsInstance<ChatRow.Process>().single()
-            assertFalse(p.closed)
-            assertTrue(p.title.contains("正在") || p.title == "正在修改文件" || p.title == "正在读取文件")
+    @Test fun allModesRetainIdenticalGroupsAndOrderedMembersButDifferentPresentation() {
+        val items = listOf(thought(live = true), tool(status = ToolStatus.Running))
+        val keys = mutableListOf<List<String>>()
+        for (mode in TranscriptView.entries) {
+            val rows = foldChatItems(items, presentationPolicyFor(mode), true)
+            keys += rows.map { it.key }
+            assertEquals(items.map { it.key }, rows.itemKeys())
+            val group = rows.groups().single()
+            assertEquals(mode == TranscriptView.Compact || mode == TranscriptView.Standard, group.grouped)
+            assertFalse(group.defaultOpen)
+            assertEquals(if (mode == TranscriptView.Compact || mode == TranscriptView.Verbose) null else "a.kt", group.detail)
         }
+        assertEquals(1, keys.distinct().size)
     }
 
-    @Test fun answerAlwaysVisibleWhenToolsFolded() {
-        val policy = presentationPolicyFor(TranscriptView.Compact, CollapseTiming.Completion)
-        val rows = foldChatItems(sampleTurn(), policy, sessionRunning = false)
-        val answer = rows.filterIsInstance<ChatRow.Answer>().single()
-        assertTrue(answer.item.text.contains("模型配置"))
-    }
-
-    @Test fun elapsedUsesWholeTurnNotReasoningOrConcurrentTools() {
-        val proc = foldChatItems(sampleTurn(), presentationPolicyFor(), false, listOf(completed()))
-            .filterIsInstance<ChatRow.Process>().single()
-        assertEquals(6500L, proc.durationMs)
-        assertEquals("已完成，用时 6秒", proc.title)
-    }
-
-    @Test fun textOnlyAndReasoningOnlyTurnsStillHaveCompletionHeaders() {
-        for (body in listOf(
-            listOf(Item.Text("a", "done", false, turn = 1, step = 1)),
-            listOf(Item.Reasoning("r", "thought", 1000, false, turn = 1, step = 1)),
-        )) {
-            val rows = foldChatItems(body, presentationPolicyFor(), false, listOf(completed()))
-            val proc = rows.filterIsInstance<ChatRow.Process>().single()
-            assertTrue(proc.turnSummary)
-            assertEquals(6500L, proc.durationMs)
-            assertEquals(body.any { it is Item.Reasoning }, proc.canCollapse)
-            assertEquals(body.filterIsInstance<Item.Text>(), rows.filterIsInstance<ChatRow.Answer>().map { it.item })
-        }
-    }
-
-    @Test fun cancelledAndFailedTurnsStayOpenWithoutDuration() {
-        for ((reason, label) in listOf("aborted" to "已停止", "error" to "处理失败")) {
-            val proc = foldChatItems(sampleTurn(), presentationPolicyFor(), false, listOf(completed(reason = reason)))
-                .filterIsInstance<ChatRow.Process>().single()
-            assertEquals(label, proc.title)
-            assertNull(proc.durationMs)
-            assertTrue(proc.defaultOpen)
-            assertFalse(proc.canCollapse)
-        }
-    }
-
-    @Test fun missingBoundaryNeverBorrowsReasoningOrToolTimes() {
-        for (fact in listOf(completed().copy(startSeq = null, startedAt = null), completed().copy(endedAt = null))) {
-            val proc = foldChatItems(sampleTurn(), presentationPolicyFor(), false, listOf(fact))
-                .filterIsInstance<ChatRow.Process>().single()
-            assertNull(proc.durationMs)
-            assertEquals("已完成", proc.title)
-        }
-        val noEnd = completed().copy(endSeq = null, endedAt = null, endReason = null)
-        val unfinished = foldChatItems(sampleTurn(), presentationPolicyFor(), false, listOf(noEnd))
-            .filterIsInstance<ChatRow.Process>().single()
-        assertFalse(unfinished.closed)
-        assertFalse(unfinished.turnSummary)
-        assertNull(unfinished.durationMs)
-    }
-
-    @Test fun durationFloorsSecondsAndUsesDesktopMinuteHourUnits() {
-        assertEquals("6秒", formatRunDuration(6500))
-        assertEquals("1分0秒", formatRunDuration(60_999))
-        assertEquals("1小时0分0秒", formatRunDuration(3_600_999))
-        assertEquals("1小时2分3秒", formatRunDuration(3_723_999))
-        val proc = foldChatItems(sampleTurn(), presentationPolicyFor(), false,
-            listOf(completed().copy(endedAt = 1100))).filterIsInstance<ChatRow.Process>().single()
-        assertEquals("已完成，用时 1秒", proc.title)
-    }
-
-    @Test fun steeringInboxAndAutomaticTurnsDoNotSplitOrMergeHostTurns() {
+    @Test fun independentInputsNoticesAndTurnChangesCloseGroupsWithoutStealingMembers() {
         val items = listOf(
-            Item.User("u1", "start", seq = 1),
-            Item.Reasoning("r1", "first", 1000, false, turn = 1, step = 1),
-            Item.Tool("k1", "c1", "wait_agent", "{}", ToolStatus.Ok, turn = 1, step = 1),
-            Item.User("inbox", "queued", pending = true),
-            Item.User("steering", "adjust", seq = 4),
-            Item.Reasoning("r2", "second", 1000, false, turn = 1, step = 2),
-            Item.Tool("k2", "c2", "job_list", "{}", ToolStatus.Ok, turn = 1, step = 2),
-            Item.Tool("k3", "c3", "list_agents", "{}", ToolStatus.Ok, turn = 1, step = 2),
-            Item.Reasoning("r3", "third", 1000, false, turn = 1, step = 3),
-            Item.Text("answer1", "done", false, turn = 1, step = 3),
-            // No human User row triggers this automatic turn.
-            Item.Reasoning("auto", "automatic", 500, false, turn = 2, step = 1),
-            Item.Text("answer2", "notice", false, turn = 2, step = 1),
+            thought(), Item.User("steering", "adjust", seq = 14), tool(),
+            Item.Notice("retry", "retry", turn = 1), thought("after-retry", step = 3),
+            answer(), thought("auto", turn = 2), answer("auto-answer", turn = 2),
         )
         val rows = foldChatItems(items, presentationPolicyFor(), false, listOf(completed(), completed(2)))
-        val processes = rows.filterIsInstance<ChatRow.Process>()
-        assertEquals(2, processes.size)
-        assertEquals(listOf("r1", "k1", "r2", "k2", "k3", "r3"), processes[0].members.map { it.key })
-        assertEquals(listOf(1, 2, 3), processes[0].steps.map { it.step })
-        assertEquals(listOf("auto"), processes[1].members.map { it.key })
-        assertEquals(3, rows.filterIsInstance<ChatRow.User>().size)
-        assertEquals(listOf("answer1", "answer2"), rows.filterIsInstance<ChatRow.Answer>().map { it.key })
-        val groups = processDisplaySteps(processes[0].steps)
-        assertEquals(2, groups.size)
-        assertEquals(listOf("r1", "k1", "r2", "k2", "k3"), groups[0].members.map { it.key })
-        assertEquals(listOf("r3"), groups[1].members.map { it.key })
+        assertEquals(items.map { it.key }, rows.itemKeys())
+        assertEquals(listOf(listOf("r"), listOf("t"), listOf("after-retry"), listOf("auto")),
+            rows.groups().map { it.members.map { member -> member.key } })
+        assertEquals(listOf(1, 1, 1, 2), rows.groups().map { it.turn })
+        assertTrue(rows.groups().all { it.closed })
+        assertFalse(rows.controls().first().canCollapse)
+        assertTrue(rows.controls().first().defaultOpen)
+        assertTrue(visibleChatRows(rows).any { it.key == "steering" })
+        assertTrue(visibleChatRows(rows).any { it.key == "retry" })
     }
 
-    @Test fun reasoningOnlyStepsSeparateToolDisclosuresWithoutLosingBlocks() {
-        val members = listOf(
-            Item.Tool("a", "a", "read", "{}", ToolStatus.Ok, turn = 1, step = 1),
-            Item.Reasoning("b", "between", 100, false, turn = 1, step = 2),
-            Item.Reasoning("c", "before", 100, false, turn = 1, step = 3),
-            Item.Tool("d", "d", "read", "{}", ToolStatus.Ok, turn = 1, step = 3),
-            Item.Reasoning("e", "after", 100, false, turn = 1, step = 3),
-        )
-        val proc = foldChatItems(members, presentationPolicyFor(), false, listOf(completed()))
-            .filterIsInstance<ChatRow.Process>().single()
-        val groups = processDisplaySteps(proc.steps)
-        assertEquals(listOf(listOf("a"), listOf("b"), listOf("c", "d", "e")),
-            groups.map { group -> group.members.map { it.key } })
+    @Test fun wholeTurnControlDoesNotOwnOrReorderItsProcessAndOnlyKeepsFinalReplyVisible() {
+        val items = listOf(Item.User("u", "start"), thought(), answer("opening", step = 1), tool(), answer())
+        val rows = foldChatItems(items, presentationPolicyFor(), false, listOf(completed()))
+        val control = rows.controls().single()
+        assertEquals(items.map { it.key }, rows.itemKeys())
+        assertEquals(listOf("u", control.key, "r-group", "opening", "t-group", "answer"), rows.map { it.key })
+        assertTrue(control.members.isEmpty())
+        assertEquals(setOf("r-group", "opening", "t-group"), control.controlledKeys)
+        assertEquals(listOf("u", control.key, "answer"), visibleChatRows(rows).map { it.key })
+        assertEquals(rows, visibleChatRows(rows, mapOf(control.key to true)))
+        assertTrue(rows.groups().all { !it.defaultOpen && it.grouped })
     }
 
-    @Test fun liveCommitWaitsForHostTurnEndAndKeepsAllBlocks() {
-        val r = TranscriptReducer()
-        r.event(1, "turn/start", 1000, """{"turn":7}""")
-        r.event(2, "step/start", 1200, """{"turn":7,"step":1}""")
-        r.apply(PocketJson.parseToJsonElement(
+    @Test fun completionAndNextInputDistinguishOuterDisclosureFromHistoricalInnerGroups() {
+        val items = listOf(thought(), tool(), answer())
+        for (mode in TranscriptView.entries) {
+            val completion = foldChatItems(items, presentationPolicyFor(mode), false, listOf(completed()))
+            val deferred = foldChatItems(items, presentationPolicyFor(mode, CollapseTiming.NextInput), false, listOf(completed()))
+            assertEquals(mode == TranscriptView.Verbose, completion.controls().single().defaultOpen)
+            assertTrue(deferred.controls().single().defaultOpen)
+            assertEquals(mode != TranscriptView.Verbose, completion.groups().single().grouped)
+            assertEquals(mode == TranscriptView.Compact || mode == TranscriptView.Standard, deferred.groups().single().grouped)
+            val afterInput = foldChatItems(items + Item.User("next", "next", pending = true),
+                presentationPolicyFor(mode, CollapseTiming.NextInput), false, listOf(completed()))
+            assertEquals(completion.controls().single().defaultOpen, afterInput.controls().single().defaultOpen)
+            assertEquals(completion.groups().single().grouped, afterInput.groups().single().grouped)
+        }
+    }
+
+    @Test fun automaticNextTurnAndTextOnlyLatestTurnEndNextInputDeferral() {
+        val items = listOf(thought(), answer(), answer("automatic", turn = 2))
+        val rows = foldChatItems(items, presentationPolicyFor(TranscriptView.Detailed, CollapseTiming.NextInput),
+            false, listOf(completed(), completed(2)))
+        assertFalse(rows.controls().first().defaultOpen)
+        assertTrue(rows.groups().single().grouped)
+        assertFalse(rows.controls().last().canCollapse)
+        assertEquals(items.map { it.key }, rows.itemKeys())
+    }
+
+    @Test fun hostFailureAndAbortPreventOuterFoldingWithoutReplacingProcessGroups() {
+        for (reason in listOf("error", "aborted")) {
+            val items = listOf(thought(), tool(status = ToolStatus.Error), answer())
+            val rows = foldChatItems(items, presentationPolicyFor(), false, listOf(completed(reason = reason)))
+            val control = rows.controls().single()
+            assertTrue(control.defaultOpen)
+            assertFalse(control.canCollapse)
+            assertNull(control.durationMs)
+            assertEquals(rows, visibleChatRows(rows, mapOf(control.key to false)))
+            assertEquals(items.map { it.key }, rows.itemKeys())
+            assertTrue(rows.groups().single().grouped)
+        }
+    }
+
+    @Test fun durationsUseHostBoundariesOnlyAndBelongExclusivelyToTurnControl() {
+        val items = listOf(thought(), tool(), answer())
+        val rows = foldChatItems(items, presentationPolicyFor(), false, listOf(completed()))
+        assertEquals(6500L, rows.controls().single().durationMs)
+        assertTrue(rows.groups().all { it.durationMs == null })
+        for (fact in listOf(completed().copy(startSeq = null, startedAt = null), completed().copy(endedAt = null))) {
+            assertNull(foldChatItems(items, presentationPolicyFor(), false, listOf(fact)).controls().single().durationMs)
+        }
+        val openFact = completed().copy(endSeq = null, endedAt = null, endReason = null)
+        assertTrue(foldChatItems(items, presentationPolicyFor(), false, listOf(openFact)).controls().isEmpty())
+    }
+
+    @Test fun emptyAndTextOnlyCompletedTurnsHaveNonInteractiveControlsAtTheirAnchors() {
+        val rows = foldChatItems(listOf(answer(turn = 2)), presentationPolicyFor(), false,
+            listOf(completed(), completed(2)))
+        assertEquals(listOf("turn-1-process", "turn-2-process", "answer"), rows.map { it.key })
+        assertTrue(rows.controls().all { !it.canCollapse && it.controlledKeys.isEmpty() })
+    }
+
+    @Test fun toolBearingLastStepIsNotMisclassifiedAsFinalAnswer() {
+        val items = listOf(answer("comment", step = 1), tool(step = 1))
+        val rows = foldChatItems(items, presentationPolicyFor(), false, listOf(completed()))
+        assertEquals(setOf("comment", "t-group"), rows.controls().single().controlledKeys)
+        assertEquals(listOf("turn-1-process"), visibleChatRows(rows).map { it.key })
+    }
+
+    @Test fun multipleFinalTextBlocksRemainVisibleButInlineReasoningIsControlled() {
+        val items = listOf(tool(step = 1), thought(step = 2), answer("part-1", step = 2), answer("part-2", step = 2))
+        val rows = foldChatItems(items, presentationPolicyFor(), false, listOf(completed()))
+        assertEquals(listOf("turn-1-process", "part-1", "part-2"), visibleChatRows(rows).map { it.key })
+        assertEquals(items.map { it.key }, rows.itemKeys())
+        assertEquals(listOf(1, 2), rows.groups().single().steps.map { it.step })
+    }
+
+    @Test fun unownedAndInterleavedTurnRecordsRemainOrderedWithoutInventedIdentity() {
+        val items = listOf(tool("a", turn = 1), tool("orphan", turn = null, step = null),
+            tool("b", turn = 2), thought("back", turn = 1), answer())
+        val rows = foldChatItems(items, presentationPolicyFor(), false, listOf(completed(), completed(2)))
+        assertEquals(items.map { it.key }, rows.itemKeys())
+        assertEquals(listOf(1, null, 2, 1), rows.groups().map { it.turn })
+        assertNull(rows.groups()[1].steps.single().step)
+        assertEquals(rows.map { it.key }.size, rows.map { it.key }.toSet().size)
+    }
+
+    @Test fun liveActivityUsesLatestRunningToolThenCurrentReasoningAndNeverCompletedTitle() {
+        val first = tool("first", status = ToolStatus.Running).copy(startedAt = 9000,
+            name = "bash", arguments = """{"command":"  echo   hello\nworld "}""")
+        val last = tool("last", status = ToolStatus.Running).copy(startedAt = 1000)
+        val group = foldChatItems(listOf(first, last), presentationPolicyFor(), true).groups().single()
+        assertEquals("commands", group.activityKind)
+        assertEquals("echo hello world", group.detail)
+        val thinking = foldChatItems(listOf(thought(live = true)), presentationPolicyFor(), true).groups().single()
+        assertEquals("Latest thought", thinking.detail)
+        val idle = foldChatItems(listOf(tool()), presentationPolicyFor(), true).groups().single()
+        assertFalse(idle.closed)
+        assertEquals("thinking", idle.activityKind)
+        assertEquals(liveProcessTitle(emptyList(), emptyList()), idle.title)
+    }
+
+    @Test fun liveCommitClosesOnlyThinkingSegmentAndWaitsForHostTurnEndForControl() {
+        val reducer = TranscriptReducer()
+        reducer.event(1, "turn/start", 1000, """{"turn":7}""")
+        reducer.event(2, "step/start", 1200, """{"turn":7,"step":1}""")
+        reducer.apply(PocketJson.parseToJsonElement(
             """{"type":"assistant-stream","frame":{"type":"start","attemptId":"a","turn":7,"step":1}}""",
         ))
-        r.apply(PocketJson.parseToJsonElement(
+        reducer.apply(PocketJson.parseToJsonElement(
             """{"type":"assistant-stream","frame":{"type":"chunk","attemptId":"a","time":2000,"chunk":{"type":"reasoning-delta","index":0,"text":"thinking"}}}""",
         ))
-        assertEquals(listOf("thinking"), r.rows().filterIsInstance<ChatRow.Reasoning>().map { it.item.text })
-        r.event(3, "assistant/message", 7000, """{"turn":7,"step":1,
+        assertFalse(reducer.rows().groups().single().closed)
+        assertFalse(reducer.rows(TranscriptView.Detailed).groups().single().grouped)
+        reducer.event(3, "assistant/message", 7000, """{"turn":7,"step":1,
             "stream":[{"type":"reasoning-chunks","time0":2000,"dt":[0,1000],"texts":["thinking"]}],
             "message":{"content":[{"type":"reasoning","text":"thinking"},{"type":"text","text":"answer"}]}}""")
-        assertTrue(r.rows().filterIsInstance<ChatRow.Process>().none { it.closed })
-        r.event(4, "turn/end", 7500, """{"turn":7,"reason":{"kind":"completed"}}""")
-        val rows = r.rows()
-        val proc = rows.filterIsInstance<ChatRow.Process>().single()
-        assertEquals("已完成，用时 6秒", proc.title)
-        assertEquals(listOf("thinking"), proc.reasoning.map { it.text })
-        assertEquals(listOf("answer"), rows.filterIsInstance<ChatRow.Answer>().map { it.item.text })
+        assertTrue(reducer.rows().groups().single().closed)
+        assertTrue(reducer.rows().controls().isEmpty())
+        reducer.event(4, "turn/end", 7500, """{"turn":7,"reason":{"kind":"completed"}}""")
+        assertEquals(6500L, reducer.rows().controls().single().durationMs)
+        assertEquals(listOf("thinking"), reducer.rows().groups().single().reasoning.map { it.text })
+        assertEquals(listOf("answer"), visibleChatRows(reducer.rows()).filterIsInstance<ChatRow.Answer>().map { it.item.text })
     }
-    @Test fun historyPageUpgradesUnknownDurationWithoutChangingTurnKey() {
-        val r = TranscriptReducer()
-        r.apply(PocketJson.parseToJsonElement("""{"type":"snapshot","cursor":4,"hasMore":true,"projections":{},
+
+    @Test fun historyPageUpgradesUnknownDurationWithoutChangingTurnControlIdentity() {
+        val reducer = TranscriptReducer()
+        reducer.apply(PocketJson.parseToJsonElement("""{"type":"snapshot","cursor":4,"hasMore":true,"projections":{},
             "records":[
                 {"type":"event","event":{"seq":3,"time":7000,"type":"assistant/message","data":{"turn":7,"step":1,
                     "message":{"content":[{"type":"text","text":"answer"}]}}}},
                 {"type":"event","event":{"seq":4,"time":7500,"type":"turn/end","data":{"turn":7,"reason":{"kind":"completed"}}}}
             ]}"""))
-        val before = r.rows().filterIsInstance<ChatRow.Process>().single()
+        val before = reducer.rows().controls().single()
         assertNull(before.durationMs)
-        r.prepend(PocketJson.parseToJsonElement("""[
+        reducer.prepend(PocketJson.parseToJsonElement("""[
             {"type":"event","event":{"seq":1,"time":1000,"type":"turn/start","data":{"turn":7}}}
         ]"""), false)
-        val after = r.rows().filterIsInstance<ChatRow.Process>().single()
+        val after = reducer.rows().controls().single()
         assertEquals(before.key, after.key)
-        assertEquals("已完成，用时 6秒", after.title)
-        assertEquals(1, r.rows().filterIsInstance<ChatRow.Answer>().size)
-    }
-
-    @Test fun otherEndReasonsKeepElapsedAndCompactLiveRemainsCollapsed() {
-        for (reason in listOf("max-tokens", "interrupted", "plugin-turn")) {
-            val proc = foldChatItems(sampleTurn(), presentationPolicyFor(), false, listOf(completed(reason = reason)))
-                .filterIsInstance<ChatRow.Process>().single()
-            assertEquals(6500L, proc.durationMs)
-        }
-        val live = foldChatItems(sampleTurn(okTools = false), presentationPolicyFor(TranscriptView.Compact), true)
-            .filterIsInstance<ChatRow.Process>().single()
-        assertFalse(live.closed)
-        assertFalse(live.defaultOpen)
-        assertNull(live.durationMs)
+        assertEquals(6500L, after.durationMs)
+        assertEquals(1, reducer.rows().filterIsInstance<ChatRow.Answer>().size)
     }
 }

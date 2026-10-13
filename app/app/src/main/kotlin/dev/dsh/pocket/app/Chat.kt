@@ -1,10 +1,10 @@
 package dev.dsh.pocket.app
 
-import androidx.compose.animation.core.*
 import androidx.compose.foundation.*
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -49,7 +49,6 @@ import dev.dsh.pocket.protocol.ToolStatus
 import dev.dsh.pocket.protocol.UserQuestion
 import dev.dsh.pocket.protocol.get
 import dev.dsh.pocket.protocol.str
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
@@ -126,7 +125,8 @@ fun ChatRoot(onMenu: () -> Unit, showMenuButton: Boolean = true) {
     LaunchedEffect(presetRoster, active) {
         if (draftPreset.isEmpty()) draftPreset = presetRoster.firstOrNull { it["isDefault"].toString() == "true" }?.get("id").str().orEmpty()
     }
-    var draftPerm by remember(active, chat?.sessionId) { mutableStateOf(Pocket.prefs.defaultPermission) }
+    var draftPermissionOverride by remember(active, chat?.sessionId) { mutableStateOf<String?>(null) }
+    val draftPerm = draftPermissionOverride ?: Pocket.prefs.defaultPermission
     var draftModel by remember(active, chat?.sessionId) { mutableStateOf<ModelChoice?>(null) }
     var draftCwd by remember { mutableStateOf<String?>(null) }
     var pendingImages by remember { mutableStateOf<List<PromptImage>>(emptyList()) }
@@ -265,7 +265,7 @@ fun ChatRoot(onMenu: () -> Unit, showMenuButton: Boolean = true) {
     LaunchedEffect(permissionDirectory, dot, sid) {
         val directory = permissionDirectory
         if (sid == null && directory != null && directory.find(draftPerm) == null) {
-            draftPerm = directory.defaultPreset
+            draftPermissionOverride = directory.defaultPreset
         }
         if (sheet == Sheet.PermissionRisk && (riskPermission == null || dot != Dot.Online ||
                 directory?.find(riskPermission.orEmpty()) == null)) {
@@ -276,7 +276,7 @@ fun ChatRoot(onMenu: () -> Unit, showMenuButton: Boolean = true) {
     fun selectPermission(value: String) {
         if (Pocket.permissionCatalog.value?.find(value) == null || dot != Dot.Online) return
         if (sid == null) {
-            draftPerm = value
+            draftPermissionOverride = value
             riskPermission = null
             sheet = Sheet.None
         } else {
@@ -633,10 +633,16 @@ internal fun Transcript(
     val list = rememberLazyListState()
     var followBottom by remember(st.sessionId) { mutableStateOf(true) }
     val scrollScope = rememberCoroutineScope()
-    // Prefs are SharedPreferences-backed; read each composition for mode switches.
+    // Shared presentation preferences are read from the connected Host.
     val livePolicy = presentationPolicyFor(Pocket.prefs.transcriptView, Pocket.prefs.collapseTiming)
-    val rows = remember(st.items, st.turns, st.running, livePolicy) {
-        foldChatItems(st.items, livePolicy, st.running, turnRecords = st.turns)
+    val en = Pocket.prefs.language == AppLanguage.En
+    val allRows = remember(st.items, st.turns, st.running, livePolicy, en) {
+        foldChatItems(st.items, livePolicy, st.running, turnRecords = st.turns, en = en)
+    }
+    val openTurns = remember(st.sessionId, livePolicy.mode, livePolicy.collapseTiming) { mutableStateMapOf<String, Boolean>() }
+    val rows = visibleChatRows(allRows, openTurns)
+    val lastAnswers = remember(allRows) {
+        allRows.filterIsInstance<ChatRow.Answer>().mapNotNull { row -> row.item.turn?.let { it to row.key } }.toMap()
     }
     val n = rows.size
     val lastLen = (st.items.lastOrNull() as? Item.Text)?.text?.length ?: 0
@@ -664,8 +670,17 @@ internal fun Transcript(
     if (st.loaded && st.items.isEmpty() && !st.running) { EmptyState(D.chat, "开始对话", "发送第一条消息"); return }
     if (!st.loaded) { Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator(color = T.Accent, strokeWidth = 2.dp, modifier = Modifier.size(24.dp)) }; return }
     Box(Modifier.fillMaxSize()) {
-    LazyColumn(state = list, modifier = Modifier.fillMaxSize(), contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        items(rows, key = { it.key }) { row ->
+    LazyColumn(state = list, modifier = Modifier.fillMaxSize(), contentPadding = PaddingValues(16.dp)) {
+        itemsIndexed(rows, key = { _, row -> row.key }) { index, row ->
+            val previous = rows.getOrNull(index - 1)
+            val gap = when {
+                previous == null -> 0
+                row is ChatRow.Process && row.turnSummary || previous is ChatRow.Process && previous.turnSummary -> 16
+                (row is ChatRow.Process || row is ChatRow.Tool || row is ChatRow.Reasoning) &&
+                    (previous is ChatRow.Process || previous is ChatRow.Tool || previous is ChatRow.Reasoning) -> 6
+                else -> 12
+            }
+            Column(Modifier.fillMaxWidth().padding(top = gap.dp)) {
             when (row) {
                 is ChatRow.User -> {
                     Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.End) {
@@ -701,9 +716,12 @@ internal fun Transcript(
                     val branchHere = canFork && row.key == branchKey && !row.item.live
                     val mid = row.item.messageId
                     val rating = mid?.let { feedback[it]?.rating }
+                    val turn = row.item.turn
+                    val showActions = !row.item.live && if (turn == null) !st.running else
+                        st.turns.firstOrNull { it.turn == turn }?.closed == true && lastAnswers[turn] == row.key
                     Column(Modifier.fillMaxWidth()) {
                         MarkdownView(row.item.text, streaming = row.item.live)
-                        if (!row.item.live) MessageActions(
+                        if (showActions) MessageActions(
                             text = row.item.text,
                             timeMs = row.item.at,
                             clock = MessageClock.End,
@@ -722,13 +740,23 @@ internal fun Transcript(
                 }
                 is ChatRow.Tool -> ToolCard(row.item) { onTool(row.item) }
                 is ChatRow.Reasoning -> ReasoningRow(row.item)
-                is ChatRow.Process -> ProcessGroupRow(row, onTool)
+                is ChatRow.Process -> ProcessGroupRow(
+                    row,
+                    turnOpen = if (row.turnSummary) openTurns[row.key] ?: row.defaultOpen else null,
+                    onTurnOpenChange = { openTurns[row.key] = it },
+                    onTool = onTool,
+                )
                 is ChatRow.Deliverable -> DeliverableCard(row.item)
                 is ChatRow.Changes -> if (Pocket.prefs.showCodeWorkView) ChangesCard(row.item)
             }
+            }
         }
-        if (st.running && st.items.none { it is Item.Reasoning && it.live }) {
-            item(key = "status") { RunningLine(st.runStartedAt) }
+        if (st.running) {
+            item(key = "status") {
+                Box(Modifier.padding(top = if (rows.isEmpty()) 0.dp else 12.dp)) {
+                    RunningStatus(st.runStartedAt, rows.lastOrNull()?.let { it !is ChatRow.User } == true)
+                }
+            }
         }
         item(key = "bottom") { Spacer(Modifier.height(1.dp)) }
     }
@@ -891,81 +919,83 @@ private fun ActionIconButton(
 }
 
 @Composable
-internal fun ProcessGroupRow(proc: ChatRow.Process, onTool: (Item.Tool) -> Unit) {
-    var expanded by remember(proc.key, proc.defaultOpen) { mutableStateOf(proc.defaultOpen) }
-    val open = !proc.canCollapse || expanded
-    val hasContent = proc.members.isNotEmpty()
-    val livePreview = remember(proc.members) {
-        (proc.members.lastOrNull { it is Item.Reasoning && it.live } as? Item.Reasoning)
-            ?.let { reasoningPreview(it.text, running = true) }?.takeIf { it.isNotBlank() }
+internal fun ProcessGroupRow(
+    proc: ChatRow.Process,
+    turnOpen: Boolean? = null,
+    onTurnOpenChange: (Boolean) -> Unit = {},
+    onTool: (Item.Tool) -> Unit,
+) {
+    var expanded by rememberSaveable(proc.key, proc.grouped) { mutableStateOf(proc.defaultOpen) }
+    if (!proc.grouped && !proc.turnSummary) {
+        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            proc.members.forEach { member -> key(member.key) { ProcessMember(member, onTool) } }
+        }
+        return
     }
+    val open = if (proc.turnSummary) turnOpen ?: expanded else expanded
+    val hasContent = if (proc.turnSummary) proc.controlledKeys.isNotEmpty() else proc.members.isNotEmpty()
+    val fontSize = Pocket.prefs.fontSize
     Column(Modifier.fillMaxWidth()) {
         Row(
             Modifier.fillMaxWidth()
-                .then(if (proc.canCollapse && hasContent) Modifier.clickable(role = Role.Button) { expanded = !expanded } else Modifier)
-                .heightIn(min = 48.dp)
-                .semantics { if (hasContent) stateDescription = if (open) "已展开" else "已收起" }
+                .then(if (proc.canCollapse && hasContent) Modifier.clickable(role = Role.Button) {
+                    if (proc.turnSummary && turnOpen != null) onTurnOpenChange(!open) else expanded = !open
+                } else Modifier)
+                .heightIn(min = (fontSize + 8).dp)
+                .semantics { if (proc.canCollapse && hasContent) stateDescription = if (open) "已展开" else "已收起" }
                 .testTag("processHeader:${proc.key}"),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             if (!proc.turnSummary) {
                 Icon(
-                    if (open) D.chevronDown else D.sparkle, null, tint = T.Text3,
-                    modifier = Modifier.size(16.dp).then(if (open) Modifier.rotate(180f) else Modifier),
+                    if (open) D.chevronDown else processActivityIcon(proc.activityKind), null, tint = T.Text3,
+                    modifier = Modifier.size((fontSize + 2).dp).then(if (open) Modifier.rotate(180f) else Modifier),
                 )
                 Spacer(Modifier.width(6.dp))
             }
-            Text(proc.title, fontSize = 14.sp, color = T.Text3, maxLines = 1,
-                overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
-            if (!open && livePreview != null) {
-                Box(Modifier.padding(horizontal = 8.dp).size(2.dp).background(T.Caption, CircleShape))
-                Text(livePreview, fontSize = 13.sp, color = T.Text3, maxLines = 1,
-                    overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+            ProcessShimmer(!proc.closed, Modifier.weight(1f, fill = false)) {
+                val title = if (proc.detail.isNullOrBlank()) proc.title else "${proc.title} · ${proc.detail}"
+                Text(title, fontSize = fontSize.sp, color = T.Text3, maxLines = 1,
+                    lineHeight = (fontSize + 8).sp, overflow = TextOverflow.Ellipsis)
             }
             if (proc.turnSummary && proc.canCollapse && hasContent) {
                 Spacer(Modifier.width(4.dp))
                 Icon(D.chevronDown, null, tint = T.Text3,
-                    modifier = Modifier.size(14.dp).rotate(if (open) 180f else 0f))
+                    modifier = Modifier.size(fontSize.dp).rotate(if (open) 180f else 0f))
             }
         }
-        // The completed-turn divider belongs below its title, not below the expanded process.
-        if (proc.turnSummary) HorizontalDivider(color = T.Border, thickness = 0.5.dp)
-        if (open && hasContent) {
-            Column(Modifier.padding(top = if (proc.turnSummary) 8.dp else 0.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                val grouped = proc.turnSummary && Pocket.prefs.transcriptView != TranscriptView.Verbose
-                val steps = remember(proc.steps) { processDisplaySteps(proc.steps) }
-                if (grouped && steps.isNotEmpty()) {
-                    steps.forEach { step -> key(step.key) { ProcessStepRow(step, onTool) } }
-                } else {
-                    proc.members.forEach { member -> key(member.key) { ProcessMember(member, onTool) } }
+        if (proc.turnSummary) {
+            Spacer(Modifier.height(8.dp))
+            HorizontalDivider(color = T.Border, thickness = 0.5.dp)
+        } else if (open && hasContent) {
+            val scroll = rememberScrollState()
+            val maxHeight = minOf(400, androidx.compose.ui.platform.LocalConfiguration.current.screenHeightDp / 2).dp
+            LaunchedEffect(open) {
+                if (!proc.closed) {
+                    withFrameNanos { }
+                    scroll.scrollTo(scroll.maxValue)
                 }
+            }
+            Column(Modifier.padding(top = 8.dp).heightIn(max = maxHeight).verticalScroll(scroll), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                proc.members.forEach { member -> key(member.key) { ProcessMember(member, onTool) } }
             }
         }
     }
 }
 
 @Composable
-private fun ProcessStepRow(step: ProcessStep, onTool: (Item.Tool) -> Unit) {
-    val tools = remember(step.members) { step.members.filterIsInstance<Item.Tool>() }
-    if (tools.isEmpty()) {
-        step.members.forEach { member -> key(member.key) { ProcessMember(member, onTool) } }
-        return
-    }
-    var open by remember(step.key) { mutableStateOf(true) }
-    val title = remember(tools) { processTitle(rankedActivityKinds(tools)) }
-    Row(
-        Modifier.fillMaxWidth().heightIn(min = 48.dp)
-            .clickable(role = Role.Button) { open = !open }
-            .semantics { stateDescription = if (open) "已展开" else "已收起" }
-            .testTag("processSteps:${step.key}"),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Icon(if (open) D.chevronDown else D.sparkle, null, tint = T.Text3,
-            modifier = Modifier.size(16.dp).then(if (open) Modifier.rotate(180f) else Modifier))
-        Spacer(Modifier.width(6.dp))
-        Text(title, fontSize = 14.sp, color = T.Text3, maxLines = 1, overflow = TextOverflow.Ellipsis)
-    }
-    if (open) step.members.forEach { member -> key(member.key) { ProcessMember(member, onTool) } }
+private fun processActivityIcon(kind: String) = when (kind) {
+    "thinking" -> D.think
+    "read", "readImage", "webFetch" -> D.browse
+    "search" -> D.search
+    "edit", "write" -> D.edit
+    "commands" -> D.api
+    "code" -> D.code
+    "webSearch" -> D.globe
+    "subagents" -> D.agentPreset
+    "plan" -> D.plan
+    "questions" -> D.question
+    else -> D.sparkle
 }
 
 @Composable
@@ -1002,23 +1032,26 @@ internal fun ReasoningRow(r: Item.Reasoning) {
     val showPreview = !open && preview.isNotEmpty() &&
         (r.live || presentationPolicyFor(Pocket.prefs.transcriptView).settledReasoningPreview)
     val en = Pocket.prefs.language == AppLanguage.En
+    val fontSize = Pocket.prefs.fontSize
     Column(Modifier.fillMaxWidth()) {
         Row(
-            Modifier.fillMaxWidth().heightIn(min = 48.dp)
+            Modifier.fillMaxWidth().heightIn(min = (fontSize + 8).dp)
                 .clickable(role = Role.Button) { open = !open }
                 .semantics { stateDescription = if (open) "已展开" else "已收起" }
                 .testTag("reasoningHeader:${r.key}"),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Icon(if (open) D.chevronDown else D.think, null, tint = T.Text3,
-                modifier = Modifier.size(16.dp).then(if (open) Modifier.rotate(180f) else Modifier))
+                modifier = Modifier.size(fontSize.dp).then(if (open) Modifier.rotate(180f) else Modifier))
             Spacer(Modifier.width(6.dp))
-            Text(if (r.live) { if (en) "Analyzing request" else "正在分析请求" } else { if (en) "Thinking" else "思考" },
-                fontSize = 13.sp, color = T.Text3)
-            if (showPreview) {
-                Box(Modifier.padding(horizontal = 8.dp).size(2.dp).background(T.Caption, CircleShape))
-                Text(preview, fontSize = 13.sp, color = T.Text3, maxLines = 1,
-                    overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+            ProcessShimmer(r.live, Modifier.weight(1f)) {
+                Text(if (en) "Think" else "思考",
+                    fontSize = (fontSize - 1).sp, lineHeight = (fontSize + 8).sp, color = T.Text3)
+                if (showPreview) {
+                    Box(Modifier.padding(horizontal = 8.dp).size(2.dp).background(T.Caption, CircleShape))
+                    Text(preview, fontSize = (fontSize - 1).sp, color = T.Text3, maxLines = 1,
+                        overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+                }
             }
         }
         if (open) {
@@ -1034,40 +1067,32 @@ private fun ToolCard(t: Item.Tool, onClick: () -> Unit) {
     val en = Pocket.prefs.language == AppLanguage.En
     val summary = remember(t, en) { toolProcessSummary(t, en) }
     val warn = t.status == ToolStatus.AwaitingApproval
+    val fontSize = Pocket.prefs.fontSize
     val tint = when (t.status) {
         ToolStatus.Error -> T.Err
         ToolStatus.AwaitingApproval -> T.WarnText
         else -> T.Text3
     }
     Row(
-        Modifier.fillMaxWidth().heightIn(min = 48.dp).clip(T.R8)
+        Modifier.fillMaxWidth().heightIn(min = (fontSize + 8).dp).clip(T.R8)
             .then(if (warn) Modifier.background(T.WarnTint) else Modifier)
             .clickable(role = Role.Button, onClick = onClick)
             .testTag("processTool:${t.key}"),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        if (t.status == ToolStatus.Running) CircularProgressIndicator(Modifier.size(16.dp), color = T.Text3, strokeWidth = 1.5.dp)
-        else Icon(if (t.status == ToolStatus.Error || warn) D.warning else toolProcessIcon(summary.icon),
-            null, tint = tint, modifier = Modifier.size(16.dp))
+        Icon(if (t.status == ToolStatus.Error || warn) D.warning else toolProcessIcon(summary.icon),
+            null, tint = tint, modifier = Modifier.size(fontSize.dp))
         Spacer(Modifier.width(6.dp))
-        Text(summary.title, fontSize = 13.sp, color = tint, maxLines = 1,
-            overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
-        if (!summary.summary.isNullOrBlank()) {
-            Box(Modifier.padding(horizontal = 8.dp).size(2.dp).background(T.Caption, CircleShape))
-            Text(summary.summary, fontSize = 13.sp, color = tint, maxLines = 1,
-                overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+        ProcessShimmer(t.status == ToolStatus.Running, Modifier.weight(1f)) {
+            Text(summary.title, fontSize = (fontSize - 1).sp, color = tint, maxLines = 1,
+                lineHeight = (fontSize + 8).sp, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
+            if (!summary.summary.isNullOrBlank()) {
+                Box(Modifier.padding(horizontal = 8.dp).size(2.dp).background(T.Caption, CircleShape))
+                Text(summary.summary, fontSize = (fontSize - 1).sp, color = tint, maxLines = 1,
+                    overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+            }
         }
     }
-}
-
-@Composable
-private fun RunningLine(since: Long?) {
-    var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
-    LaunchedEffect(Unit) { while (true) { delay(1000); now = System.currentTimeMillis() } }
-    val dots = rememberInfiniteTransition(label = "dots").animateFloat(0f, 3f, infiniteRepeatable(tween(1200, easing = LinearEasing)), label = "d")
-    val secs = since?.let { (now - it) / 1000 } ?: 0
-    val label = if (Pocket.prefs.language == AppLanguage.En) "Analyzing request · ${secs}s" else "正在分析请求 · ${secs}s"
-    Text(label + " " + "·".repeat(dots.value.toInt() + 1), fontSize = 14.sp, color = T.Text3)
 }
 
 @Composable

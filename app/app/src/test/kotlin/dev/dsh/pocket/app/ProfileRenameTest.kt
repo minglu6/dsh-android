@@ -28,6 +28,7 @@ class ProfileRenameTest {
 
     @Before fun state() {
         Pocket.init(RuntimeEnvironment.getApplication())
+        installHostSettingsFixture()
         val p = Profile("p1", "电脑", nodeId = "abcdefghijklmnopqrstuvwxyz01")
         Pocket.profiles.value = listOf(p)
         Pocket.prefs.profiles = listOf(p)

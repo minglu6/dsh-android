@@ -38,6 +38,7 @@ class ModelPickerTest {
 
     @Before fun setup() {
         Pocket.init(RuntimeEnvironment.getApplication())
+        installHostSettingsFixture()
         Pocket.prefs.language = AppLanguage.Zh
         Pocket.prefs.appearance = Appearance.Light
     }

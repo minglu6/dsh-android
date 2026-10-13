@@ -232,6 +232,7 @@ object Pocket {
 
     fun connect(profileId: String) {
         connJob?.cancel(); client?.close(); client = null
+        prefs.hostSettings.clear()
         followEpoch.incrementAndGet()
         detachFollow()
         active.value = profileId; prefs.activeProfile = profileId
@@ -300,6 +301,9 @@ object Pocket {
                         }
                     }
                     launch { c.events.collect { if (client === c) onPush(it) } }
+                    if ("plugins.settingsDescribe" in hello.ops && "plugins.settingsMutate" in hello.ops) {
+                        prefs.hostSettings.bind(c::pluginsSettingsDescribe, c::pluginsSettingsMutate)
+                    }
                     launch { refreshAll(c) }
                     c.state.first { it == PocketClient.State.Closed }
                     cancel()
@@ -308,6 +312,7 @@ object Pocket {
                 if (!currentCoroutineContext().isActive) { c.close(); throw e }
             } catch (e: Exception) { /* fall through to retry */ }
             client = null; c.close(); setRoute(profileId, null)
+            prefs.hostSettings.clear()
             followEpoch.incrementAndGet()
             detachFollow()
             closeTerminalFollow()
@@ -508,6 +513,7 @@ object Pocket {
                 }
             }
             "schedule.changed" -> scheduleCatalogRevision.value++
+            "settings.changed" -> prefs.hostSettings.refresh()
             "goal.activation" -> if (m["sessionId"].str() == chat.value?.sessionId) {
                 goalActivationEpoch++
                 goalActivation.value = m["goal"]["activation"].str()
@@ -600,7 +606,6 @@ object Pocket {
         val frameSession = f["sessionId"].str()
         if (frameSession != null && frameSession != st.sessionId) return
         if (f["type"].str() == "projection" && frameSession == null) return
-        val wasRunning = reducer.running
         reducer.apply(f)
         inspectorLog.apply(f)
         val projection = when (f["type"].str()) {
@@ -647,10 +652,11 @@ object Pocket {
                 preset = (values?.get("agentPreset") ?: f["value"]).str()
             }
         }
+        val turns = reducer.turnRecords()
         chat.value = st.copy(
             items = reducer.items(),
             steps = reducer.stepRecords(),
-            turns = reducer.turnRecords(),
+            turns = turns,
             inspectorRecords = inspectorLog.snapshot(),
             title = reducer.title ?: st.title,
             running = reducer.running,
@@ -659,7 +665,7 @@ object Pocket {
             loaded = true,
             hasMore = reducer.hasMore,
             firstSeq = reducer.firstSeq,
-            runStartedAt = if (reducer.running) (if (wasRunning) st.runStartedAt else System.currentTimeMillis()) else null,
+            runStartedAt = if (reducer.running) turns.lastOrNull { !it.closed }?.startedAt else null,
             todos = reducer.todos(),
             planMode = reducer.planMode,
             goal = goal,
@@ -1451,6 +1457,7 @@ object Pocket {
     fun removeProfile(id: String) = main.launch {
         if (active.value == id) {
             connJob?.cancel(); client?.close(); client = null
+            prefs.hostSettings.clear()
             followEpoch.incrementAndGet()
             detachFollow()
             active.value = null; prefs.activeProfile = null

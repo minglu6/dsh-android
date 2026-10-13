@@ -9,6 +9,7 @@ import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.SideEffect
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.platform.LocalView
 import androidx.core.view.WindowCompat
 import androidx.compose.ui.text.TextStyle
@@ -21,12 +22,11 @@ import androidx.compose.ui.unit.sp
  * Updated by [PocketTheme] so non-composable `T.*` getters stay in sync with Appearance.
  */
 object ThemeState {
-    @Volatile
-    var dark: Boolean = false
-        private set
+    private val darkState = mutableStateOf(false)
+    val dark: Boolean get() = darkState.value
 
     fun setDark(value: Boolean) {
-        dark = value
+        darkState.value = value
     }
 
     val colors: DswColors

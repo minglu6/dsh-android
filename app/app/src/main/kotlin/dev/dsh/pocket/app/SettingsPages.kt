@@ -161,10 +161,11 @@ internal fun SettingsNavRow(
     icon: ImageVector? = null,
     value: String? = null,
     divider: Boolean = true,
+    enabled: Boolean = true,
     onClick: () -> Unit,
 ) {
     Row(
-        Modifier.fillMaxWidth().heightIn(min = 48.dp).clickable(onClick = onClick).padding(horizontal = 16.dp, vertical = 15.dp),
+        Modifier.fillMaxWidth().heightIn(min = 48.dp).clickable(enabled = enabled, onClick = onClick).padding(horizontal = 16.dp, vertical = 15.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         icon?.let {
@@ -244,7 +245,7 @@ internal fun collapseText(value: CollapseTiming): String = when (value) {
 }
 
 @Composable
-internal fun AppearanceCards(current: Appearance, onPick: (Appearance) -> Unit) {
+internal fun AppearanceCards(current: Appearance, enabled: Boolean = true, onPick: (Appearance) -> Unit) {
     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         Appearance.entries.forEach { value ->
             val label = when (value) { Appearance.Light -> L.light(); Appearance.Dark -> L.dark(); Appearance.System -> L.followSystem() }
@@ -254,7 +255,7 @@ internal fun AppearanceCards(current: Appearance, onPick: (Appearance) -> Unit) 
                     .background(if (current == value) T.Fill2 else Color.Transparent)
                     .border(0.5.dp, if (current == value) Color(0xFFADB2B8) else T.BorderStrong, T.R20)
                     .semantics { selected = current == value }
-                    .clickable(role = Role.Button) { onPick(value) }
+                    .clickable(enabled = enabled, role = Role.Button) { onPick(value) }
                     .padding(horizontal = 4.dp, vertical = 20.dp),
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.Center,
@@ -268,14 +269,14 @@ internal fun AppearanceCards(current: Appearance, onPick: (Appearance) -> Unit) 
 }
 
 @Composable
-internal fun SettingsFontRow(title: String, description: String, value: Int, range: IntRange, onChange: (Int) -> Unit) {
+internal fun SettingsFontRow(title: String, description: String, value: Int, range: IntRange, enabled: Boolean = true, onChange: (Int) -> Unit) {
     Column(Modifier.fillMaxWidth().padding(16.dp)) {
         Text(title, color = T.Ink, fontSize = 16.sp)
         Text(description, color = T.Text3, fontSize = 12.sp)
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.End) {
-            IconButton({ onChange(value - 1) }, enabled = value > range.first, modifier = Modifier.size(48.dp)) { Icon(D.chevronDown, st("减小字号", "Decrease font size"), tint = if (value > range.first) T.Ink else T.Text3) }
+            IconButton({ onChange(value - 1) }, enabled = enabled && value > range.first, modifier = Modifier.size(48.dp)) { Icon(D.chevronDown, st("减小字号", "Decrease font size"), tint = if (enabled && value > range.first) T.Ink else T.Text3) }
             Text("$value sp", color = T.Ink, modifier = Modifier.padding(horizontal = 12.dp))
-            IconButton({ onChange(value + 1) }, enabled = value < range.last, modifier = Modifier.size(48.dp)) { Icon(D.chevronDown, st("增大字号", "Increase font size"), tint = if (value < range.last) T.Ink else T.Text3, modifier = Modifier.rotate(180f)) }
+            IconButton({ onChange(value + 1) }, enabled = enabled && value < range.last, modifier = Modifier.size(48.dp)) { Icon(D.chevronDown, st("增大字号", "Increase font size"), tint = if (enabled && value < range.last) T.Ink else T.Text3, modifier = Modifier.rotate(180f)) }
         }
     }
 }

@@ -5,6 +5,7 @@ import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.ClipboardManager
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.unit.dp
 import dev.dsh.pocket.protocol.Item
 import dev.dsh.pocket.protocol.StepRecord
@@ -34,8 +35,10 @@ class MessageActionsTest {
 
     @Before fun state() {
         Pocket.init(RuntimeEnvironment.getApplication())
+        installHostSettingsFixture()
         Pocket.prefs.language = AppLanguage.Zh
         Pocket.prefs.transcriptView = TranscriptView.Standard
+        Pocket.prefs.collapseTiming = CollapseTiming.Completion
         Pocket.profiles.value = listOf(Profile("p1", "desk", host = "100.106.128.87", port = 7690))
         Pocket.active.value = "p1"
         Pocket.status.value = mapOf("p1" to Dot.Online)
@@ -148,9 +151,8 @@ class MessageActionsTest {
         val tool = Item.Tool("t1", "c1", "job_list", "{}", ToolStatus.Ok, result = """{"jobs":[]}""")
         val last = Item.Reasoning("r2", "Last preview\n\nLast details", 1000, false)
         val members = listOf(first, tool, last)
-        val proc = ChatRow.Process("p1", listOf(tool), listOf(first, last), "已完成，用时 6 秒", true, true,
-            members = members, steps = listOf(ProcessStep("s1", 1, listOf(first, tool)), ProcessStep("s2", 2, listOf(last))),
-            turnSummary = true)
+        val proc = ChatRow.Process("p1", listOf(tool), listOf(first, last), "已调用工具", true, true,
+            members = members)
         var opened: Item.Tool? = null
         rule.setContent { PocketTheme { ProcessGroupRow(proc) { opened = it } } }
         val firstRow = rule.onNodeWithTag("reasoningHeader:r1")
@@ -166,7 +168,7 @@ class MessageActionsTest {
         rule.runOnIdle { assertEquals(tool, opened) }
         rule.onNodeWithTag("processHeader:p1").performClick()
         rule.onNodeWithTag("reasoningHeader:r1").assertDoesNotExist()
-        rule.onNodeWithText("已完成，用时 6 秒").assertIsDisplayed()
+        rule.onNodeWithTag("processHeader:p1").assertIsDisplayed()
     }
 
     @Test fun reasoningPreviewUsesTheLatestCompletedParagraphWhileStreaming() {
@@ -175,14 +177,68 @@ class MessageActionsTest {
         assertEquals("second", reasoningPreview("first\n\nsecond\ncontinued", true))
         assertEquals("first", reasoningPreview("**first**\n\nsecond", false))
     }
-    @Test fun failedTurnCannotHideItsFailureDetails() {
-        val failure = Item.Tool("failed", "c1", "bash", "{}", ToolStatus.Error, error = "permission denied")
-        val proc = ChatRow.Process("failed-turn", listOf(failure), emptyList(), "处理失败", true, true,
-            members = listOf(failure), turnSummary = true, canCollapse = false)
-        rule.setContent { PocketTheme { ProcessGroupRow(proc) {} } }
-        rule.onNodeWithTag("processHeader:failed-turn").assertHasNoClickAction()
-        rule.onNodeWithText("处理失败").assertIsDisplayed()
+    @Test fun failedTurnCannotFoldAwayItsProcessGroups() {
+        val failure = Item.Tool("failed", "c1", "bash", "{}", ToolStatus.Error, error = "permission denied", turn = 1, step = 1)
+        val state = ChatState("failed-session", loaded = true, items = listOf(failure),
+            turns = listOf(TurnRecord(1, startSeq = 1, endSeq = 4, startedAt = 1000, endedAt = 2000, endReason = "error")))
+        rule.setContent { PocketTheme { Transcript(state, {}) } }
+        rule.onNodeWithTag("processHeader:turn-1-process").assertHasNoClickAction()
+        rule.onNodeWithTag("processHeader:failed-group").assertIsDisplayed().performClick()
+        rule.onNodeWithTag("processTool:failed").assertIsDisplayed()
         rule.onNodeWithText("permission denied").assertIsDisplayed()
+    }
+
+    @Test fun wholeTurnDisclosureKeepsFinalAnswerAndIndependentProcessGroups() {
+        val first = Item.Reasoning("r1", "First preview\n\nFirst details", 1000, false, turn = 1, step = 1)
+        val intermediate = Item.Text("a1", "Let me inspect the project", false, turn = 1, step = 1)
+        val tool = Item.Tool("t1", "c1", "read", "{}", ToolStatus.Ok, result = "file contents", turn = 1, step = 2)
+        val final = Item.Text("a2", "Final project overview", false, turn = 1, step = 3)
+        val state = ChatState("completed-session", loaded = true, items = listOf(first, intermediate, tool, final),
+            turns = listOf(TurnRecord(1, startSeq = 1, endSeq = 8, startedAt = 1000, endedAt = 7000)))
+        rule.setContent { PocketTheme { Transcript(state, {}) } }
+        rule.onNodeWithText(final.text).assertIsDisplayed()
+        rule.onNodeWithText(intermediate.text).assertDoesNotExist()
+        rule.onNodeWithTag("processHeader:r1-group").assertDoesNotExist()
+        rule.onNodeWithTag("processHeader:turn-1-process").performClick()
+        rule.onNodeWithText(intermediate.text).assertIsDisplayed()
+        rule.onNodeWithTag("processHeader:r1-group").assertIsDisplayed()
+        rule.onNodeWithTag("processHeader:t1-group").assertIsDisplayed()
+        rule.onNodeWithTag("reasoningBody:r1").assertDoesNotExist()
+        rule.onNodeWithTag("processHeader:r1-group").performClick()
+        rule.onNodeWithTag("reasoningHeader:r1").performClick()
+        rule.onNodeWithTag("reasoningBody:r1").assertIsDisplayed()
+        rule.onNodeWithTag("processTool:t1").assertDoesNotExist()
+        rule.onNodeWithTag("processHeader:turn-1-process").performClick()
+        rule.onNodeWithText(final.text).assertIsDisplayed()
+        rule.onNodeWithText(intermediate.text).assertDoesNotExist()
+    }
+
+    @Test fun assistantCompletionActionsWaitForHostTurnEnd() {
+        val answer = Item.Text("answer", "Project overview", false, messageId = "m", turn = 1, step = 1)
+        val state = mutableStateOf(ChatState("turn-actions", loaded = true, running = true,
+            items = listOf(answer), turns = listOf(TurnRecord(1, startSeq = 1, startedAt = 1000))))
+        rule.setContent { PocketTheme { Transcript(state.value, {}) } }
+        rule.onNodeWithTag("messageCopy", useUnmergedTree = true).assertDoesNotExist()
+        rule.runOnIdle {
+            state.value = state.value.copy(running = false,
+                turns = listOf(TurnRecord(1, startSeq = 1, endSeq = 3, startedAt = 1000, endedAt = 2000)))
+        }
+        rule.onNodeWithTag("messageCopy", useUnmergedTree = true).assertIsDisplayed()
+    }
+
+    @Test fun runningStatusSurvivesReasoningAndToolTransitionsUntilTurnEnds() {
+        val state = mutableStateOf(ChatState("live-session", loaded = true, running = true,
+            items = listOf(Item.Reasoning("r", "Working\n", null, true, turn = 1, step = 1)),
+            turns = listOf(TurnRecord(1, startSeq = 1, startedAt = 1000))))
+        rule.setContent { PocketTheme { Transcript(state.value, {}) } }
+        rule.onNodeWithTag("runningStatus").assertIsDisplayed()
+        rule.runOnIdle {
+            state.value = state.value.copy(items = listOf(
+                Item.Tool("t", "c", "bash", "{}", ToolStatus.Running, turn = 1, step = 1)))
+        }
+        rule.onNodeWithTag("runningStatus").assertIsDisplayed()
+        rule.runOnIdle { state.value = state.value.copy(running = false) }
+        rule.onNodeWithTag("runningStatus").assertDoesNotExist()
     }
 
     @Test fun completedTurnWithoutProcessDoesNotOfferEmptyDisclosure() {
