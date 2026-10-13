@@ -175,12 +175,12 @@ export function modelsSettingsOps({ llm, settings, settingsController, credentia
 }
 
 /**
- * Plugin manager ops. Install-from-local-path stays host-desktop-only (hide);
- * npm/git specs are reachable via plugins.install when pluginManager is present.
+ * Keep the official manager's business outcomes intact: an acknowledged RPC can
+ * still require restart, be overridden, or fail. Only advertise live methods.
  */
 export function pluginsOps(pluginManager) {
   if (!pluginManager) throw bad('pluginManager required')
-  return {
+  const ops = {
     'plugins.list': async () => {
       const [bundles, plugins] = await Promise.all([
         pluginManager.listBundles(),
@@ -194,6 +194,8 @@ export function pluginsOps(pluginManager) {
     },
     'plugins.setEnabled': async (a) => {
       if (typeof a.enabled !== 'boolean') throw bad('enabled boolean required')
+      if (str(a.bundle) && (str(a.id) || str(a.entryId))) throw bad('choose bundle or id, not both')
+      if (str(a.id) && str(a.entryId) && a.id !== a.entryId) throw bad('conflicting plugin ids')
       if (str(a.bundle)) {
         return pluginManager.setBundleEnabled(a.bundle, a.enabled)
       }
@@ -202,13 +204,39 @@ export function pluginsOps(pluginManager) {
       }
       throw bad('bundle or id required')
     },
-    /** Registry/git/tarball install — local OS directory picker stays hidden on phone. */
-    'plugins.install': async (a) => {
-      if (!str(a.spec)) throw bad('spec required')
-      if (!pluginManager.installBundle) {
-        throw Object.assign(new Error('plugin install unavailable'), { code: 'unavailable' })
+  }
+  const methods = [
+    ['plugins.install', 'installBundle', 'spec'],
+    ['plugins.uninstall', 'removeBundle', 'bundle'],
+    ['plugins.inspect', 'inspect', 'spec'],
+    ['plugins.cancelInstall', 'cancelInstall', 'requestId'],
+    ['plugins.waitForInstall', 'waitForInstall', 'requestId'],
+  ]
+  for (const [op, method, field] of methods) {
+    if (typeof pluginManager[method] !== 'function') continue
+    ops[op] = async (a, signal) => {
+      if (!str(a[field]) || !a[field].trim()) throw bad(`${field} required`)
+      if (op === 'plugins.inspect') return pluginManager.inspect(a.spec.trim(), a.options, signal)
+      if (op === 'plugins.install') return pluginManager.installBundle(a.spec.trim(), a.options)
+      return pluginManager[method](a[field])
+    }
+  }
+  if (typeof pluginManager.registries === 'function') {
+    ops['plugins.registries'] = () => pluginManager.registries()
+  }
+  return ops
+}
+
+/** Use the official redacted settings controller, including revision conflicts. */
+export function pluginSettingsOps(settingsController) {
+  return {
+    'plugins.settingsDescribe': () => settingsController.describe(),
+    'plugins.settingsMutate': async (a) => {
+      if (!str(a.ns) || !Array.isArray(a.ops)) throw bad('ns and ops required')
+      if (!Number.isSafeInteger(a.expectedRevision) || a.expectedRevision < 0) {
+        throw bad('expectedRevision required')
       }
-      return pluginManager.installBundle(a.spec, a.options)
+      return settingsController.mutate(a.ns, a.ops, a.expectedRevision)
     },
   }
 }

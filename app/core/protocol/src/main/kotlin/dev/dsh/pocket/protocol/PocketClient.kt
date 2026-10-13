@@ -347,7 +347,27 @@ class PocketClient(
                 put("spec", spec)
                 options?.let { put("options", it) }
             },
+            timeoutMs = 1_800_000,
         )
+    suspend fun pluginsInspect(spec: String, registry: String? = null): JsonElement =
+        call("plugins.inspect", buildJsonObject {
+            put("spec", spec)
+            registry?.let { put("options", jsonOf("registry" to it)) }
+        })
+    suspend fun pluginsRegistries(): JsonElement = call("plugins.registries")
+    suspend fun pluginsUninstall(bundle: String): JsonElement =
+        call("plugins.uninstall", jsonOf("bundle" to bundle), timeoutMs = 1_800_000)
+    suspend fun pluginsCancelInstall(requestId: String): JsonElement =
+        call("plugins.cancelInstall", jsonOf("requestId" to requestId), timeoutMs = 120_000)
+    suspend fun pluginsWaitForInstall(requestId: String): JsonElement =
+        call("plugins.waitForInstall", jsonOf("requestId" to requestId), timeoutMs = 1_800_000)
+    suspend fun pluginsSettingsDescribe(): JsonElement = call("plugins.settingsDescribe")
+    suspend fun pluginsSettingsMutate(ns: String, ops: JsonArray, expectedRevision: Int): JsonElement =
+        call("plugins.settingsMutate", buildJsonObject {
+            put("ns", ns)
+            put("ops", ops)
+            put("expectedRevision", expectedRevision)
+        })
 
     suspend fun scheduleCatalog(): JsonElement = call("schedule.catalog")
     suspend fun scheduleList(sessionId: String): JsonElement =

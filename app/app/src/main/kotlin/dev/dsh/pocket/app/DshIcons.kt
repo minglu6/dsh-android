@@ -4,7 +4,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.res.vectorResource
 
-/** Icons converted 1:1 from deepseek-harness ui-primitives (16px grid, 1px stroke "Regular" weight). */
+/** Official desktop SVG geometry; Regular controls and Medium settings-navigation artwork. */
 object D {
     private val v: @Composable (Int) -> ImageVector = { ImageVector.vectorResource(it) }
     val ellipsis @Composable get() = v(R.drawable.dsh_ellipsis)
@@ -13,24 +13,36 @@ object D {
     val agentPreset @Composable get() = v(R.drawable.dsh_agent_preset)
     val folderOpen @Composable get() = v(R.drawable.dsh_folder_open)
     val shield @Composable get() = v(R.drawable.dsh_shield)
+    /** Same per-preset artwork as desktop PermissionSelect; custom presets have no glyph. */
+    @Composable
+    fun permission(preset: String): ImageVector? = when (preset) {
+        "read-only" -> v(R.drawable.dsh_permission_read_only)
+        "workspace-write" -> v(R.drawable.dsh_permission_workspace_write)
+        "danger-full-access" -> v(R.drawable.dsh_permission_full_access)
+        "auto" -> v(R.drawable.dsh_permission_auto_review)
+        else -> null
+    }
     val warning @Composable get() = v(R.drawable.dsh_warning)
     val plus @Composable get() = v(R.drawable.dsh_plus)
     val chevronDown @Composable get() = v(R.drawable.dsh_chevron_down)
     val chevronRight @Composable get() = v(R.drawable.dsh_chevron_right)
     val chevronLeft @Composable get() = v(R.drawable.dsh_chevron_left)
     val newChat @Composable get() = v(R.drawable.dsh_new_chat)
-    val plugin @Composable get() = v(R.drawable.dsh_cordis_plugin)
     /** Sidebar Plugins panel glyph (ui-plugin-manager PluginsPanelIcon). */
     val pluginPinwheel @Composable get() = v(R.drawable.dsh_plugin_pinwheel)
     val clock @Composable get() = v(R.drawable.dsh_clock)
-    val alarm @Composable get() = v(R.drawable.dsh_alarm_clock)
     /** WorkspaceBrowser view-options (IconSlidersTwoOutlineRegular). */
     val sliders @Composable get() = v(R.drawable.dsh_sliders_two)
     /** WorkspaceBrowser add-workspace (IconProjectAddOutlineRegular). */
     val projectAdd @Composable get() = v(R.drawable.dsh_project_add)
     val settings @Composable get() = v(R.drawable.dsh_settings)
     val search @Composable get() = v(R.drawable.dsh_search)
-    val database @Composable get() = v(R.drawable.dsh_database)
+    val data @Composable get() = v(R.drawable.dsh_data)
+    val dataMedium @Composable get() = v(R.drawable.dsh_data_medium)
+    val personalization @Composable get() = v(R.drawable.dsh_personalization)
+    val paperPlane @Composable get() = v(R.drawable.dsh_paper_plane)
+    val terminal @Composable get() = v(R.drawable.dsh_terminal)
+    val document @Composable get() = v(R.drawable.dsh_document)
     val check @Composable get() = v(R.drawable.dsh_check)
     val copy @Composable get() = v(R.drawable.dsh_copy)
     val branch @Composable get() = v(R.drawable.dsh_branch)
@@ -53,9 +65,7 @@ object D {
     val user @Composable get() = v(R.drawable.dsh_user)
     val link @Composable get() = v(R.drawable.dsh_link)
     val globe @Composable get() = v(R.drawable.dsh_globe)
-    val think @Composable get() = v(R.drawable.dsh_think)
     val rightUp @Composable get() = v(R.drawable.dsh_right_up)
-    val code @Composable get() = v(R.drawable.dsh_code)
     val chat @Composable get() = v(R.drawable.dsh_chat_lines)
     val inspect @Composable get() = v(R.drawable.dsh_inspect)
     val fish @Composable get() = v(R.drawable.dsh_fish)

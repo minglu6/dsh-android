@@ -34,4 +34,4 @@ APK **不再**包含 `libpocket_iroh.so`；连接只走 host:port WebSocket。he
 
 ## 功能对齐
 
-见 [docs/feature-parity.md](../docs/feature-parity.md)。仅隐藏需「本地应用/编辑器/内嵌浏览器」的入口（浏览器面板、插件管理、自动化、打开配置文件、设置里的模型凭据）；主机 PTY 终端经插件接通，可在手机上远程使用。轨迹、指令、导出、工作区文件、后台任务、通用设置等已接通。智能体团队列出 `parentSessionId` 子会话。
+见 [docs/feature-parity.md](../docs/feature-parity.md)。界面与操作以官方桌面端为准：插件支持分组管理、安装检查/取消/卸载及配置；自动化任务支持搜索、规则编辑、投递记录和删除，新建跳转会话。仅隐藏真正依赖桌面本地 UI 的功能（内嵌浏览器、本机编辑器/目录选择器）；第三方插件自定义 React 界面仍需 Web，公开的 Host 配置可在手机编辑。主机 PTY 终端、模型凭证、轨迹、指令、导出、工作区文件、后台任务、通用设置和 `parentSessionId` 子会话均已有原生入口。

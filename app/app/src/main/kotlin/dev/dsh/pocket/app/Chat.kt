@@ -1099,10 +1099,12 @@ private fun Composer(
                     Spacer(Modifier.width(6.dp))
                 }
                 val danger = perm == "danger-full-access"
-                // Desktop always shows shield + permission label (e.g. 工作区内修改).
+                // Match desktop PermissionSelect: each built-in preset has its own artwork.
                 Row(Modifier.clip(T.R8).clickable(onClick = onPerm).padding(horizontal = 6.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Icon(if (danger) D.warning else D.shield, permissionLabel(perm), tint = if (danger) T.WarnText else T.Text2, modifier = Modifier.size(17.dp))
-                    Spacer(Modifier.width(5.dp))
+                    D.permission(perm)?.let { icon ->
+                        Icon(icon, permissionLabel(perm), tint = if (danger) T.WarnText else T.Text2, modifier = Modifier.size(16.dp))
+                        Spacer(Modifier.width(5.dp))
+                    }
                     Text(permissionLabel(perm), fontSize = 14.sp, color = T.Text2, maxLines = 1, overflow = TextOverflow.Ellipsis)
                     Icon(D.chevronDown, null, tint = T.Text2, modifier = Modifier.size(16.dp))
                 }

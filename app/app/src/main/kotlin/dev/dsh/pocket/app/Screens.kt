@@ -1288,13 +1288,13 @@ fun SettingsScreen(
         Card {
             Row2(L.generalNav(), icon = D.settings, onClick = onGeneral)
             if ("models.providers" in ops) {
-                Row2(L.modelsNav(), icon = D.database, onClick = onModels)
+                Row2(L.modelsNav(), icon = D.dataMedium, onClick = onModels)
             }
             if ("plugins.list" in ops) {
-                Row2(L.pluginsNav(), icon = D.plugin, onClick = onPlugins)
+                Row2(L.pluginsNav(), icon = D.personalization, onClick = onPlugins)
             }
             if ("schedule.catalog" in ops) {
-                Row2(L.scheduleNav(), icon = D.alarm, onClick = onSchedule)
+                Row2(L.scheduleNav(), icon = D.clock, onClick = onSchedule)
             }
             if ("credentials.list" in ops) {
                 Row2(L.credentialsNav(), icon = D.shield, onClick = onCredentials)

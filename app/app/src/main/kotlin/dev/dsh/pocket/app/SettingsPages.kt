@@ -26,17 +26,18 @@ import kotlinx.coroutines.launch
 import kotlinx.serialization.json.JsonElement
 
 /**
- * Native Compose ports of desktop Settings pages that the phone previously hid
- * (models / plugins / schedules / credentials). Nav is list → full-screen detail;
- * each detail row places its label above its control. Host calls go through pocket
- * RPCs in [plugin/src/settings-ops.js].
- *
- * Mobile list→detail chrome follows the dsh-mobile main-panel pattern (Apache-2.0;
- * see docs/THIRD_PARTY_NOTICES.md) without WebView.
+ * Shared native settings chrome and model/credential pages. Plugin management
+ * and automation live in their own screens, following the official Host/UI
+ * contracts; the pocket bridge remains the only remote transport.
  */
 
 @Composable
-private fun SettingsScaffold(title: String, onBack: () -> Unit, content: @Composable ColumnScope.() -> Unit) {
+internal fun SettingsScaffold(
+    title: String,
+    onBack: () -> Unit,
+    actions: @Composable RowScope.() -> Unit = {},
+    content: @Composable ColumnScope.() -> Unit,
+) {
     Column(
         Modifier
             .fillMaxSize()
@@ -51,7 +52,8 @@ private fun SettingsScaffold(title: String, onBack: () -> Unit, content: @Compos
             IconButton(onBack) {
                 Icon(D.chevronLeft, "返回", tint = T.Ink)
             }
-            Text(title, fontSize = 20.sp, color = T.Ink)
+            Text(title, fontSize = 20.sp, color = T.Ink, modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
+            actions()
         }
         content()
     }
@@ -59,7 +61,7 @@ private fun SettingsScaffold(title: String, onBack: () -> Unit, content: @Compos
 
 /** Desktop settings card fill/stroke (`--dsw-alias-settings-card-*`) + radius-lg. */
 @Composable
-private fun SettingsCard(content: @Composable ColumnScope.() -> Unit) {
+internal fun SettingsCard(content: @Composable ColumnScope.() -> Unit) {
     Column(
         Modifier
             .padding(horizontal = 18.dp, vertical = 6.dp)
@@ -72,7 +74,7 @@ private fun SettingsCard(content: @Composable ColumnScope.() -> Unit) {
 }
 
 @Composable
-private fun SettingsNavRow(
+internal fun SettingsNavRow(
     title: String,
     icon: ImageVector? = null,
     value: String? = null,
@@ -132,7 +134,7 @@ fun SettingsTextField(value: String, onChange: (String) -> Unit, hint: String = 
 }
 
 @Composable
-private fun ErrorOrEmpty(message: String, onRetry: (() -> Unit)? = null) {
+internal fun ErrorOrEmpty(message: String, onRetry: (() -> Unit)? = null) {
     Column(Modifier.fillMaxWidth().padding(24.dp), horizontalAlignment = Alignment.CenterHorizontally) {
         Text(message, color = T.Text3, fontSize = 14.sp)
         if (onRetry != null) {
@@ -276,341 +278,7 @@ fun ModelsSettingsScreen(onBack: () -> Unit) {
     }
 }
 
-// ---------- Plugins ----------
 
-@Composable
-fun PluginsSettingsScreen(onBack: () -> Unit) {
-    val ops by Pocket.ops.collectAsState()
-    val scope = rememberCoroutineScope()
-    var loading by remember { mutableStateOf(true) }
-    var error by remember { mutableStateOf<String?>(null) }
-    var bundles by remember { mutableStateOf<List<JsonElement>>(emptyList()) }
-    var plugins by remember { mutableStateOf<List<JsonElement>>(emptyList()) }
-    var detail by remember { mutableStateOf<JsonElement?>(null) }
-    var detailIsBundle by remember { mutableStateOf(true) }
-
-    fun reload() {
-        if ("plugins.list" !in ops) {
-            loading = false
-            error = L.unavailable()
-            return
-        }
-        loading = true
-        error = null
-        scope.launch {
-            runCatching { Pocket.clientOrNull()?.pluginsList() }
-                .onSuccess { r ->
-                    bundles = r["bundles"].arr().orEmpty()
-                    plugins = r["plugins"].arr().orEmpty()
-                    loading = false
-                }
-                .onFailure {
-                    error = it.message ?: L.unavailable()
-                    loading = false
-                }
-        }
-    }
-    LaunchedEffect(ops) { reload() }
-
-    if (detail != null) {
-        val row = detail!!
-        val title = row["meta"]["title"]["zh"].str()
-            ?: row["meta"]["title"]["en"].str()
-            ?: row["name"].str()
-            ?: row["moduleName"].str()
-            ?: row["entryId"].str().orEmpty()
-        val enabled = row["enabled"].bool() == true
-        val readOnly = row["readOnlyReason"].str() != null
-        SettingsScaffold(title, onBack = { detail = null }) {
-            SettingsCard {
-                LabeledField(L.pluginsTitle()) {
-                    Text(title, fontSize = 16.sp, color = T.Ink)
-                    row["description"].str()?.let {
-                        Text(it, fontSize = 13.sp, color = T.Text3, modifier = Modifier.padding(top = 4.dp))
-                    }
-                    row["version"].str()?.let {
-                        Text("v$it", style = T.Mono.copy(color = T.Text3), modifier = Modifier.padding(top = 4.dp))
-                    }
-                }
-                HorizontalDivider(Modifier.padding(horizontal = 16.dp), color = T.Border)
-                LabeledField(if (enabled) L.enabled() else L.disabled()) {
-                    Switch(
-                        enabled,
-                        onCheckedChange = { next ->
-                            if (readOnly || "plugins.setEnabled" !in ops) return@Switch
-                            scope.launch {
-                                runCatching {
-                                    if (detailIsBundle) {
-                                        Pocket.clientOrNull()?.pluginsSetEnabled(next, bundle = row["name"].str())
-                                    } else {
-                                        Pocket.clientOrNull()?.pluginsSetEnabled(next, id = row["entryId"].str())
-                                    }
-                                }
-                                reload()
-                                detail = null
-                            }
-                        },
-                        enabled = !readOnly && "plugins.setEnabled" in ops,
-                        colors = SwitchDefaults.colors(
-                            checkedTrackColor = T.PrimaryButton,
-                            checkedThumbColor = T.OnPrimary,
-                        ),
-                    )
-                }
-            }
-            val parts = row["rows"].arr().orEmpty()
-            if (parts.isNotEmpty()) {
-                Text(L.builtinPluginsNav(), fontSize = 13.sp, color = T.Text3, modifier = Modifier.padding(start = 22.dp, top = 12.dp))
-                SettingsCard {
-                    parts.forEachIndexed { i, p ->
-                        LabeledField(p["moduleName"].str() ?: p["rowId"].str().orEmpty()) {
-                            Text(p["rowId"].str().orEmpty(), style = T.Mono.copy(fontSize = 12.sp, color = T.Text3))
-                        }
-                        if (i < parts.lastIndex) {
-                            HorizontalDivider(Modifier.padding(horizontal = 16.dp), color = T.Border)
-                        }
-                    }
-                }
-            }
-        }
-        return
-    }
-
-    SettingsScaffold(L.pluginsTitle(), onBack) {
-        Text(L.pluginsIntro(), fontSize = 13.sp, color = T.Text3, modifier = Modifier.padding(horizontal = 22.dp, vertical = 4.dp))
-        when {
-            loading -> ErrorOrEmpty(L.loading())
-            error != null -> ErrorOrEmpty(error!!, onRetry = ::reload)
-            bundles.isEmpty() && plugins.isEmpty() -> ErrorOrEmpty(L.emptyPlugins(), onRetry = ::reload)
-            else -> {
-                if (bundles.isNotEmpty()) {
-                    Text("${bundles.size} ${L.countUnit()}", fontSize = 13.sp, color = T.Text3, modifier = Modifier.padding(start = 22.dp, top = 8.dp))
-                    SettingsCard {
-                        bundles.forEachIndexed { i, b ->
-                            val name = b["meta"]["title"]["zh"].str()
-                                ?: b["meta"]["title"]["en"].str()
-                                ?: b["name"].str().orEmpty()
-                            SettingsNavRow(
-                                title = name,
-                                value = if (b["enabled"].bool() == true) L.enabled() else L.disabled(),
-                                divider = i < bundles.lastIndex,
-                                onClick = { detailIsBundle = true; detail = b },
-                            )
-                        }
-                    }
-                }
-                if (plugins.isNotEmpty()) {
-                    Text(L.builtinPluginsNav(), fontSize = 13.sp, color = T.Text3, modifier = Modifier.padding(start = 22.dp, top = 12.dp))
-                    SettingsCard {
-                        plugins.forEachIndexed { i, p ->
-                            SettingsNavRow(
-                                title = p["moduleName"].str() ?: p["entryId"].str().orEmpty(),
-                                value = if (p["enabled"].bool() == true) L.enabled() else L.disabled(),
-                                divider = i < plugins.lastIndex,
-                                onClick = { detailIsBundle = false; detail = p },
-                            )
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
-
-// ---------- Scheduled tasks ----------
-
-@Composable
-fun ScheduleSettingsScreen(onBack: () -> Unit) {
-    val ops by Pocket.ops.collectAsState()
-    val scope = rememberCoroutineScope()
-    var loading by remember { mutableStateOf(true) }
-    var error by remember { mutableStateOf<String?>(null) }
-    var records by remember { mutableStateOf<List<JsonElement>>(emptyList()) }
-    var detail by remember { mutableStateOf<JsonElement?>(null) }
-    var history by remember { mutableStateOf<List<JsonElement>>(emptyList()) }
-    var creating by remember { mutableStateOf(false) }
-    var title by remember { mutableStateOf("") }
-    var prompt by remember { mutableStateOf("") }
-    var afterSec by remember { mutableStateOf("3600") }
-    var filter by remember { mutableStateOf("all") } // all | active | inactive
-
-    fun reload() {
-        if ("schedule.catalog" !in ops) {
-            loading = false
-            error = L.unavailable()
-            return
-        }
-        loading = true
-        error = null
-        scope.launch {
-            runCatching { Pocket.clientOrNull()?.scheduleCatalog() }
-                .onSuccess { r ->
-                    records = r.arr().orEmpty()
-                    loading = false
-                }
-                .onFailure {
-                    error = it.message ?: L.unavailable()
-                    loading = false
-                }
-        }
-    }
-    LaunchedEffect(ops) { reload() }
-
-    if (creating) {
-        SettingsScaffold(L.createSchedule(), onBack = { creating = false }) {
-            SettingsCard {
-                LabeledField(L.scheduleTitleField()) { SettingsTextField(title, { title = it }) }
-                HorizontalDivider(Modifier.padding(horizontal = 16.dp), color = T.Border)
-                LabeledField(L.schedulePromptField()) { SettingsTextField(prompt, { prompt = it }) }
-                HorizontalDivider(Modifier.padding(horizontal = 16.dp), color = T.Border)
-                LabeledField(L.scheduleAfterSeconds()) { SettingsTextField(afterSec, { afterSec = it }, mono = true) }
-            }
-            val sessionId = Pocket.chat.value?.sessionId ?: Pocket.sessions.value.firstOrNull()?.sessionId
-            Button(
-                onClick = {
-                    if (sessionId == null || title.isBlank() || prompt.isBlank()) return@Button
-                    val sec = afterSec.toIntOrNull() ?: return@Button
-                    scope.launch {
-                        runCatching {
-                            Pocket.clientOrNull()?.scheduleCreate(
-                                jsonOf(
-                                    "sessionId" to sessionId,
-                                    "title" to title,
-                                    "prompt" to prompt,
-                                    "after_seconds" to sec,
-                                ),
-                            )
-                        }
-                        creating = false
-                        title = ""; prompt = ""; afterSec = "3600"
-                        reload()
-                    }
-                },
-                enabled = sessionId != null && title.isNotBlank() && prompt.isNotBlank() && "schedule.create" in ops,
-                modifier = Modifier.fillMaxWidth().padding(18.dp),
-            ) { Text(L.save()) }
-        }
-        return
-    }
-
-    if (detail != null) {
-        val row = detail!!
-        val id = row["id"].str().orEmpty()
-        val sessionId = row["sessionId"].str().orEmpty()
-        val status = row["status"].str() ?: "active"
-        var confirmDelete by remember(id) { mutableStateOf(false) }
-        SettingsScaffold(row["title"].str() ?: id, onBack = { detail = null; history = emptyList() }) {
-            SettingsCard {
-                LabeledField(L.scheduleTitleField()) {
-                    Text(row["title"].str().orEmpty(), fontSize = 16.sp, color = T.Ink)
-                }
-                HorizontalDivider(Modifier.padding(horizontal = 16.dp), color = T.Border)
-                LabeledField(L.schedulePromptField()) {
-                    Text(row["prompt"].str().orEmpty(), fontSize = 14.sp, color = T.Ink)
-                }
-                HorizontalDivider(Modifier.padding(horizontal = 16.dp), color = T.Border)
-                LabeledField(L.nextRun()) {
-                    Text(row["scheduledAt"].str().orEmpty(), style = T.Mono.copy(fontSize = 13.sp, color = T.Text3))
-                }
-                HorizontalDivider(Modifier.padding(horizontal = 16.dp), color = T.Border)
-                LabeledField(if (status == "active") L.statusActive() else L.statusInactive()) {
-                    Text(status, fontSize = 14.sp, color = T.Text3)
-                }
-            }
-            Row(Modifier.padding(18.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                if ("schedule.history" in ops) {
-                    OutlinedButton(
-                        onClick = {
-                            scope.launch {
-                                runCatching {
-                                    Pocket.clientOrNull()?.scheduleHistory(sessionId, id)
-                                }.onSuccess { h ->
-                                    history = h["records"].arr().orEmpty()
-                                }
-                            }
-                        },
-                        modifier = Modifier.weight(1f),
-                    ) { Text(L.deliveryHistory()) }
-                }
-                if ("schedule.delete" in ops) {
-                    if (confirmDelete) {
-                        PocketSheet({ confirmDelete = false }) {
-                            SheetTitle(L.confirmDelete())
-                            Row(Modifier.padding(horizontal = 18.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                                OutlinedButton({ confirmDelete = false }, Modifier.weight(1f)) { Text(L.cancel()) }
-                                Button(
-                                    {
-                                        confirmDelete = false
-                                        scope.launch {
-                                            runCatching { Pocket.clientOrNull()?.scheduleDelete(sessionId, id) }
-                                            detail = null
-                                            reload()
-                                        }
-                                    },
-                                    Modifier.weight(1f),
-                                ) { Text(L.delete()) }
-                            }
-                        }
-                    }
-                    Button({ confirmDelete = true }, Modifier.weight(1f)) { Text(L.delete()) }
-                }
-            }
-            if (history.isNotEmpty()) {
-                Text(L.deliveryHistory(), fontSize = 13.sp, color = T.Text3, modifier = Modifier.padding(start = 22.dp))
-                SettingsCard {
-                    history.forEachIndexed { i, h ->
-                        LabeledField(h["deliveredAt"].str() ?: h["scheduledAt"].str().orEmpty()) {
-                            Text(h["prompt"].str() ?: "—", fontSize = 13.sp, color = T.Ink, maxLines = 3, overflow = TextOverflow.Ellipsis)
-                        }
-                        if (i < history.lastIndex) {
-                            HorizontalDivider(Modifier.padding(horizontal = 16.dp), color = T.Border)
-                        }
-                    }
-                }
-            }
-        }
-        return
-    }
-
-    val filtered = records.filter {
-        when (filter) {
-            "active" -> it["status"].str() == "active"
-            "inactive" -> it["status"].str() == "inactive"
-            else -> true
-        }
-    }
-
-    SettingsScaffold(L.scheduleTitle(), onBack) {
-        Row(Modifier.padding(horizontal = 18.dp, vertical = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            listOf("all" to L.scheduleListAria(), "active" to L.statusActive(), "inactive" to L.statusInactive()).forEach { (id, label) ->
-                FilterChip(
-                    selected = filter == id,
-                    onClick = { filter = id },
-                    label = { Text(label, fontSize = 13.sp) },
-                )
-            }
-            Spacer(Modifier.weight(1f))
-            if ("schedule.create" in ops) {
-                TextButton({ creating = true }) { Text(L.add()) }
-            }
-        }
-        when {
-            loading -> ErrorOrEmpty(L.loading())
-            error != null -> ErrorOrEmpty(error!!, onRetry = ::reload)
-            filtered.isEmpty() -> ErrorOrEmpty(L.emptySchedules(), onRetry = ::reload)
-            else -> SettingsCard {
-                filtered.forEachIndexed { i, row ->
-                    SettingsNavRow(
-                        title = row["title"].str() ?: row["id"].str().orEmpty(),
-                        value = if (row["status"].str() == "active") L.statusActive() else L.statusInactive(),
-                        divider = i < filtered.lastIndex,
-                        onClick = { detail = row },
-                    )
-                }
-            }
-        }
-    }
-}
 
 // ---------- Credentials ----------
 

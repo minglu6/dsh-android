@@ -153,7 +153,7 @@ fun ModelSheet(catalog: ModelCatalog?, cur: ModelChoice?, onDismiss: () -> Unit,
             if (ms.isEmpty()) return@forEach
             Text(g.name, fontSize = 13.sp, color = T.Text3, modifier = Modifier.padding(horizontal = 22.dp, vertical = 4.dp))
             ms.forEach { m ->
-                OptionRow(m.name, m.description, D.database, selected = cur?.provider == m.provider && cur.model == m.id) {
+                OptionRow(m.name, m.description, D.data, selected = cur?.provider == m.provider && cur.model == m.id) {
                     onPick(ModelChoice(m.provider, m.id, m.name, m.efforts.firstOrNull { it.id == cur?.effort }?.id ?: m.defaultEffort))
                 }
             }
@@ -168,11 +168,10 @@ fun ModelSheet(catalog: ModelCatalog?, cur: ModelChoice?, onDismiss: () -> Unit,
 
 @Composable
 fun PermissionSheet(cur: String, onDismiss: () -> Unit, onPick: (String) -> Unit) {
-    val icons = mapOf("read-only" to D.think, "workspace-write" to D.shield, "danger-full-access" to D.warning)
     val supported = "permissions.set" in Pocket.ops.value
     PocketSheet(onDismiss) {
         SheetTitle("访问模式")
-        PERMISSION_LABEL.forEach { (id, l) -> OptionRow(l.first, l.second, icons[id], selected = cur == id, enabled = supported || Pocket.chat.value == null) { onPick(id) } }
+        PERMISSION_LABEL.forEach { (id, l) -> OptionRow(l.first, l.second, D.permission(id), selected = cur == id, enabled = supported || Pocket.chat.value == null) { onPick(id) } }
     }
 }
 
@@ -237,11 +236,11 @@ fun PlusSheet(
         OptionRow(L.file(), icon = D.paperclip, code = "file", enabled = inChat) { pick { onFile(); onDismiss() } }
         OptionRow("目标", icon = D.goal, code = "goal", trailing = "设置或查看长期任务目标", enabled = cmds && inChat) { pick { onGoal() } }
         OptionRow("计划", icon = D.plan, code = "plan", trailing = "进入或退出计划模式", enabled = cmds && inChat) { pick { onPlan(); onDismiss() } }
-        OptionRow("反馈", icon = D.send, code = "feedback", trailing = "发送关于当前会话的反馈", enabled = cmds && inChat) { pick { onFeedback() } }
+        OptionRow("反馈", icon = D.paperPlane, code = "feedback", trailing = "发送关于当前会话的反馈", enabled = cmds && inChat) { pick { onFeedback() } }
         SectionLabel(L.sectionCommands())
         OptionRow("压缩", icon = D.compact, code = "compact", trailing = "压缩以上对话内容", enabled = cmds && inChat) { pick { onCompact(); onDismiss() } }
-        OptionRow("权限", icon = D.shield, code = "permission", trailing = "切换权限预设") { pick { onPerm() } }
-        OptionRow("模型", icon = D.database, code = "model", trailing = "选择本会话使用的模型") { pick { onModel() } }
+        OptionRow("权限", icon = D.permission("danger-full-access"), code = "permission", trailing = "切换权限预设") { pick { onPerm() } }
+        OptionRow("模型", icon = D.data, code = "model", trailing = "选择本会话使用的模型") { pick { onModel() } }
         OptionRow("下载日志", icon = D.download, code = "export", trailing = "将当前会话导出为 ZIP", enabled = export && inChat) { pick { onExport(); onDismiss() } }
     }
 }
@@ -274,7 +273,7 @@ fun MoreSheet(chat: ChatState?, onDismiss: () -> Unit, onFeedback: () -> Unit, o
         // Official dsh Session Header ⋯ (dsh-session-log-export HeaderAction): download always listed;
         // feedback when that path is available. Need a session → disable (never hide into an empty sheet).
         OptionRow("下载 Session 日志", icon = D.download, enabled = export && inChat) { onExport(); onDismiss() }
-        if (cmds) OptionRow("反馈", icon = D.send, enabled = inChat) { onFeedback() }
+        if (cmds) OptionRow("反馈", icon = D.paperPlane, enabled = inChat) { onFeedback() }
         val fork = "sessions.fork" in Pocket.ops.value
         if (fork && chat != null) {
             OptionRow(
@@ -345,7 +344,7 @@ fun PanelSheet(
         SectionLabel("开始")
         // Navigate by replacing Sheet.Panel — do not call onDismiss() (that would clear to Sheet.None).
         if (files) OptionRow("工作区文件", "浏览会话工作区的文件", D.folderOpen) { onFiles() }
-        if (terminal) OptionRow("终端", "在会话工作区运行命令", D.code) { onTerminal() }
+        if (terminal) OptionRow("终端", "在会话工作区运行命令", D.terminal) { onTerminal() }
         if (jobs) OptionRow("后台任务", "查看后台任务", D.clock) { onJobs() }
         // Desktop conversation.todo.title = 任务
         if (hasTodo) {
@@ -481,7 +480,7 @@ fun FilesSheet(sessionId: String, onDismiss: () -> Unit) {
         }
         entries.forEach { (name, type) ->
             val child = if (path == "." || path.isEmpty()) name else "${path.trimEnd('/')}/$name"
-            OptionRow(name, type, if (type == "directory") D.folderOpen else D.plan) {
+            OptionRow(name, type, if (type == "directory") D.folderOpen else D.document) {
                 if (type == "directory") load(child) else previewPath = child
             }
         }
@@ -566,17 +565,17 @@ fun CommandPopupSheet(
         OptionRow("计划", icon = D.plan, code = "plan", trailing = "进入或退出计划模式", enabled = cmds && inChat) {
             pick { onPlan(); onDismiss() }
         }
-        OptionRow("反馈", icon = D.send, code = "feedback", trailing = "发送关于当前会话的反馈", enabled = cmds && inChat) {
+        OptionRow("反馈", icon = D.paperPlane, code = "feedback", trailing = "发送关于当前会话的反馈", enabled = cmds && inChat) {
             pick { onFeedback() }
         }
         SectionLabel(L.sectionCommands())
         OptionRow("压缩", icon = D.compact, code = "compact", trailing = "压缩以上对话内容", enabled = cmds && inChat) {
             pick { onCompact(); onDismiss() }
         }
-        OptionRow("权限", icon = D.shield, code = "permission", trailing = "切换权限预设") {
+        OptionRow("权限", icon = D.permission("danger-full-access"), code = "permission", trailing = "切换权限预设") {
             pick { onPerm() }
         }
-        OptionRow("模型", icon = D.database, code = "model", trailing = "选择本会话使用的模型") {
+        OptionRow("模型", icon = D.data, code = "model", trailing = "选择本会话使用的模型") {
             pick { onModel() }
         }
         OptionRow("下载日志", icon = D.download, code = "export", trailing = "将当前会话导出为 ZIP", enabled = export && inChat) {

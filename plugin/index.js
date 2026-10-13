@@ -17,7 +17,7 @@ import {
   attachmentOps, workspaceChangesOps, uploadOps, userQuestionOps,
 } from './src/parity-ops.js'
 import {
-  modelsSettingsOps, pluginsOps, pluginInventoryOps, scheduleOps, credentialsOps,
+  modelsSettingsOps, pluginsOps, pluginSettingsOps, pluginInventoryOps, scheduleOps, credentialsOps,
 } from './src/settings-ops.js'
 import { registerPairRoute } from './src/web-route.js'
 import { createManageApi, pairingUri, pairingString, connectionTypeForHost } from './src/manage.js'
@@ -200,6 +200,9 @@ export function apply(ctx, config = {}) {
       const inventory = c.get?.('pluginInventory') ?? null
       server.registerOps(pluginInventoryOps(inventory, c.pluginManager))
     })
+  })
+  ctx.inject(['settingsController'], (c) => {
+    c.effect(() => server.registerOps(pluginSettingsOps(c.settingsController)))
   })
   ctx.inject(['schedule'], (c) => {
     c.effect(() => server.registerOps(scheduleOps(c.schedule)))

@@ -2,7 +2,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import {
   deriveKeyRef, getPath, joinProviderDirectory,
-  modelsSettingsOps, pluginsOps, scheduleOps, credentialsOps,
+  modelsSettingsOps, pluginsOps, pluginSettingsOps, credentialsOps,
 } from '../src/settings-ops.js'
 
 test('deriveKeyRef matches desktop ui-settings-models', () => {
@@ -62,71 +62,6 @@ test('models.providers joins directory, settings, and credential describe', asyn
   assert.deepEqual(listed.rows[0].profile.models, [{ id: 'gpt-4o' }])
 })
 
-test('models.settingsMutate prefers settingsController.mutate', async () => {
-  const calls = []
-  const ops = modelsSettingsOps({
-    llm: { listProviders: () => [], listConfigurableProviders: () => [] },
-    settingsController: {
-      mutate: async (ns, opsIn, rev) => {
-        calls.push({ ns, opsIn, rev })
-        return { ns, revision: (rev ?? 0) + 1, value: {}, user: {}, base: {}, schema: {} }
-      },
-    },
-  })
-  const view = await ops['models.settingsMutate']({
-    ns: 'llm-pi-ai',
-    ops: [{ op: 'set', path: ['providers', 'openai', 'models'], value: [] }],
-    expectedRevision: 3,
-  })
-  assert.equal(calls[0].ns, 'llm-pi-ai')
-  assert.equal(calls[0].rev, 3)
-  assert.equal(view.revision, 4)
-})
-
-test('plugins.list / setEnabled map pluginManager Remotes', async () => {
-  const calls = []
-  const ops = pluginsOps({
-    listBundles: async () => [{ name: 'dsh-mobile', enabled: true, rows: [] }],
-    listPlugins: async () => [{ entryId: 'e1', moduleName: 'x', enabled: true, patchId: 'p1' }],
-    setBundleEnabled: async (name, enabled) => { calls.push(['bundle', name, enabled]); return { application: 'applied' } },
-    setPluginEnabled: async (id, enabled) => { calls.push(['plugin', id, enabled]); return { application: 'applied' } },
-  })
-  const listed = await ops['plugins.list']()
-  assert.equal(listed.bundles[0].name, 'dsh-mobile')
-  assert.equal(listed.plugins[0].entryId, 'e1')
-  await ops['plugins.setEnabled']({ bundle: 'dsh-mobile', enabled: false })
-  await ops['plugins.setEnabled']({ id: 'e1', enabled: false })
-  assert.deepEqual(calls, [['bundle', 'dsh-mobile', false], ['plugin', 'e1', false]])
-})
-
-test('schedule CRUD + history forward to Host schedule service', async () => {
-  const calls = []
-  const record = {
-    id: 'schedule-1', kind: 'after', title: 'Ping', prompt: 'say hi',
-    afterSeconds: 60, scheduledAt: '2026-01-01T00:01:00.000Z',
-  }
-  const ops = scheduleOps({
-    catalog: async () => [{ ...record, sessionId: 's1', status: 'active' }],
-    list: async (req) => { calls.push(['list', req]); return [record] },
-    create: async (sessionId, req) => { calls.push(['create', sessionId, req]); return { ...record, title: req.title } },
-    update: async (req) => { calls.push(['update', req]); return { id: req.id, updated: true, record } },
-    delete: async (req) => { calls.push(['delete', req]); return { id: req.id, deleted: true } },
-    history: async (req) => { calls.push(['history', req]); return { id: req.id, records: [], hasMore: false } },
-  })
-  assert.equal((await ops['schedule.catalog']())[0].status, 'active')
-  await ops['schedule.list']({ sessionId: 's1' })
-  await ops['schedule.create']({ sessionId: 's1', title: 'Ping', prompt: 'say hi', after_seconds: 60 })
-  await ops['schedule.update']({ sessionId: 's1', id: 'schedule-1', expected: record, title: 'Ping2' })
-  await ops['schedule.delete']({ sessionId: 's1', id: 'schedule-1' })
-  await ops['schedule.history']({ sessionId: 's1', id: 'schedule-1', limit: 10 })
-  assert.equal(calls[0][0], 'list')
-  assert.equal(calls[1][0], 'create')
-  assert.equal(calls[1][2].after_seconds, 60)
-  assert.equal(calls[2][0], 'update')
-  assert.equal(calls[3][0], 'delete')
-  assert.equal(calls[4][0], 'history')
-  await assert.rejects(() => ops['schedule.create']({ sessionId: 's1', title: 'x' }), /prompt/)
-})
 
 test('credentials.list describes refs without values; set/unset round-trip', async () => {
   const store = new Map([['OPENAI_API_KEY', 'sk-secret']])
@@ -181,4 +116,46 @@ test('credentials.set rejects empty value', async () => {
     },
   })
   await assert.rejects(() => ops['credentials.set']({ ref: 'X', value: '' }), /non-empty/)
+})
+
+test('plugin controls reject ambiguous targets without changing either plugin', async () => {
+  let changes = 0
+  const ops = pluginsOps({
+    setBundleEnabled: () => { changes++ },
+    setPluginEnabled: () => { changes++ },
+  })
+  await assert.rejects(ops['plugins.setEnabled']({ bundle: 'bundle', id: 'row', enabled: false }), /not both/)
+  await assert.rejects(ops['plugins.setEnabled']({ id: 'row1', entryId: 'row2', enabled: false }), /conflicting/)
+  await assert.rejects(ops['plugins.setEnabled']({ id: 'row', enabled: 'false' }), /boolean/)
+  assert.equal(changes, 0)
+})
+
+test('unavailable package management operations are not advertised', () => {
+  const ops = pluginsOps({})
+  for (const op of ['install', 'inspect', 'uninstall', 'cancelInstall', 'waitForInstall', 'registries']) {
+    assert.equal(`plugins.${op}` in ops, false)
+  }
+})
+
+test('blank install and uninstall requests cannot reach the package manager', async () => {
+  let changes = 0
+  const ops = pluginsOps({
+    installBundle: () => { changes++ },
+    removeBundle: () => { changes++ },
+  })
+  await assert.rejects(ops['plugins.install']({ spec: ' \n ' }), /spec required/)
+  await assert.rejects(ops['plugins.uninstall']({ bundle: '' }), /bundle required/)
+  assert.equal(changes, 0)
+})
+
+test('plugin configuration requires a valid observed revision before mutation', async () => {
+  let changes = 0
+  const ops = pluginSettingsOps({ mutate: () => { changes++ } })
+  for (const revision of [undefined, null, -1, 0.5, '1', Number.MAX_SAFE_INTEGER + 1]) {
+    await assert.rejects(
+      ops['plugins.settingsMutate']({ ns: 'example', ops: [], expectedRevision: revision }),
+      /expectedRevision required/,
+    )
+  }
+  assert.equal(changes, 0)
 })

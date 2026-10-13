@@ -155,7 +155,7 @@ class ScreenshotTest {
     }
     @Test fun s24_scheduleSettings() = show("24-schedule-settings") {
         Pocket.ops.value = setOf("schedule.catalog", "schedule.create")
-        ScheduleSettingsScreen {}
+        ScheduleSettingsScreen(onBack = {}, onNewTask = {}, onOpenSession = {})
     }
     @Test fun s25_credentialsSettings() = show("25-credentials-settings") {
         Pocket.ops.value = setOf("credentials.list", "credentials.set")

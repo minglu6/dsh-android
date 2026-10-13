@@ -11,7 +11,7 @@ Decision tags used in §9:
 |---|---|
 | **feasible** | Ship on phone with existing or new pocket RPC; adapt to bottom sheets / phone chrome |
 | **needs-plugin** | Host has the data/API; pocket must forward it before UI can finish |
-| **hide** | Requires local desktop chrome (OS picker, embedded browser, plugin install UI, schedule CRUD, credentials). Do not show a stub |
+| **hide** | Requires local desktop chrome (OS picker, embedded browser, native editor). Plugin management, credentials and task management use Host APIs; do not hide them or show stubs. |
 
 Phone constraints (always): desktop `--dsw-alias-*` chrome (light/dark via Appearance), Tokyo Night tokens where terminal/code surfaces need them, Meslo for mono, themed bottom sheets (no system `AlertDialog`), desktop locale strings only, no `FLAG_SECURE`, no secrets in logs, no GMS.
 
@@ -227,13 +227,13 @@ Phone adaptation: themed bottom sheets.
 |---|---|---|
 | 通用设置 | `general.nav` 通用设置; language / appearance / font / transcript / collapse / busy-send / performance | feasible (mostly done, phone-local) |
 | 模型 | settings-models | **done** — native Compose + `models.providers` / `models.settingsMutate` / credentials for API keys |
-| 内置插件 / 插件 | plugin-manager + inventory | **done** — list / enable / detail; local-path install stays **hide** (OS picker) |
-| 自动化任务 | ui-schedule | **done** — catalog / create / edit / delete / history; no pause toggle (desktop `inactive` = ended) |
+| 内置插件 / 插件 | plugin-manager + inventory | **done with native limits** — official groups, bundle/component controls, inspect/install/cancel/uninstall, diagnostics, registry and revision-fenced configuration. Host directory specs work; Android OS directory picker does not. Custom React slots remain Web-only. |
+| 自动化任务 | ui-schedule | **done** — new conversation for creation; searchable catalog, precise rule/title/instruction editing, conflict-safe delete/history. No pause toggle (`inactive` = ended). |
 | 凭证 | credentials describe/set/unset | **done** — list/add/edit/delete; values masked (`configured` only) |
 | Agent 预设 | agent-preset | keep roster info |
 | 打开配置文件 | `openDocument` | **hide** (local desktop editor) |
-| Shell / 终端 limits | settings-shell | optional **needs-plugin** |
-| Web search / subagent / agent-loop / account / session-log | respective locales | hide or limited |
+| Shell / 终端 limits | settings-shell | native fields over `plugins.settingsDescribe/settingsMutate` |
+| Web search / subagent / agent-loop | respective settings namespaces | native configuration; additional namespaces use secret-safe advanced path editing |
 | 连接 / 审批通知 | phone Connections + notify pref | keep |
 
 Appearance values from `ui-theme` locales. Performance: `settings.performance.{compact,detailed}`.

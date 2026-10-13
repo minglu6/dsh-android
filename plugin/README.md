@@ -83,6 +83,17 @@ dsh 发起 `approval/request` 时，如果有已登录的设备在线，插件�
 
 `sessions.follow` 支持 `fromSeq`。手机断线重连后带上次 cursor 续订；服务端按 seq 补帧。
 
+## 插件与自动化管理
+
+Android 页面直接使用官方 Host 服务，不另建定时任务数据库或包管理器：
+
+- `plugins.list/setEnabled/inventory`：包与组件运行态；组件以 `entryId` 关联。
+- `plugins.inspect/registries/install/cancelInstall/waitForInstall/uninstall`：检查来源、安装源选择、安装、取消核对和卸载。支持 npm、Git、tarball、**主机路径**；不读取手机本地插件目录。可选方法仅在 Host 支持时公布。
+- `plugins.settingsDescribe/settingsMutate`：调用官方 `settingsController`，读取经过脱敏的 schema/value/secrets；写入必须携带 `expectedRevision`。冲突需要重新读取，不能静默覆盖。
+- `schedule.catalog/list/create/update/delete/history`：保留官方记录、时区、投递历史和业务结果。Android“新建”进入会话，已有任务编辑携带完整 `expected` 记录。
+
+`ok: true` 仅表示 RPC 返回：客户端仍需检查插件 `application`（含 `restart-required/overridden/failed/cancelled`）和任务 `updated/deleted/code`。安装等待最长 30 分钟，不沿用普通请求的 60 秒超时；不确定的安装保留 `requestId` 供核对，不自动重复提交。插件专属 React 界面不能由原生 Android 执行，公开设置可用原生或高级路径编辑。
+
 ## 遗留 iroh sidecar
 
 `plugin/iroh`（`pocket-host`）仍可在 `config.iroh: true` 时启动，供桌面侧实验；**不**再参与手机配对，Android APK 也不再打包 `libpocket_iroh.so` / JNI。

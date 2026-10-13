@@ -6,7 +6,7 @@ Plugin surface: `dsh-plugin-pocket` WebSocket ops (+ optional Cordis injects).
 
 **Decision rules**
 - **implement** — can work on phone via existing follow/session data and/or new plugin RPC over in-process host services (including the **host-machine PTY / terminal**, which is useful remotely).
-- **hide** — only surfaces that require a **local desktop app/editor/browser chrome** (open-in-editor, embedded browser webview, OS directory picker for plugin install / open-config) and have no meaningful remote substitute.
+- **hide** — surfaces requiring local desktop chrome (open-in-editor, embedded browser, OS directory picker). A plugin spec can still name a host directory; it never refers to Android storage.
 
 | Feature | Desktop behavior (0.2.1-alpha.2) | Decision | Status | Notes |
 |---|---|---|---|---|
@@ -33,16 +33,16 @@ Plugin surface: `dsh-plugin-pocket` WebSocket ops (+ optional Cordis injects).
 | Composer + → 压缩 | `/compact` | implement | done | `commands.execute` `/compact`. |
 | Composer + → 权限 / 模型 | Permission presets / model catalog | keep | done | |
 | Composer + → 下载日志 | Session export | implement | done | Same `session.export`. |
-| Drawer 插件 | Plugin manager | implement | done | Under 新会话 (pinwheel icon → native Plugins); Settings entry kept; local-path install hide. |
-| Drawer 自动化任务 | Schedule panel | implement | done | Under 新会话 (clock icon → native Schedules); Settings entry kept. |
+| Drawer 插件 | Official configuration, optional capabilities, installed packages | implement | done | Native grouped list, runtime component switches, inspection/install/cancel/uninstall, registry and diagnostics. |
+| Drawer 自动化任务 | Search/filter catalog, rule editing and delivery records | implement | done | New task opens a new conversation, matching the desktop; no separate delay-only creation form. |
 | Drawer 会话 header | Search / view options / add workspace | implement | done | Desktop ui-workspace icons + locales; view options sheet; add workspace via host path (no OS picker). |
 | Drawer 工作区 / 会话 | Group by cwd; open session | keep | done | groupBy / orderBy / archivedFilter prefs mirror desktop. |
 | New-chat 工作区 chip | Workspace picker | implement (limited) | done | Known session `cwd`s only; no OS directory dialog. |
 | New-chat / settings Agent 预设 | Preset roster | keep | done | |
 | Settings → 通用设置 | Locale, theme, font, transcript, collapse, busy-send, performance | implement | done | Phone-local prefs; official labels/values. |
 | Settings → 模型 | Provider / credentials configuration | implement | done | `models.providers` + credential set/unset; Compose detail. |
-| Settings → 插件 | Plugin manager | implement | done | `plugins.list` / `setEnabled`; npm install op available, path picker hide. |
-| Settings → 自动化任务 | Schedule catalog CRUD + history | implement | done | `schedule.*` pocket ops over Host `schedule`. |
+| Settings → 插件 | Plugin manager | implement | done with native limits | Official Host `ChangeResult` outcomes, install cancellation/reconciliation and build-script approval; native settings with revision CAS, redacted secret-safe advanced edits. Third-party React configuration slots remain Web-only. |
+| Settings → 自动化任务 | Schedule catalog, edits and delivery history | implement | done | One-shot/interval/daily/weekdays/weekly/cron edits with time zone, exact expected-record CAS, history paging, confirmed delete, original conversation link. No pause/run-now invention. |
 | Settings → 凭证 | credentials describe/set/unset (masked) | implement | done | `credentials.*`; values never returned. |
 | Settings → 内置插件 | Plugin inventory | implement | done | Merged into Plugins page (`plugins.inventory` / listPlugins). |
 | Settings → Agent 预设 | Roster / info | keep | done | |
@@ -69,8 +69,35 @@ Plugin surface: `dsh-plugin-pocket` WebSocket ops (+ optional Cordis injects).
 | `jobs.list` / `jobs.kill` | `jobController` | Right-panel background tasks |
 | `terminal.list` / `create` / `follow` / `write` / `resize` / `close` | `terminalController` + `agents` | Host PTY; `follow` pushes `{ev:"terminal"}` |
 | `models.providers` / `providerGet` / `settingsMutate` / `discover` | `llm` + `settings`/`settingsController` + `credentials` | Settings → 模型 |
-| `plugins.list` / `setEnabled` / `install` / `inventory` | `pluginManager` (+ inventory) | Settings → 插件 |
-| `schedule.catalog` / `list` / `create` / `update` / `delete` / `history` | `schedule` | Settings → 自动化任务 |
+| `plugins.list` / `setEnabled` / `inventory` / `inspect` / `registries` / `install` / `cancelInstall` / `waitForInstall` / `uninstall` | `pluginManager` (+ inventory) | Official package management; unavailable optional methods are not advertised. |
+| `plugins.settingsDescribe` / `settingsMutate` | `settingsController` | Redacted namespaces/schema/secrets and required observed revision; preserve Host conflict errors. |
+| `schedule.catalog` / `list` / `create` / `update` / `delete` / `history` | `schedule` | Official task records and business outcomes; Android creation navigates to a conversation, editing uses `update`. |
 | `credentials.list` / `describe` / `set` / `unset` / `deleteRecord` | `credentials` | Settings → 凭证 (masked) |
 
 Existing ops kept: sessions.*, prompt, cancel, follow/unfollow, models.catalog/select, permissions.*, presets.list, approval.*, devices.*, pairing.*.
+
+## Mobile adaptation and limits
+
+Source of truth: the running Mac DSH Web and official `ui-plugin-manager` / `ui-schedule`, not a second mobile task engine. `dsh-mobile` is a reference for narrow-screen navigation only.
+
+- List → detail navigation replaces desktop side-by-side panes; controls remain touch-sized.
+- Plugin installation is a host operation, including npm, Git, tarball and host-path specs. Installing code or approving package scripts grants the host user's permissions.
+- Failed writes retain drafts. Transport success is not application success: plugin `failed` / `overridden` / `restart-required` and schedule `schedule_conflict` remain distinct.
+- The automation catalog refreshes while open; saved delivery history is a durable inbox receipt, not proof that the model completed the task.
+- Native Android cannot execute third-party React slots. Exposed Host settings remain editable; custom plugin interfaces still require Web.
+
+### Icons
+
+Permission controls use the official `PermissionIconReadOnlyRegular`,
+`PermissionIconWorkspaceWriteRegular`, `PermissionIconFullAccessRegular` and
+`PermissionIconAutoReviewRegular` paths. Unknown Host presets have no invented
+glyph. The composer and permission menu share the same mapping.
+
+Plugin cards preserve the official fixed-color artwork and gradients rather
+than tinting them into generic navigation icons. Built-in configuration art is
+native; bundle icons use the Host's SVG data URI with no network loading.
+
+Model commands use `IconData`, feedback uses `IconPaperPlane`, the terminal
+entry uses the official `TerminalIcon` prompt, and settings navigation uses
+the desktop's Medium model/personalization glyphs and clock. Compact retains
+the official 0.35-opacity ring; generic files use the document glyph, not Plan.

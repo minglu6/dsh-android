@@ -14,6 +14,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalView
@@ -79,9 +80,9 @@ private fun Root(deepLink: MutableStateFlow<PairingLink?>) {
     val active by Pocket.active.collectAsState()
     val profiles by Pocket.profiles.collectAsState()
     val link by deepLink.collectAsState()
-    var screen by remember { mutableStateOf(if (Pocket.active.value == null) Screen.Connections else Screen.Chat) }
+    var screen by rememberSaveable { mutableStateOf(if (Pocket.active.value == null) Screen.Connections else Screen.Chat) }
     /** Plugins / Schedule can open from Settings or the drawer; back returns to the source. */
-    var panelReturn by remember { mutableStateOf(Screen.Settings) }
+    var panelReturn by rememberSaveable { mutableStateOf(Screen.Settings) }
     val drawer = rememberDrawerState(DrawerValue.Closed)
     val scope = rememberCoroutineScope()
     val snack = remember { SnackbarHostState() }
@@ -143,7 +144,11 @@ private fun Root(deepLink: MutableStateFlow<PairingLink?>) {
             Screen.General -> GeneralSettingsScreen(onBack = { screen = Screen.Settings })
             Screen.Models -> ModelsSettingsScreen(onBack = { screen = Screen.Settings })
             Screen.Plugins -> PluginsSettingsScreen(onBack = { screen = panelReturn })
-            Screen.Schedule -> ScheduleSettingsScreen(onBack = { screen = panelReturn })
+            Screen.Schedule -> ScheduleSettingsScreen(
+                onBack = { screen = panelReturn },
+                onNewTask = { Pocket.closeChat(); screen = Screen.Chat },
+                onOpenSession = { Pocket.openSession(it); screen = Screen.Chat },
+            )
             Screen.Credentials -> CredentialsSettingsScreen(onBack = { screen = Screen.Settings })
             Screen.Chat -> {
                 val drawerContent: @Composable () -> Unit = {
