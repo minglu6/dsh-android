@@ -20,6 +20,7 @@ import androidx.compose.ui.layout.LayoutCoordinates
 import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalInspectionMode
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
@@ -148,11 +149,9 @@ internal fun InspectorChatTarget(
     val targets = LocalInspectorChatTargets.current
     val token = remember(itemKey, targets) { Any() }
     val requester = remember { BringIntoViewRequester() }
-    LaunchedEffect(reveal) {
-        if (reveal) {
-            withFrameNanos { }
-            requester.bringIntoView()
-        }
+    val inspection = LocalInspectionMode.current
+    LaunchedEffect(reveal, inspection) {
+        if (reveal && !inspection) requester.bringIntoView()
     }
     DisposableEffect(token, targets) {
         onDispose { targets?.rows?.remove(token) }

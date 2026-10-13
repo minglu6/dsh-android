@@ -2,10 +2,10 @@ package dev.dsh.pocket.app
 
 import androidx.compose.foundation.layout.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.snapshots.Snapshot
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.test.*
-import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleOwner
@@ -62,12 +62,19 @@ class JobsActionTest {
         client.javaClass.getDeclaredField("transport").apply { isAccessible = true }.set(client, transport)
         clientField.set(Pocket, client)
         owner.registry.currentState = Lifecycle.State.RESUMED
+        rule.mainClock.autoAdvance = true
     }
 
     @After fun cleanup() {
-        rule.runOnIdle { owner.registry.currentState = Lifecycle.State.DESTROYED }
-        client.close()
-        clientField.set(Pocket, originalClient)
+        // Resume-autoAdvance after a pause pumps JobsAction's delay() (and any
+        // leaked frame awaiters) forever; keep the clock paused through teardown.
+        rule.mainClock.autoAdvance = false
+        try {
+            rule.runOnUiThread { owner.registry.currentState = Lifecycle.State.DESTROYED }
+        } finally {
+            client.close()
+            clientField.set(Pocket, originalClient)
+        }
     }
 
     private fun show(onClick: () -> Unit = {}) {
@@ -142,12 +149,24 @@ class JobsActionTest {
         rule.runOnIdle { host = "host-B" }
         rule.onNodeWithTag("jobsAction").assertDoesNotExist()
         reply(request(), listOf("running"))
-        rule.runOnIdle { available = false }
+        // Pause the clock so disabling availability cannot be auto-advanced into
+        // the next poll. Do not turn autoAdvance back on: that pumps delay()
+        // (and any leaked frame awaiters) until Espresso's idle timeout.
+        rule.mainClock.autoAdvance = false
+        rule.runOnUiThread {
+            available = false
+            Snapshot.sendApplyNotifications()
+        }
+        repeat(5) { rule.mainClock.advanceTimeByFrame() }
         rule.onNodeWithTag("jobsAction").assertDoesNotExist()
+        requests.clear()
         rule.mainClock.advanceTimeBy(6500)
         assertTrue(requests.isEmpty())
-        rule.runOnIdle { available = true }
-        rule.waitForIdle()
+        rule.runOnUiThread {
+            available = true
+            Snapshot.sendApplyNotifications()
+        }
+        repeat(5) { rule.mainClock.advanceTimeByFrame() }
         reply(request())
         rule.onNodeWithTag("jobsAction").assertDoesNotExist()
     }

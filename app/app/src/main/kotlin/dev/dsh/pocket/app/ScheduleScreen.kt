@@ -1,5 +1,6 @@
 package dev.dsh.pocket.app
 
+import android.animation.ValueAnimator
 import android.app.DatePickerDialog
 import android.app.TimePickerDialog
 import androidx.activity.compose.BackHandler
@@ -67,7 +68,10 @@ private fun scheduleStamp(value: String?, zone: String? = null): String {
 @Composable
 private fun scheduleClock(): Instant {
     var now by remember { mutableStateOf(Instant.now()) }
-    LaunchedEffect(Unit) { while (true) { delay(30_000); now = Instant.now() } }
+    LaunchedEffect(Unit) {
+        if (!ValueAnimator.areAnimatorsEnabled()) return@LaunchedEffect
+        while (true) { delay(30_000); now = Instant.now() }
+    }
     return now
 }
 

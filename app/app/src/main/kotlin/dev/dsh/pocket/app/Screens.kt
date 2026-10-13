@@ -37,6 +37,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import dev.dsh.pocket.protocol.classifyWsRoute
 import dev.dsh.pocket.protocol.Route
 import android.Manifest
+import android.animation.ValueAnimator
 import android.content.pm.PackageManager
 import android.os.Build
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -680,6 +681,9 @@ fun ConnectionsScreen(
     LaunchedEffect(profiles, active) {
         while (true) {
             poller.refresh(profiles.filter { it.id != active })
+            // Compose waitForIdle advances LaunchedEffect delay on the test clock.
+            // An infinite poll would never settle Espresso/Compose idle.
+            if (!ValueAnimator.areAnimatorsEnabled()) return@LaunchedEffect
             kotlinx.coroutines.delay(10_000)
         }
     }
@@ -701,6 +705,7 @@ fun ConnectionsScreen(
             val found = withContext(Dispatchers.IO) { LanDiscovery.scan(ctx, canceled = canceled) }
             nearby = LanDiscovery.unpairedNearby(found, Pocket.profiles.value)
             Pocket.applyDiscoveredHosts(found)
+            if (!ValueAnimator.areAnimatorsEnabled()) return@LaunchedEffect
             kotlinx.coroutines.delay(8_000)
         }
     }
@@ -735,7 +740,7 @@ fun ConnectionsScreen(
 
     val compatibility by Pocket.compatibility.collectAsState()
     val lanLabel = PeerTransport.Lan.label(en)
-    Column(Modifier.fillMaxSize().background(Conn.Bg).systemBarsPadding().verticalScroll(rememberScrollState())) {
+    Column(Modifier.fillMaxSize().background(Conn.Bg).systemBarsPadding().verticalScroll(rememberScrollState()).testTag("connectionsScreen")) {
         ConnHeader(
             title = L.connections(),
             onBack = if (canBack) onBack else null,

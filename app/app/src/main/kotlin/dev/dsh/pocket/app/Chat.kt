@@ -38,6 +38,7 @@ import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import android.animation.ValueAnimator
 import android.graphics.BitmapFactory
 import dev.dsh.pocket.protocol.Approval
 import dev.dsh.pocket.protocol.CompatibilityIssue
@@ -702,8 +703,13 @@ internal fun Transcript(
             InspectorNavigation.revealItemKey = null
         }
     }
-    LaunchedEffect(n, lastLen, st.running) {
-        if (followBottom && n > 0 && !st.loadingOlder) list.animateScrollToItem(n)
+    val inspection = androidx.compose.ui.platform.LocalInspectionMode.current
+    val skipMotion = inspection || !ValueAnimator.areAnimatorsEnabled()
+    LaunchedEffect(n, lastLen, st.running, skipMotion) {
+        if (followBottom && n > 0 && !st.loadingOlder) {
+            // Jump, don't animate: Robolectric NATIVE often never clears isScrollInProgress.
+            if (skipMotion) list.scrollToItem(n) else list.animateScrollToItem(n)
+        }
     }
     // Scroll-to-top loads older history (no extra chrome — same LazyColumn).
     var historyArmed by remember(st.sessionId) { mutableStateOf(false) }
@@ -718,7 +724,8 @@ internal fun Transcript(
             Pocket.loadOlderHistory()
         }
     }
-    LaunchedEffect(list.isScrollInProgress) {
+    LaunchedEffect(list.isScrollInProgress, skipMotion) {
+        if (skipMotion) return@LaunchedEffect
         if (!list.isScrollInProgress) followBottom = !list.canScrollForward
     }
     if (st.loaded && st.items.isEmpty() && !st.running) { EmptyState(D.chat, "开始对话", "发送第一条消息"); return }
@@ -817,7 +824,14 @@ internal fun Transcript(
         item(key = "bottom") { Spacer(Modifier.height(1.dp)) }
     }
         if (list.canScrollForward) FilledTonalIconButton(
-            onClick = { followBottom = true; scrollScope.launch { list.animateScrollToItem(list.layoutInfo.totalItemsCount - 1) } },
+            onClick = {
+                followBottom = true
+                scrollScope.launch {
+                    val target = list.layoutInfo.totalItemsCount - 1
+                    if (ValueAnimator.areAnimatorsEnabled()) list.animateScrollToItem(target)
+                    else list.scrollToItem(target)
+                }
+            },
             modifier = Modifier.align(Alignment.BottomEnd).padding(12.dp).size(48.dp),
         ) { Icon(D.chevronDown, "回到底部") }
     }
@@ -1030,11 +1044,8 @@ internal fun ProcessGroupRow(
         } else if (open && hasContent) {
             val scroll = rememberScrollState()
             val maxHeight = minOf(400, androidx.compose.ui.platform.LocalConfiguration.current.screenHeightDp / 2).dp
-            LaunchedEffect(open) {
-                if (!proc.closed) {
-                    withFrameNanos { }
-                    scroll.scrollTo(scroll.maxValue)
-                }
+            LaunchedEffect(open, proc.members.size) {
+                if (open && !proc.closed) scroll.scrollTo(scroll.maxValue)
             }
             Column(Modifier.padding(top = 8.dp).heightIn(max = maxHeight).verticalScroll(scroll), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 proc.members.forEach { member -> key(member.key) { ProcessMember(member, revealItemKey, onTool) } }

@@ -1,5 +1,6 @@
 package dev.dsh.pocket.app
 
+import android.animation.ValueAnimator
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -88,9 +89,15 @@ internal fun WorkspaceDirectoryDialog(
     DisposableEffect(state) { onDispose { state.dispose() } }
     LaunchedEffect(state.loading) { slowScan = false; if (state.loading) { delay(300); slowScan = true } }
     LaunchedEffect(state.child?.path, horizontal.maxValue) {
-        if (state.child != null) horizontal.animateScrollTo(horizontal.maxValue) else horizontal.scrollTo(0)
+        if (state.child != null) {
+            if (ValueAnimator.areAnimatorsEnabled()) horizontal.animateScrollTo(horizontal.maxValue)
+            else horizontal.scrollTo(horizontal.maxValue)
+        } else horizontal.scrollTo(0)
     }
-    LaunchedEffect(state.target, crumbScroll.maxValue) { crumbScroll.animateScrollTo(crumbScroll.maxValue) }
+    LaunchedEffect(state.target, crumbScroll.maxValue) {
+        if (ValueAnimator.areAnimatorsEnabled()) crumbScroll.animateScrollTo(crumbScroll.maxValue)
+        else crumbScroll.scrollTo(crumbScroll.maxValue)
+    }
     LaunchedEffect(state.target) { saveError = null }
 
     fun cancel() {
