@@ -76,7 +76,13 @@ export function apply(ctx, config = {}) {
   let taskFallback = null
   const server = createPocketServer({
     sessionController: ctx.sessionController, token, host: bindHost, port, devices, pairing,
-    info: { plugin: PKG.name, version: PKG.version, instanceId },
+    info: {
+      plugin: PKG.name,
+      version: PKG.version,
+      instanceId,
+      // Phone VersionCompatibility requires this floor; bump together with app minSdk policy.
+      minimumAppVersion: '0.1.0',
+    },
     onSessionEvent: (fn) => { listeners.add(fn); return () => listeners.delete(fn) },
     getDiagnostics: buildDiagnostics,
     onSessionLifecycle: (kind, args) => {

@@ -705,12 +705,14 @@ fun ConnectionsScreen(pairLink: PairingLink?, onPairLinkConsumed: () -> Unit, ca
         showPair = true
     }
 
+    val compatibility by Pocket.compatibility.collectAsState()
     Column(Modifier.fillMaxSize().background(Conn.Bg).systemBarsPadding().verticalScroll(rememberScrollState())) {
         ConnHeader(
             title = L.connections(),
             onBack = if (canBack) onBack else null,
             onOverflow = { showOverflow = true },
         )
+        CompatibilityBanner(compatibility)
         if (sorted.isNotEmpty()) {
             Text(L.pairedDevices(), fontSize = 12.sp, color = Conn.FgMute, modifier = Modifier.padding(start = 22.dp, top = 2.dp, bottom = 4.dp))
             ConnCard {

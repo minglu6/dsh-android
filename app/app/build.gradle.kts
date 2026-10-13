@@ -5,6 +5,23 @@ plugins {
     id("org.jetbrains.kotlin.plugin.serialization")
     id("io.github.takahirom.roborazzi")
 }
+
+val releaseStoreFile = providers.environmentVariable("DSH_ANDROID_KEYSTORE_FILE")
+val releaseStorePassword = providers.environmentVariable("ANDROID_KEYSTORE_PASSWORD")
+    .orElse(providers.environmentVariable("DSH_ANDROID_KEYSTORE_PASSWORD"))
+val releaseKeyAlias = providers.environmentVariable("ANDROID_KEY_ALIAS")
+    .orElse(providers.environmentVariable("DSH_ANDROID_KEY_ALIAS"))
+val releaseKeyPassword = providers.environmentVariable("ANDROID_KEY_PASSWORD")
+    .orElse(providers.environmentVariable("DSH_ANDROID_KEY_PASSWORD"))
+val releaseSigningConfigured = listOf(
+    releaseStoreFile,
+    releaseStorePassword,
+    releaseKeyAlias,
+    releaseKeyPassword,
+).all { it.isPresent && it.get().isNotBlank() }
+
+val appVersionName = "0.1.0-m3"
+
 android {
     namespace = "dev.dsh.pocket.app"
     compileSdk = 35
@@ -13,14 +30,43 @@ android {
         minSdk = 26
         targetSdk = 35
         versionCode = (System.getenv("GITHUB_RUN_NUMBER") ?: "1").toInt()
-        versionName = "0.1.0-m3"
+        versionName = appVersionName
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+        buildConfigField("String", "APP_VERSION", "\"$appVersionName\"")
     }
     compileOptions { sourceCompatibility = JavaVersion.VERSION_17; targetCompatibility = JavaVersion.VERSION_17 }
     kotlinOptions { jvmTarget = "17" }
     testOptions { unitTests { isIncludeAndroidResources = true } }
     buildFeatures { compose = true; buildConfig = true }
     packaging { resources { excludes += setOf("META-INF/*.kotlin_module", "META-INF/versions/**", "META-INF/{AL2.0,LGPL2.1}") } }
+
+    signingConfigs {
+        create("release") {
+            if (releaseSigningConfigured) {
+                storeFile = file(releaseStoreFile.get())
+                storePassword = releaseStorePassword.get()
+                keyAlias = releaseKeyAlias.get()
+                keyPassword = releaseKeyPassword.get()
+            }
+        }
+    }
+
+    buildTypes {
+        release {
+            isMinifyEnabled = true
+            isShrinkResources = true
+            // Fall back to the debug keystore when CI secrets are absent so PRs stay green.
+            signingConfig = if (releaseSigningConfigured) {
+                signingConfigs.getByName("release")
+            } else {
+                signingConfigs.getByName("debug")
+            }
+            proguardFiles(
+                getDefaultProguardFile("proguard-android-optimize.txt"),
+                "proguard-rules.pro",
+            )
+        }
+    }
 }
 dependencies {
     implementation(project(":core:protocol"))

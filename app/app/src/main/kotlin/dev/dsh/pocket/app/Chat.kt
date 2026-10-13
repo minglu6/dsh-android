@@ -31,6 +31,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import android.graphics.BitmapFactory
 import dev.dsh.pocket.protocol.Approval
+import dev.dsh.pocket.protocol.CompatibilityIssue
+import dev.dsh.pocket.protocol.CompatibilityIssueKind
 import dev.dsh.pocket.protocol.ImageRef
 import dev.dsh.pocket.protocol.Item
 import dev.dsh.pocket.protocol.PromptFile
@@ -58,6 +60,30 @@ enum class Sheet {
     Files, Jobs, Terminal, Todo, Commands, Mentions, FeedbackCategory, FilePreview,
 }
 
+/** Themed handshake hint — warn tint matching approval cards. */
+@Composable
+fun CompatibilityBanner(issue: CompatibilityIssue?) {
+    if (issue == null) return
+    val text = when (issue.kind) {
+        CompatibilityIssueKind.PLUGIN_TOO_OLD -> L.pluginTooOld(issue.requiredVersion)
+        CompatibilityIssueKind.APP_TOO_OLD -> L.appTooOld(issue.requiredVersion)
+        CompatibilityIssueKind.PROTOCOL_UNSUPPORTED -> L.protocolUnsupported()
+    }
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .background(T.WarnTint)
+            .border(1.dp, T.WarnBorder)
+            .padding(horizontal = 16.dp, vertical = 10.dp)
+            .testTag("compatibilityBanner"),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box(Modifier.size(7.dp).clip(CircleShape).background(T.WarnBorder))
+        Spacer(Modifier.width(8.dp))
+        Text(text, fontSize = 13.sp, color = T.WarnText, lineHeight = 18.sp)
+    }
+}
+
 @Composable
 fun ChatRoot(onMenu: () -> Unit, showMenuButton: Boolean = true) {
     val chat by Pocket.chat.collectAsState()
@@ -69,6 +95,7 @@ fun ChatRoot(onMenu: () -> Unit, showMenuButton: Boolean = true) {
     val active by Pocket.active.collectAsState()
     val status by Pocket.status.collectAsState()
     val ops by Pocket.ops.collectAsState()
+    val compatibility by Pocket.compatibility.collectAsState()
     var sheet by remember { mutableStateOf(Sheet.None) }
     var tool by remember { mutableStateOf<Item.Tool?>(null) }
     // New-chat drafts (applied when the session gets created).
@@ -164,6 +191,7 @@ fun ChatRoot(onMenu: () -> Unit, showMenuButton: Boolean = true) {
             onPanel = if (showPanel) ({ sheet = Sheet.Panel }) else null,
             onTeam = { sheet = Sheet.Team }, onPreset = { sheet = Sheet.Preset }, preset = "standard", onNew = { Pocket.closeChat() },
         )
+        CompatibilityBanner(compatibility)
         if (chat == null) {
             Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) { Hero() }
             Row(Modifier.padding(horizontal = 16.dp, vertical = 6.dp), horizontalArrangement = Arrangement.spacedBy(14.dp)) {

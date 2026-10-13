@@ -31,12 +31,27 @@ dsh web
 - [x] M0：插件骨架。支持会话列表、新建、重命名，发消息（排队或引导），取消，订阅流，翻历史，模型列表和切换，心跳，token 鉴权
 - [x] M1：审批转发、设备配对、断点续订
 - [x] M1.5：dsh 内管理 UI（设置「手机连接」分区）
-- [x] M2：Android App。最新调试包：[dsh-android-debug.apk](https://github.com/minglu6/dsh-android/releases/download/dsh-android-latest/dsh-android-debug.apk)
+- [x] M2：Android App。最新包：[dsh-android.apk](https://github.com/minglu6/dsh-android/releases/download/dsh-android-latest/dsh-android.apk)（R8 正式签名） / [dsh-android-debug.apk](https://github.com/minglu6/dsh-android/releases/download/dsh-android-latest/dsh-android-debug.apk)
 - [x] M3：远程连接 — Tailscale / 局域网 host:port（APK 不再含 iroh `.so`）
 - [x] LAN mDNS 自动发现（`_dshpocket._tcp`）、设备状态探测、连接诊断
 - [ ] M4：手机本地模式
 
+## 正式签名（CI）
+
+CI 在 `main` 上构建 **minify + resource shrinking** 的 release APK，并上传到滚动 tag `dsh-android-latest`。
+
+在仓库 Settings → Secrets and variables → Actions 中配置（**不要把 keystore 提交进仓库**）：
+
+| Secret | 含义 |
+|---|---|
+| `ANDROID_KEYSTORE_B64` | release `.jks` / `.keystore` 的 base64 |
+| `ANDROID_KEYSTORE_PASSWORD` | keystore 密码 |
+| `ANDROID_KEY_ALIAS` | key alias |
+| `ANDROID_KEY_PASSWORD` | key 密码 |
+
+未配置时 CI 回退到 debug 签名，流水线仍保持绿色；配置后产出生产签名包。CI 会在使用后删除临时 keystore 文件。
+
 ## 第三方致谢
 
-局域网发现、设备状态轮询与连接诊断部分逻辑改编自
+局域网发现、设备状态轮询、连接诊断、正式签名与纯策略抽取部分逻辑改编自
 [dsh-mobile](https://github.com/saya-ch/dsh-mobile)（Apache-2.0）；改编文件头部含归属说明。

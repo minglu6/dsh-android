@@ -244,6 +244,27 @@ object L {
     fun layoutAuto() = if (en) "Auto" else "自动"
     fun layoutPhone() = if (en) "Phone" else "手机"
     fun layoutDesktop() = if (en) "Desktop" else "桌面"
+
+    // Version compatibility (handshake)
+    fun pluginTooOld(required: String?) = if (en) {
+        "Desktop plugin is too old" + (required?.let { " (need ≥ $it)" } ?: "") +
+            ". Update dsh-plugin-pocket on the computer."
+    } else {
+        "桌面端插件版本过旧" + (required?.let { "（需要 ≥ $it）" } ?: "") +
+            "，请在电脑上升级 dsh-plugin-pocket。"
+    }
+    fun appTooOld(required: String?) = if (en) {
+        "This app is too old" + (required?.let { " (need ≥ $it)" } ?: "") +
+            ". Install the latest dsh-android release."
+    } else {
+        "当前 App 版本过旧" + (required?.let { "（需要 ≥ $it）" } ?: "") +
+            "，请安装最新的 dsh-android。"
+    }
+    fun protocolUnsupported() = if (en) {
+        "Incompatible plugin protocol. Update the desktop plugin and this app together."
+    } else {
+        "插件协议不兼容，请同时升级桌面端插件与本 App。"
+    }
 }
 
 /** Composer primary-action label from running state + [BusySend] pref. */

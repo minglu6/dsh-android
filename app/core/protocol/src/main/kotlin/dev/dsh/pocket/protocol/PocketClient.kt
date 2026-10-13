@@ -20,6 +20,18 @@ data class HelloResult(val raw: JsonObject, val route: Route? = null) {
     val deviceId: String? get() = raw["deviceId"].str() ?: raw["device"]["id"].str()
     /** Present only after a successful pairing. */
     val issuedToken: String? get() = raw["token"].str()
+    val proto: Int? get() = raw["proto"].int()
+    val pluginVersion: String? get() = raw["version"].str()
+    val minimumAppVersion: String? get() = raw["minimumAppVersion"].str()
+
+    /** Versions exchanged in hello/pair for [VersionCompatibility]. */
+    fun handshakeVersions(): HandshakeVersions? {
+        val p = proto ?: return null
+        // Absent plugin version ⇒ older than the floor so the UI asks for an update.
+        val plugin = pluginVersion ?: "0.0.0"
+        val minApp = minimumAppVersion ?: VersionCompatibility.MINIMUM_APP_VERSION
+        return HandshakeVersions(p, plugin, minApp)
+    }
 }
 
 /**
@@ -28,6 +40,8 @@ data class HelloResult(val raw: JsonObject, val route: Route? = null) {
  */
 class PocketClient(
     private val scope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.IO),
+    /** App semver sent in hello/pair for [VersionCompatibility]. */
+    private val appVersion: String = VersionCompatibility.MINIMUM_APP_VERSION,
 ) {
     enum class State { Idle, Connecting, Open, Closed }
 
@@ -60,8 +74,25 @@ class PocketClient(
             val t = dialInOrder(factories)
             attach(t)
             val result = when (auth) {
-                is Auth.Token -> call("hello", jsonOf("proto" to 1, "token" to auth.token, "app" to "dsh-android"))
-                is Auth.Pair -> call("pair", jsonOf("proto" to 1, "code" to auth.code, "name" to auth.deviceName))
+                is Auth.Token -> call(
+                    "hello",
+                    jsonOf(
+                        "proto" to VersionCompatibility.PROTO,
+                        "token" to auth.token,
+                        "app" to "dsh-android",
+                        "appVersion" to appVersion,
+                    ),
+                )
+                is Auth.Pair -> call(
+                    "pair",
+                    jsonOf(
+                        "proto" to VersionCompatibility.PROTO,
+                        "code" to auth.code,
+                        "name" to auth.deviceName,
+                        "app" to "dsh-android",
+                        "appVersion" to appVersion,
+                    ),
+                )
             }
             _state.value = State.Open
             HelloResult(result.obj() ?: JsonObject(emptyMap()), t.route)
