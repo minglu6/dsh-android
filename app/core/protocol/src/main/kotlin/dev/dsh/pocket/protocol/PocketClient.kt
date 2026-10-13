@@ -2,6 +2,7 @@ package dev.dsh.pocket.protocol
 
 import kotlinx.coroutines.*
 import kotlinx.coroutines.channels.BufferOverflow
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.*
 import kotlinx.serialization.json.*
 import okhttp3.OkHttpClient
@@ -158,13 +159,13 @@ class PocketClient(
             pending.remove(id)
         }
         if (reply["ok"].bool() == true) return reply["result"] ?: JsonNull
-        throw PocketError(reply["error"]["code"].str() ?: "error", reply["error"]["message"].str() ?: "")
+        throw PocketError(reply["error"]["code"].str() ?: "error", reply["error"]["message"].str() ?: "", reply["error"]["details"])
     }
 
     // ---- typed helpers
     suspend fun listSessions(): List<SessionSummary> = call("sessions.list")["items"].arr().orEmpty().mapNotNull(SessionSummary::parse)
-    suspend fun createSession(cwd: String? = null, agentPreset: String? = null): String =
-        call("sessions.create", jsonOf("cwd" to cwd, "agentPreset" to agentPreset))["sessionId"].str() ?: throw PocketError("bad-reply", "no sessionId")
+    suspend fun createSession(cwd: String? = null, agentPreset: String? = null, workspaceId: String? = null): String =
+        call("sessions.create", jsonOf("cwd" to cwd, "agentPreset" to agentPreset, "workspaceId" to workspaceId))["sessionId"].str() ?: throw PocketError("bad-reply", "no sessionId")
     suspend fun prompt(
         sessionId: String,
         text: String,
@@ -208,6 +209,36 @@ class PocketClient(
         call("jobs.list", jsonOf("sessionId" to sessionId))
     suspend fun killJob(sessionId: String, jobId: String): JsonElement =
         call("jobs.kill", jsonOf("sessionId" to sessionId, "jobId" to jobId))
+
+    /** Observe without consuming the model's output cursor; cancellation detaches on the Host. */
+    fun followJob(sessionId: String, jobId: String, from: Long? = null): Flow<JsonObject> = flow {
+        coroutineScope {
+            val inbox = Channel<JsonObject>(Channel.UNLIMITED)
+            val collector = launch(start = CoroutineStart.UNDISPATCHED) {
+                events.collect { if (it["ev"].str()?.startsWith("job") == true) inbox.send(it) }
+            }
+            val disconnect = launch {
+                state.first { it == State.Closed }
+                inbox.close(PocketError("transport", closeReason ?: "connection closed"))
+            }
+            var subscription: String? = null
+            try {
+                subscription = call("jobs.follow", jsonOf("sessionId" to sessionId, "jobId" to jobId, "from" to from))["subId"].str()
+                    ?: throw PocketError("bad-reply", "missing job subscription")
+                for (event in inbox) {
+                    if (event["subId"].str() != subscription) continue
+                    when (event["ev"].str()) {
+                        "job" -> (event["frame"] as? JsonObject)?.let { emit(it) }
+                        "job.end" -> break
+                        "job.error" -> throw PocketError(event["error"]["code"].str() ?: "internal", event["error"]["message"].str() ?: "job stream failed")
+                    }
+                }
+            } finally {
+                collector.cancel(); disconnect.cancel(); inbox.cancel()
+                subscription?.let { withContext(NonCancellable) { runCatching { withTimeout(5_000) { unfollow(it) } } } }
+            }
+        }
+    }
     suspend fun listTerminals(sessionId: String): JsonElement =
         call("terminal.list", jsonOf("sessionId" to sessionId))
     suspend fun createTerminal(sessionId: String, cols: Int = 80, rows: Int = 24, id: String? = null): JsonElement =
@@ -318,7 +349,7 @@ class PocketClient(
     suspend fun workspaceChangesSummary(sessionId: String, seq: Long): JsonElement =
         call("workspaceChanges.summary", jsonOf("sessionId" to sessionId, "seq" to seq))
 
-    // ---- Desktop settings parity (models / plugins / schedule / credentials)
+    // ---- Desktop settings parity (models / plugins / schedule)
     suspend fun modelsProviders(): JsonElement = call("models.providers")
     suspend fun modelsProviderGet(provider: String): JsonElement =
         call("models.providerGet", jsonOf("provider" to provider))
@@ -390,24 +421,10 @@ class PocketClient(
             jsonOf("sessionId" to sessionId, "id" to id, "limit" to limit, "before" to before),
         )
 
-    suspend fun credentialsList(refs: List<String> = emptyList()): JsonElement =
-        call(
-            "credentials.list",
-            buildJsonObject {
-                if (refs.isNotEmpty()) putJsonArray("refs") { refs.forEach { add(it) } }
-            },
-        )
-    suspend fun credentialsDescribe(refs: List<String>): JsonElement =
-        call(
-            "credentials.describe",
-            buildJsonObject { putJsonArray("refs") { refs.forEach { add(it) } } },
-        )
     suspend fun credentialsSet(ref: String, value: String): JsonElement =
         call("credentials.set", jsonOf("ref" to ref, "value" to value))
     suspend fun credentialsUnset(ref: String): JsonElement =
         call("credentials.unset", jsonOf("ref" to ref))
-    suspend fun credentialsDeleteRecord(key: String): JsonElement =
-        call("credentials.deleteRecord", jsonOf("key" to key))
 
     fun close() {
         pump?.cancel(); pump = null

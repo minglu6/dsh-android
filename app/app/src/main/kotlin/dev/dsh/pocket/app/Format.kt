@@ -2,15 +2,44 @@ package dev.dsh.pocket.app
 
 import dev.dsh.pocket.protocol.PocketJson
 import dev.dsh.pocket.protocol.obj
+import dev.dsh.pocket.protocol.get
+import dev.dsh.pocket.protocol.str
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.JsonElement
 
-val PRESET_LABEL = linkedMapOf(
-    "standard" to ("标准模式" to "均衡的通用智能体，适合大多数任务"),
-    "ptc" to ("PTC 模式" to "以程序化工具调用编排复杂流程"),
-    "minimal" to ("极简模式" to "最少工具与提示，响应更快"),
-    "cordis" to ("创造模式" to "面向 Cordis 插件开发的创作环境"),
-)
-fun presetLabel(id: String?) = PRESET_LABEL[id ?: "standard"]?.first ?: id ?: "标准模式"
+fun presetLabel(id: String?): String {
+    val roster = Pocket.presetRoster.value
+    val row = roster.firstOrNull { it["id"].str() == id }
+        ?: if (id.isNullOrBlank()) roster.firstOrNull { it["isDefault"].toString() == "true" } else null
+    return presetName(row, id)
+}
+
+/** Official registry/display fold: an explicit name owns its copy, even for a shipped id. */
+internal fun presetName(row: JsonElement?, fallbackId: String? = null): String {
+    row["name"].str()?.let { return it }
+    return when (val id = row["id"].str() ?: fallbackId) {
+        "standard" -> st("标准模式", "Standard mode")
+        "ptc" -> st("PTC 模式", "PTC mode")
+        "minimal" -> st("极简模式", "Minimal mode")
+        "cordis" -> st("创造模式", "Creator mode")
+        else -> id?.takeIf { it.isNotBlank() } ?: st("主机默认", "Host default")
+    }
+}
+
+internal fun presetDescription(row: JsonElement?): String? {
+    if (row["name"].str() != null) return row["description"].str()
+    return when (row["id"].str()) {
+        "standard" -> st("处理代码、文件和资料，适合大多数任务。Agent 会按需使用检索、编辑和终端等工具。",
+            "Work with code, files, and information. Suitable for most tasks, with search, editing, terminal commands, and other tools available as needed.")
+        "ptc" -> st("包含标准模式的所有能力，更适合批量调用工具，并对结果进行筛选、整理、去重、统计或汇总的任务。",
+            "Includes all Standard mode capabilities. Better suited to tasks that call tools in batches and then filter, organize, deduplicate, count, or summarize the results.")
+        "minimal" -> st("Agent 仅使用终端工具完成任务，适合测试和对比其基础表现。",
+            "The agent works using only a terminal tool. Useful for testing and comparing its basic performance.")
+        "cordis" -> st("用对话定制 DSH：让 Agent 编写插件，添加新功能或界面；也能组合工具和提示词，创建自己的模式。",
+            "Customize DSH through conversation. Let the agent write plugins that add features or UI, or combine tools and prompts to create your own mode.")
+        else -> row["description"].str()
+    }
+}
 
 private val ARG_KEYS = listOf("command", "cmd", "path", "file_path", "filePath", "file", "pattern", "query", "url", "glob", "name")
 

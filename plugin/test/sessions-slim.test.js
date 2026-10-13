@@ -11,6 +11,7 @@ function fatSession(i) {
     blank: false,
     cwd: `/Users/me/projects/repo-${i % 7}`,
     parentSessionId: i % 11 === 0 ? `session-${i - 1}` : null,
+    origin: i % 11 === 0 ? 'subagent' : undefined,
     projections: {
       values: {
         title: `Session title ${i}`,
@@ -41,6 +42,7 @@ test('slimSessionSummary keeps SessionSummary.parse fields only', () => {
   assert.equal(slim.blank, false)
   assert.ok(slim.updatedAt > 0)
   assert.equal(slim.parentSessionId, null)
+  assert.equal(slim.origin, undefined)
   assert.equal(slim.projections.values.tokenUsage, undefined)
   assert.equal(slim.projections.values.turnOutline, undefined)
   assert.equal(slim.projections.values.contextBreakdown, undefined)

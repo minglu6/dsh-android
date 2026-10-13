@@ -39,7 +39,7 @@ Thinking is **not** a kind — it is `thinkingDetail` on `message`.
 | Kind | zh | en | Icon | CSS class / token |
 |---|---|---|---|---|
 | system | 系统 | SYSTEM | `IconSettingsOutlineRegular` | `.systemNeutral` — label-secondary on module-platform |
-| user | 用户 | USER | `IconUserOutlineRegular` | `.user` — business-primary / business-tertiary |
+| user | 用户 | USER | `IconUserOutlineRegular` | `.tagUser` — success-primary / success-tertiary |
 | context | 上下文 | CONTEXT | info SVG | `.contextGreen` — success-primary mix / success-tertiary |
 | compacted | 已压缩 | COMPACTED | compact SVG | `.compacted` — same family as system |
 | message | 助手 | ASSISTANT | `IconSparkleRegular` | `.assistantVioletBright` — brand-violet × error-secondary |
@@ -54,7 +54,7 @@ Thinking is **not** a kind — it is `thinkingDetail` on `message`.
 
 **Swimlane labels**: **输入 / 模型 / 工具** (`column.input` / `column.model` / `column.tools`).
 
-Phone keeps a hybrid: kind+preview on the left, **输入 / 输出 / 思考 / 时间** numeric columns on the right (from #24), plus the three-lane swimlane (#31).
+On phone-width panels, the ledger keeps kind/preview and elapsed time visible; token metrics stay in the detail inspector instead of squeezing the title. Panels at least 600dp wide additionally show the input/output/reasoning metric columns. The toolbar reflows its search field below the fold controls on narrow panels; action and ledger touch targets are at least 48dp. Swimlane selection checks both horizontal time and vertical lane, so overlapping model/tool durations select the touched record. Badge and span colors resolve the official light/dark aliases and sRGB color mixes rather than fixed light-only colors.
 
 ### States (`stateOf`)
 

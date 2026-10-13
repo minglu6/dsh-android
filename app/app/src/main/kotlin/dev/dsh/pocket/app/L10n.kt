@@ -184,7 +184,7 @@ object L {
         if (en) "$title — waiting for your answer" else "$title — 等待你的回答"
     fun notificationChannelTasks() = if (en) "Tasks" else "任务"
 
-    // Settings nav / pages — desktop locales (ui-settings-models / plugins / schedule / credentials)
+    // Settings nav / pages — desktop locales (ui-settings-models / plugins / schedule)
     fun settings() = if (en) "Settings" else "设置"
     fun generalNav() = if (en) "General" else "通用设置"
     fun modelsNav() = if (en) "Models" else "模型"
@@ -196,8 +196,6 @@ object L {
     fun builtinPluginsNav() = if (en) "Built-in plugins" else "内置插件"
     fun scheduleNav() = if (en) "Scheduled tasks" else "自动化任务"
     fun scheduleTitle() = if (en) "Automation tasks" else "自动化任务"
-    fun credentialsNav() = if (en) "Credentials" else "凭证"
-    fun credentialsTitle() = if (en) "Credentials" else "凭证"
     fun credentialConfigured() = if (en) "API key configured" else "API 密钥已配置"
     fun credentialMissing() = if (en) "API key missing" else "API 密钥缺失"
     fun apiKey() = if (en) "API key" else "API 密钥"
@@ -217,15 +215,12 @@ object L {
     fun scheduleListAria() = if (en) "Automation tasks" else "自动化任务"
     fun emptySchedules() = if (en) "No automation tasks" else "暂无自动化任务"
     fun emptyPlugins() = if (en) "No plugins are installed yet." else "还没有安装任何插件。"
-    fun emptyCredentials() = if (en) "No credentials." else "暂无凭证。"
     fun createSchedule() = if (en) "New task" else "新建任务"
     fun scheduleTitleField() = if (en) "Title" else "标题"
     fun schedulePromptField() = if (en) "Instruction" else "指令"
     fun scheduleAfterSeconds() = if (en) "After (seconds)" else "延迟（秒）"
     fun deliveryHistory() = if (en) "Run history" else "运行历史"
     fun maskedSecret() = "••••••••"
-    fun refName() = if (en) "Reference name" else "引用名"
-    fun addCredential() = if (en) "Add credential" else "添加凭证"
     fun confirmDelete() = if (en) "Delete?" else "确认删除？"
     fun cancel() = if (en) "Cancel" else "取消"
     fun countUnit() = if (en) "plugins" else "个"

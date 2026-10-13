@@ -19,6 +19,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -27,6 +29,7 @@ import dev.dsh.pocket.protocol.*
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.flow.first
 import kotlinx.serialization.json.*
 import java.time.Instant
 import java.time.LocalDate
@@ -34,7 +37,6 @@ import java.time.LocalTime
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 
-private fun st(zh: String, en: String) = if (Pocket.prefs.language == AppLanguage.En) en else zh
 private fun scheduleFailure(error: Throwable): String {
     val raw = error.message ?: error.javaClass.simpleName
     val explanation = when (raw.substringBefore(':')) {
@@ -62,6 +64,29 @@ private fun scheduleStamp(value: String?, zone: String? = null): String {
     } catch (_: Exception) { value }
 }
 
+@Composable
+private fun scheduleClock(): Instant {
+    var now by remember { mutableStateOf(Instant.now()) }
+    LaunchedEffect(Unit) { while (true) { delay(30_000); now = Instant.now() } }
+    return now
+}
+
+private fun scheduleNext(value: String?, zone: String?, now: Instant): String {
+    val distance = scheduleRelativeTime(value, now) ?: return scheduleStamp(value, zone)
+    val unit = when (distance.unit) {
+        "day" -> st("天", if (distance.value == 1L) "day" else "days")
+        "hour" -> st("小时", if (distance.value == 1L) "hour" else "hours")
+        "minute" -> st("分钟", if (distance.value == 1L) "minute" else "minutes")
+        else -> st("秒", if (distance.value == 1L) "second" else "seconds")
+    }
+    val relative = when (distance.direction) {
+        0 -> st("现在到期", "Due now")
+        1 -> st("${distance.value}${unit}后", "in ${distance.value} $unit")
+        else -> st("已逾期 ${distance.value}$unit", "${distance.value} $unit overdue")
+    }
+    return "${scheduleStamp(value, zone)} ($relative)"
+}
+
 private fun scheduleRuleLabel(kind: String): String = when (kind) {
     "once", "at", "after" -> st("仅一次", "Once")
     "daily" -> st("每天", "Every day")
@@ -76,7 +101,22 @@ private fun scheduleSummary(row: JsonObject): String {
     val kind = row["kind"].str().orEmpty()
     val zone = row["timeZone"].str()
     val rule = when (kind) {
-        "every" -> st("每 ${row["everySeconds"].long()} 秒", "Every ${row["everySeconds"].long()} seconds")
+        "every" -> row["everySeconds"].long()?.let { seconds ->
+            val unitSeconds = when {
+                seconds % 86_400L == 0L -> 86_400L
+                seconds % 3_600L == 0L -> 3_600L
+                seconds % 60L == 0L -> 60L
+                else -> 1L
+            }
+            val amount = seconds / unitSeconds
+            val unit = when (unitSeconds) {
+                86_400L -> st("天", if (amount == 1L) "day" else "days")
+                3_600L -> st("小时", if (amount == 1L) "hour" else "hours")
+                60L -> st("分钟", if (amount == 1L) "minute" else "minutes")
+                else -> st("秒", if (amount == 1L) "second" else "seconds")
+            }
+            st("每 $amount $unit", "Every $amount $unit")
+        } ?: "—"
         "daily" -> "${scheduleRuleLabel(kind)} ${row["time"].str()}"
         "weekly" -> "${scheduleRuleLabel(kind)} ${row["weekdays"].arr()?.joinToString { scheduleWeekday(it.int() ?: 1) }} ${row["time"].str()}"
         "cron" -> row["expression"].str().orEmpty()
@@ -91,7 +131,7 @@ private fun scheduleWeekday(day: Int): String = if (Pocket.prefs.language == App
 
 @Composable
 private fun ScheduleButton(label: String, enabled: Boolean = true, onClick: () -> Unit) {
-    OutlinedButton(onClick, enabled = enabled, shape = RoundedCornerShape(6.dp),
+    OutlinedButton(onClick, enabled = enabled, modifier = Modifier.heightIn(min = 48.dp), shape = RoundedCornerShape(6.dp),
         colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.onSurface),
         border = BorderStroke(0.5.dp, MaterialTheme.colorScheme.outlineVariant)) { Text(label) }
 }
@@ -99,7 +139,7 @@ private fun ScheduleButton(label: String, enabled: Boolean = true, onClick: () -
 @Composable
 private fun ScheduleTab(label: String, selected: Boolean, onClick: () -> Unit) {
     val cs = MaterialTheme.colorScheme
-    Box(Modifier.heightIn(min = 44.dp).selectable(selected, role = Role.Tab, onClick = onClick),
+    Box(Modifier.heightIn(min = 48.dp).selectable(selected, role = Role.Tab, onClick = onClick),
         contentAlignment = Alignment.Center) {
         Text(label, modifier = Modifier.background(if (selected) cs.surfaceVariant else cs.background, RoundedCornerShape(8.dp))
             .padding(horizontal = 10.dp, vertical = 6.dp),
@@ -110,18 +150,18 @@ private fun ScheduleTab(label: String, selected: Boolean, onClick: () -> Unit) {
 @Composable
 private fun ScheduleCatalogScaffold(onBack: () -> Unit, onNewTask: () -> Unit, canCreate: Boolean, content: @Composable ColumnScope.() -> Unit) {
     val cs = MaterialTheme.colorScheme
-    Column(Modifier.fillMaxSize().background(cs.background).systemBarsPadding().verticalScroll(rememberScrollState())) {
+    Column(Modifier.fillMaxSize().background(cs.background).systemBarsPadding().imePadding()) {
         Row(Modifier.fillMaxWidth().padding(start = 6.dp, end = 18.dp).heightIn(min = 60.dp),
             verticalAlignment = Alignment.CenterVertically) {
             IconButton(onBack) { Icon(D.chevronLeft, st("返回", "Back")) }
             Text(st("自动化任务", "Automation tasks"), fontSize = 20.sp, modifier = Modifier.weight(1f))
-            Button(onNewTask, enabled = canCreate, modifier = Modifier.height(34.dp),
+            Button(onNewTask, enabled = canCreate, modifier = Modifier.heightIn(min = 48.dp),
                 shape = RoundedCornerShape(8.dp), contentPadding = PaddingValues(horizontal = 12.dp),
                 colors = ButtonDefaults.buttonColors(containerColor = cs.onSurface, contentColor = cs.surface)) {
                 Text("+ ${st("新建", "New")}", fontSize = 12.sp)
             }
         }
-        content()
+        Column(Modifier.weight(1f).verticalScroll(rememberScrollState()), content = content)
     }
 }
 
@@ -139,7 +179,7 @@ private fun ScheduleField(label: String, value: String, enabled: Boolean, multil
     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
         Text(label, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
         OutlinedTextField(value, onChange, enabled = enabled, singleLine = !multiline,
-            minLines = if (multiline) 3 else 1, modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(6.dp),
+            minLines = if (multiline) 3 else 1, modifier = Modifier.fillMaxWidth().semantics { contentDescription = label }, shape = RoundedCornerShape(6.dp),
             colors = OutlinedTextFieldDefaults.colors(focusedBorderColor = MaterialTheme.colorScheme.onSurface,
                 cursorColor = MaterialTheme.colorScheme.onSurface))
     }
@@ -156,6 +196,7 @@ private fun ScheduleCatalogScreen(onBack: () -> Unit, onNewTask: () -> Unit, onO
     val ops by Pocket.ops.collectAsState()
     val statuses by Pocket.status.collectAsState()
     val profile by Pocket.active.collectAsState()
+    val catalogRevision by Pocket.scheduleCatalogRevision.collectAsState()
     val online = profile != null && statuses[profile] == Dot.Online
     val scope = rememberCoroutineScope()
     var rows by remember { mutableStateOf<List<JsonObject>>(emptyList()) }
@@ -166,6 +207,7 @@ private fun ScheduleCatalogScreen(onBack: () -> Unit, onNewTask: () -> Unit, onO
     var loaded by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
     var notice by remember { mutableStateOf<String?>(null) }
+    val now = scheduleClock()
     suspend fun reload() {
         if (loading) return
         loading = true
@@ -181,10 +223,9 @@ private fun ScheduleCatalogScreen(onBack: () -> Unit, onNewTask: () -> Unit, onO
         } catch (e: CancellationException) { throw e } catch (e: Exception) { error = scheduleFailure(e) }
         finally { loading = false }
     }
-    LaunchedEffect(online, ops) {
+    LaunchedEffect(online, ops, catalogRevision) {
+        snapshotFlow { loading }.first { !it }
         reload()
-        // The pocket bridge does not expose the Host schedule/changed observable.
-        while (online && "schedule.catalog" in ops) { delay(15_000); reload() }
     }
     val selectedRow = selected
     if (selectedRow != null) {
@@ -224,7 +265,8 @@ private fun ScheduleCatalogScreen(onBack: () -> Unit, onNewTask: () -> Unit, onO
             .padding(horizontal = 12.dp, vertical = 11.dp)) {
             if (query.isEmpty()) Text(st("搜索自动化任务", "Search automation tasks"),
                 color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 14.sp)
-            BasicTextField(query, { query = it }, singleLine = true, modifier = Modifier.fillMaxWidth(),
+            BasicTextField(query, { query = it }, singleLine = true,
+                modifier = Modifier.fillMaxWidth().semantics { contentDescription = st("搜索自动化任务", "Search automation tasks") },
                 textStyle = MaterialTheme.typography.bodyMedium.copy(color = MaterialTheme.colorScheme.onSurface),
                 cursorBrush = SolidColor(MaterialTheme.colorScheme.onSurface))
         }
@@ -246,7 +288,7 @@ private fun ScheduleCatalogScreen(onBack: () -> Unit, onNewTask: () -> Unit, onO
                 verticalArrangement = Arrangement.spacedBy(5.dp)) {
                 Text(row["title"].str().orEmpty(), fontSize = 16.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
                 Text(scheduleSummary(row), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                Text(if (row["status"].str() == "active") st("下次计划时间：", "Next scheduled time: ") + scheduleStamp(row["scheduledAt"].str())
+                Text(if (row["status"].str() == "active") st("下次计划时间：", "Next scheduled time: ") + scheduleNext(row["scheduledAt"].str(), row["timeZone"].str(), now)
                     else st("已结束", "Inactive"), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
             HorizontalDivider(Modifier.padding(horizontal = 18.dp), thickness = 0.5.dp)
@@ -272,6 +314,7 @@ private fun ScheduleDetailScreen(row: JsonObject, authoritative: Boolean, online
     var error by remember(row["id"]) { mutableStateOf<String?>(null) }
     var confirmDelete by remember { mutableStateOf(false) }
     var confirmLeave by remember { mutableStateOf(false) }
+    val now = scheduleClock()
     val id = row["id"].str().orEmpty()
     val sessionId = row["sessionId"].str().orEmpty()
     val isActive = row["status"].str() == "active"
@@ -298,7 +341,11 @@ private fun ScheduleDetailScreen(row: JsonObject, authoritative: Boolean, online
             } finally { busy = false }
         }
     }
-    SettingsScaffold(row["title"].str().orEmpty(), leave) {
+    SettingsScaffold(row["title"].str().orEmpty(), leave, actions = {
+        if (editing != null) TextButton(::save, enabled = !busy && online && changed && authoritative && isActive && "schedule.update" in ops) {
+            Text(if (busy) st("保存中…", "Saving…") else st("保存", "Save"))
+        }
+    }) {
         Row(Modifier.fillMaxWidth().padding(horizontal = 18.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
             listOf(st("规则", "Rules"), st("任务运行记录", "Records")).forEachIndexed { index, label ->
                 ScheduleTab(label, tab == index) { tab = index }
@@ -335,7 +382,7 @@ private fun ScheduleDetailScreen(row: JsonObject, authoritative: Boolean, online
                     Text(scheduleSummary(row))
                     HorizontalDivider(thickness = 0.5.dp)
                     Text(st("下次计划时间", "Next scheduled time"), style = MaterialTheme.typography.labelMedium)
-                    Text(if (isActive) scheduleStamp(row["scheduledAt"].str(), row["timeZone"].str()) else "—")
+                    Text(if (isActive) scheduleNext(row["scheduledAt"].str(), row["timeZone"].str(), now) else "—")
                 }
                 if (editing != null) {
                     if (changed) Text(st("有未保存的修改", "Unsaved changes"), color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -432,10 +479,7 @@ private fun ScheduleTimingEditor(draft: ScheduleTimingDraft, enabled: Boolean, o
             Text(st("至少 60 秒。间隔从任务创建或最近一次规则变更开始计算，与时区无关。", "At least 60 seconds. The interval counts from task creation or the last rule change and is independent of time zones."),
                 style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
-        "cron" -> {
-            ScheduleField(st("Cron 表达式", "Cron expression"), draft.expression, enabled, onChange = { onChange(draft.copy(expression = it)) })
-            Text(st("分 时 日 月 星期 · 例如 0 9 * * 1-5", "minute hour day-of-month month day-of-week · e.g. 0 9 * * 1-5"), style = MaterialTheme.typography.bodySmall)
-        }
+        "cron" -> ScheduleCronEditor(draft.expression, enabled) { onChange(draft.copy(expression = it)) }
         else -> {
             if (draft.kind == "once") {
                 ScheduleButton(st("日期：", "Date: ") + draft.date, enabled) {
@@ -466,8 +510,9 @@ private fun ScheduleTimingEditor(draft: ScheduleTimingDraft, enabled: Boolean, o
                 (1..7).toList().chunked(4).forEach { days ->
                     Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                         days.forEach { day -> FilterChip(day in draft.weekdays, {
-                            onChange(draft.copy(weekdays = if (day in draft.weekdays) draft.weekdays - day else draft.weekdays + day))
-                        }, label = { Text(scheduleWeekday(day), fontSize = 12.sp) }, enabled = enabled,
+                            if (day !in draft.weekdays || draft.weekdays.size > 1)
+                                onChange(draft.copy(weekdays = if (day in draft.weekdays) draft.weekdays - day else draft.weekdays + day))
+                        }, label = { Text(scheduleWeekday(day), fontSize = 12.sp) }, enabled = enabled, modifier = Modifier.heightIn(min = 48.dp),
                             colors = FilterChipDefaults.filterChipColors(selectedContainerColor = MaterialTheme.colorScheme.surfaceVariant,
                                 selectedLabelColor = MaterialTheme.colorScheme.onSurface)) }
                     }
@@ -498,6 +543,92 @@ private fun ScheduleTimingEditor(draft: ScheduleTimingDraft, enabled: Boolean, o
         if (draft.kind == "once") Text(st("单次任务只保存目标时刻，不保存时区。日期和时间按所选时区解释。", "A one-time task stores only its target moment, not a time zone. The date and time are interpreted in the selected time zone."),
             style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
+}
+
+@Composable
+private fun ScheduleCronEditor(expression: String, enabled: Boolean, onChange: (String) -> Unit) {
+    val context = LocalContext.current
+    val shape = remember(expression) { scheduleCronShape(expression) }
+    var advanced by remember { mutableStateOf(shape == null) }
+    var menu by remember { mutableStateOf(false) }
+    var picker by remember { mutableStateOf<android.app.Dialog?>(null) }
+    DisposableEffect(Unit) { onDispose { picker?.dismiss() } }
+    fun label(kind: String) = when (kind) {
+        "minutely" -> st("每 N 分钟", "Every N minutes")
+        "hourly" -> st("每 N 小时", "Every N hours")
+        "daily" -> st("每天", "Daily")
+        "weekly" -> st("每周", "Weekly")
+        else -> st("每月", "Monthly")
+    }
+    Box {
+        ScheduleButton(st("常用规则：", "Common rule: ") + (shape?.let { label(it.kind) } ?: st("高级表达式", "Advanced expression")), enabled) { menu = true }
+        DropdownMenu(menu, { menu = false }) {
+            listOf("minutely", "hourly", "daily", "weekly", "monthly").forEach { kind ->
+                DropdownMenuItem(text = { Text(label(kind)) }, onClick = {
+                    menu = false
+                    advanced = false
+                    if (shape?.kind != kind) onChange(scheduleCronExpression(ScheduleCronShape(kind,
+                        hour = shape?.hour ?: 9, minute = shape?.minute ?: 0)))
+                })
+            }
+        }
+    }
+    if (!advanced && shape != null) {
+        if (shape.kind == "minutely" || shape.kind == "hourly") {
+            val max = if (shape.kind == "minutely") 59 else 23
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                ScheduleButton("−", enabled && shape.step > 1) { onChange(scheduleCronExpression(shape.copy(step = shape.step - 1))) }
+                Text(shape.step.toString())
+                ScheduleButton("+", enabled && shape.step < max) { onChange(scheduleCronExpression(shape.copy(step = shape.step + 1))) }
+            }
+        }
+        if (shape.kind == "hourly") {
+            var minuteMenu by remember { mutableStateOf(false) }
+            Box {
+                ScheduleButton(st("每小时第 ${shape.minute} 分", "At minute ${shape.minute}"), enabled) { minuteMenu = true }
+                DropdownMenu(minuteMenu, { minuteMenu = false }) {
+                    (0..59).forEach { minute -> DropdownMenuItem(text = { Text(minute.toString()) }, onClick = {
+                        minuteMenu = false
+                        if (minute != shape.minute) onChange(scheduleCronExpression(shape.copy(minute = minute)))
+                    }) }
+                }
+            }
+        } else if (shape.kind != "minutely") {
+            ScheduleButton(st("时间：", "Time: ") + "%02d:%02d".format(shape.hour, shape.minute), enabled) {
+                TimePickerDialog(context, { _, hour, minute ->
+                    if (hour != shape.hour || minute != shape.minute) onChange(scheduleCronExpression(shape.copy(hour = hour, minute = minute)))
+                }, shape.hour, shape.minute, true).also { picker = it }.show()
+            }
+        }
+        if (shape.kind == "weekly" || shape.kind == "monthly") {
+            val weekly = shape.kind == "weekly"
+            val selected = if (weekly) shape.weekdays else shape.days
+            Text(if (weekly) st("星期", "Weekdays") else st("每月日期", "Days of month"), style = MaterialTheme.typography.labelMedium)
+            (1..if (weekly) 7 else 31).toList().chunked(if (weekly) 3 else 4).forEach { days ->
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    days.forEach { day ->
+                        FilterChip(day in selected, {
+                            if (day !in selected || selected.size > 1) {
+                                val values = if (day in selected) selected - day else selected + day
+                                onChange(scheduleCronExpression(if (weekly) shape.copy(weekdays = values) else shape.copy(days = values)))
+                            }
+                        }, label = { Text(if (weekly) scheduleWeekday(day) else day.toString()) },
+                            enabled = enabled, modifier = Modifier.heightIn(min = 48.dp))
+                    }
+                }
+            }
+            if (!weekly) Text(st("没有所选日期的月份会跳过；不是每隔固定天数。", "Months without the selected dates are skipped; this is not a fixed-day interval."),
+                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+    }
+    TextButton({ advanced = !advanced }, enabled = enabled && shape != null) {
+        Text(if (advanced) st("使用常用规则", "Use common rule") else st("编辑高级表达式", "Edit advanced expression"))
+    }
+    if (advanced || shape == null) {
+        ScheduleField(st("Cron 表达式", "Cron expression"), expression, enabled, onChange = onChange)
+        Text(st("分 时 日 月 星期；日期与星期都受限时按任一条件匹配。切换视图不会改写原文。", "minute hour day-of-month month day-of-week. Restricted day fields match either condition. Switching views preserves the original expression."),
+            style = MaterialTheme.typography.bodySmall)
+    } else Text(expression, style = T.Mono, fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
 }
 
 @Composable
@@ -547,6 +678,8 @@ private fun ScheduleHistoryScreen(sessionId: String, id: String, zone: String?, 
     // Re-mounting the tab starts a fresh page; subsequent catalog receipts refresh it too.
     LaunchedEffect(latestMessage, online) { load() }
     Column(Modifier.fillMaxWidth().padding(horizontal = 18.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        Text(st("以下记录仅确认提醒已写入原会话收件箱，不代表模型已执行或任务已完成。", "These receipts confirm inbox delivery to the original session, not model execution or task completion."),
+            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         ScheduleButton(st("刷新", "Refresh"), !loading) { scope.launch { load() } }
         if (loading) LinearProgressIndicator(Modifier.fillMaxWidth(), color = MaterialTheme.colorScheme.onSurface)
         error?.let { ErrorOrEmpty(it) { scope.launch { load(failedBefore) } } }
@@ -557,6 +690,8 @@ private fun ScheduleHistoryScreen(sessionId: String, id: String, zone: String?, 
                 var overflow by remember { mutableStateOf(false) }
                 Column(Modifier.fillMaxWidth().padding(vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text(scheduleStamp(record["scheduledAt"].str(), zone), style = MaterialTheme.typography.labelLarge)
+                    record["deliveredAt"].str()?.let { Text(st("已投递：", "Delivered: ") + scheduleStamp(it, zone),
+                        style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
                     record["prompt"].str()?.let { savedPrompt ->
                         Text(savedPrompt, maxLines = if (expanded) Int.MAX_VALUE else 2, overflow = TextOverflow.Ellipsis,
                             onTextLayout = { if (!expanded) overflow = it.hasVisualOverflow })

@@ -31,7 +31,10 @@ sealed interface Item {
         /** Image attachment refs from content blocks (`type=image`). */
         val imageRefs: List<ImageRef> = emptyList(),
     ) : Item
-    data class Reasoning(override val key: String, val text: String, val durationMs: Long?, val live: Boolean) : Item
+    data class Reasoning(
+        override val key: String, val text: String, val durationMs: Long?, val live: Boolean,
+        val turn: Int? = null, val step: Int? = null, val seq: Long? = null,
+    ) : Item
     data class Text(
         override val key: String,
         val text: String,
@@ -42,6 +45,8 @@ sealed interface Item {
         val seq: Long? = null,
         /** Assistant `message.id` for message-feedback (like/dislike). */
         val messageId: String? = null,
+        val turn: Int? = null,
+        val step: Int? = null,
     ) : Item
     data class Tool(
         override val key: String, val callId: String, val name: String, val arguments: String,
@@ -58,7 +63,7 @@ sealed interface Item {
          */
         val parentCallId: String? = null,
     ) : Item
-    data class Notice(override val key: String, val text: String) : Item
+    data class Notice(override val key: String, val text: String, val turn: Int? = null) : Item
     /**
      * Injected user-role / developer context (runtime-context, skills, memory, time sampled, …).
      * Shown on the Trajectory tab as 上下文; omitted from the chat transcript.
@@ -268,6 +273,32 @@ data class RequestHeaderFact(
     val reason: String? = null,
 )
 
+/** Host turn boundaries, independent of assistant steps and local run clocks. */
+data class TurnRecord(
+    val turn: Int,
+    val startSeq: Long? = null,
+    val endSeq: Long? = null,
+    val startedAt: Long? = null,
+    val endedAt: Long? = null,
+    val endReason: String? = null,
+) {
+    val closed: Boolean get() = endSeq != null
+    val durationMs: Long? get() {
+        if (!closed || endReason == "aborted" || endReason == "error") return null
+        val start = startedAt ?: return null
+        val end = endedAt ?: return null
+        return (end - start).coerceAtLeast(1000)
+    }
+}
+
+private fun TurnRecord.withEarlier(earlier: TurnRecord): TurnRecord = copy(
+    startSeq = earlier.startSeq ?: startSeq,
+    startedAt = earlier.startedAt ?: startedAt,
+    endSeq = endSeq ?: earlier.endSeq,
+    endedAt = endedAt ?: earlier.endedAt,
+    endReason = endReason ?: earlier.endReason,
+)
+
 /**
  * Folds dsh SessionFollowFrames (snapshot/resume/event/assistant-stream, passed through by
  * dsh-plugin-pocket) into [Item]s. Pure and deterministic: no Android dependencies.
@@ -282,6 +313,7 @@ class TranscriptReducer {
     private val localEchoes = ArrayList<Pair<Int, String>>()
     private val stepStartTimes = HashMap<String, Long>()
     private val settledSteps = ArrayList<StepRecord>()
+    private val turnFacts = LinkedHashMap<Int, TurnRecord>()
     private val headerFacts = ArrayList<RequestHeaderFact>()
     /**
      * Latest tool catalog from `request/header` (`EpochHeader.tools`), keyed by tool name.
@@ -327,6 +359,7 @@ class TranscriptReducer {
     private var todos: List<TodoItem> = emptyList()
     /** Host `plan` projection (`plan/mode` + projections.values.plan.active). */
     private var planActive: Boolean = false
+    private var planProjectionSeq = -1L
     private val composerProjections = ComposerProjectionStore()
 
     val composerMetrics: ComposerMetrics get() = composerProjections.metrics(settledSteps, toolTimings.values)
@@ -336,6 +369,7 @@ class TranscriptReducer {
 
     val usage get() = Usage(turns, steps, inputTokens, cacheRead, outputTokens)
     fun stepRecords(): List<StepRecord> = settledSteps.toList()
+    fun turnRecords(): List<TurnRecord> = turnFacts.values.sortedBy { it.turn }
     fun requestHeaders(): List<RequestHeaderFact> = headerFacts.toList()
     fun todos(): List<TodoItem> = todos
     val planMode: Boolean get() = planActive
@@ -347,6 +381,7 @@ class TranscriptReducer {
         when (frame["type"].str()) {
             "snapshot" -> {
                 val keep = localEchoes.map { it.second }
+                val knownTurns = turnFacts.toMap()
                 reset()
                 records(frame["records"])
                 keep.filter { t -> committed.none { it is Item.User && it.text == t } }.forEach(::echo)
@@ -355,6 +390,15 @@ class TranscriptReducer {
                 hasMore = frame["hasMore"].bool() ?: false
                 firstSeq = minSeq(frame["records"])
                 baseline(frame["assistantStream"])
+                // A replacement tail snapshot can omit the start already received live.
+                // Keep endpoints only for identities still present, not old invisible turns.
+                turnFacts.replaceAll { turn, fact ->
+                    val known = knownTurns[turn]?.takeIf { (it.startSeq ?: -1) <= cursor }
+                    val earlier = if (known != null && known.endSeq != null && known.endSeq > cursor) {
+                        known.copy(endSeq = null, endedAt = null, endReason = null)
+                    } else known
+                    earlier?.let { fact.withEarlier(it) } ?: fact
+                }
             }
             "resume" -> {
                 records(frame["records"])
@@ -363,11 +407,15 @@ class TranscriptReducer {
                 baseline(frame["assistantStream"])
             }
             "event" -> event(frame["event"])
-            "projection" -> return composerProjections.apply(
-                frame["key"].str() ?: return false,
-                frame["value"],
-                frame["seq"].long() ?: return false,
-            )
+            "projection" -> {
+                val key = frame["key"].str() ?: return false
+                val seq = frame["seq"].long() ?: return false
+                if (key == "plan") {
+                    if (seq < planProjectionSeq) return false
+                    planProjectionSeq = seq
+                    planActive = frame["value"]["active"].bool() ?: false
+                } else return composerProjections.apply(key, frame["value"], seq)
+            }
             "assistant-stream" -> stream(frame["frame"])
             else -> return false
         }
@@ -395,6 +443,10 @@ class TranscriptReducer {
             put("records", JsonArray(filtered))
             put("projections", buildJsonObject {})
         })
+        for ((turn, earlier) in prior.turnFacts) {
+            val later = turnFacts[turn]
+            turnFacts[turn] = later?.withEarlier(earlier) ?: earlier
+        }
         for ((id, earlier) in prior.toolTimings) {
             val later = toolTimings[id]
             if (later == null) {
@@ -423,7 +475,8 @@ class TranscriptReducer {
         }
         val min = filtered.mapNotNull { it["event"]["seq"].long() }.minOrNull()
         if (min != null) firstSeq = if (firstSeq < 0) min else minOf(firstSeq, min)
-        return shift > 0 || olderSteps.isNotEmpty() || olderHeaders.isNotEmpty() || prior.toolTimings.isNotEmpty()
+        return shift > 0 || olderSteps.isNotEmpty() || olderHeaders.isNotEmpty() ||
+            prior.toolTimings.isNotEmpty() || prior.turnFacts.isNotEmpty()
     }
 
     private fun rebuildIndexes() {
@@ -447,6 +500,7 @@ class TranscriptReducer {
     private fun reset() {
         committed.clear(); toolIndex.clear(); compactIndex.clear(); approvalCall.clear(); userByRpc.clear(); localEchoes.clear()
         toolTimings.clear()
+        turnFacts.clear()
         stepStartTimes.clear(); settledSteps.clear(); headerFacts.clear(); toolsByName.clear()
         toolsCatalogJson = null; previousToolsCatalogJson = null; lastSystemPromptText = null
         systemPromptSeen = false; live = null
@@ -457,6 +511,7 @@ class TranscriptReducer {
         inputTokens = 0; cacheRead = 0; outputTokens = 0; running = false
         todos = emptyList()
         planActive = false
+        planProjectionSeq = -1L
     }
 
     private fun readProjections(p: JsonElement?, atSeq: Long) {
@@ -478,17 +533,29 @@ class TranscriptReducer {
             }
         }
         values["plan"]?.let { plan ->
-            plan["active"].bool()?.let { planActive = it }
+            val seq = p["asOfSeq"].long() ?: atSeq
+            if (seq >= planProjectionSeq) {
+                planProjectionSeq = seq
+                planActive = plan["active"].bool() ?: false
+            }
         }
     }
 
     private fun records(arr: JsonElement?) { arr.arr()?.forEach { r -> if (r["type"].str() == "event") event(r["event"]) } }
 
     private fun baseline(b: JsonElement?) {
-        val a = b["activeAttempt"] ?: return
-        val l = LiveAttempt(a["attemptId"].str() ?: "live")
+        val a = b["activeAttempt"].obj() ?: return
+        val l = LiveAttempt(
+            a["attemptId"].str() ?: "live",
+            a["turn"].long()?.toInt() ?: openTurn,
+            a["step"].long()?.toInt() ?: openStep,
+        )
         a["stream"].arr()?.forEach { rec -> l.record(rec) }
         live = l
+        openTurn = l.turn ?: openTurn
+        openStep = l.step ?: openStep
+        l.turn?.let { turnFacts.getOrPut(it) { TurnRecord(it) } }
+        running = true
     }
 
     private fun event(e: JsonElement?) {
@@ -498,10 +565,28 @@ class TranscriptReducer {
         cursor = seq
         val data = e["data"]
         when (e["type"].str()) {
-            "turn/start" -> { turns++; running = true }
+            "turn/start" -> {
+                turns++
+                running = true
+                openTurn = data["turn"].long()?.toInt()
+                openStep = null
+                openTurn?.let { turn ->
+                    val fact = turnFacts[turn] ?: TurnRecord(turn)
+                    turnFacts[turn] = fact.copy(startSeq = seq, startedAt = e["time"].long())
+                }
+            }
             "turn/end" -> {
                 running = false; live = null
                 val reason = data["reason"]
+                val turn = data["turn"].long()?.toInt() ?: openTurn
+                turn?.let {
+                    val fact = turnFacts[it] ?: TurnRecord(it)
+                    turnFacts[it] = fact.copy(
+                        endSeq = seq, endedAt = e["time"].long(), endReason = reason["kind"].str(),
+                    )
+                }
+                openTurn = null
+                openStep = null
                 when (reason["kind"].str()) {
                     "error" -> {
                         val err = reason["error"]
@@ -511,17 +596,17 @@ class TranscriptReducer {
                             "QUOTA_EXCEEDED", "RATE_LIMIT" -> "当前请求的额度已用尽"
                             else -> err["message"].str()?.takeIf { it.isNotBlank() } ?: "本轮运行失败"
                         }
-                        committed += Item.Notice("te$seq", msg)
+                        committed += Item.Notice("te$seq", msg, turn = turn)
                     }
                     "aborted" -> {
                         val hook = reason["reason"]
                         if (hook["kind"].str() == "hook" && hook["reason"].str() == "deepseek-account/signed-out") {
-                            committed += Item.Notice("te$seq", "任务已因退出 DeepSeek 登录而停止。")
+                            committed += Item.Notice("te$seq", "任务已因退出 DeepSeek 登录而停止。", turn = turn)
                         }
                     }
                     "max-tokens", "max_tokens" -> {
-                        committed += Item.Notice("mt$seq", "已达到输出 token 上限")
-                        committed += Item.Notice("mth$seq", "回答被截断，已有输出保留在对话中。发送“继续”可让模型接着输出。")
+                        committed += Item.Notice("mt$seq", "已达到输出 token 上限", turn = turn)
+                        committed += Item.Notice("mth$seq", "回答被截断，已有输出保留在对话中。发送“继续”可让模型接着输出。", turn = turn)
                     }
                 }
             }
@@ -533,13 +618,18 @@ class TranscriptReducer {
                 }
             }
             "plan/mode" -> {
-                planActive = data["active"].bool() ?: planActive
+                if (seq >= planProjectionSeq) {
+                    planProjectionSeq = seq
+                    planActive = data["active"].bool() ?: planActive
+                }
             }
             "step/start" -> {
-                val turn = data["turn"].long()?.toInt() ?: turns
+                val ownerTurn = data["turn"].long()?.toInt() ?: openTurn
+                val turn = ownerTurn ?: turns
                 val step = data["step"].long()?.toInt() ?: (steps + 1)
-                openTurn = turn
+                openTurn = ownerTurn
                 openStep = step
+                ownerTurn?.let { turnFacts.getOrPut(it) { TurnRecord(it) } }
                 openRetry = null; openMaxRetries = null; openRetryDelayMs = null; openLastAttemptError = null
                 e["time"].long()?.let { stepStartTimes["$turn:$step"] = it }
             }
@@ -565,7 +655,7 @@ class TranscriptReducer {
                 val text = if (retry != null && maximum != null && seconds != null) {
                     "$label（$retry/$maximum） · ${seconds}s"
                 } else label
-                committed += Item.Notice("n$seq", text)
+                committed += Item.Notice("n$seq", text, turn = openTurn)
             }
             "user/message" -> {
                 val msg = if (data["content"] != null) data else data["message"]
@@ -584,10 +674,12 @@ class TranscriptReducer {
             "assistant/message" -> {
                 steps++
                 val firstTokenFromLive = live?.firstTokenTime
+                val ownerTurn = data["turn"].long()?.toInt() ?: live?.turn ?: openTurn
+                val turn = ownerTurn ?: turns
+                val step = data["step"].long()?.toInt() ?: live?.step ?: openStep ?: steps
                 live = null
-                val turn = data["turn"].long()?.toInt() ?: turns
-                val step = data["step"].long()?.toInt() ?: steps
                 val messageTime = e["time"].long()
+                ownerTurn?.let { turnFacts.getOrPut(it) { TurnRecord(it) } }
                 val stepStartTime = stepStartTimes.remove("$turn:$step")
                 val timing = reasoningTiming(data["stream"])
                 val firstTokenTime = firstTokenFromLive
@@ -601,12 +693,16 @@ class TranscriptReducer {
                         "reasoning" -> {
                             val text = b["text"].str().orEmpty()
                             reasoningParts += text
-                            committed += Item.Reasoning("r$seq.$i", text, timing, live = false)
+                            committed += Item.Reasoning(
+                                "r$seq.$i", text, timing, live = false,
+                                turn = ownerTurn, step = step, seq = seq,
+                            )
                         }
                         "text" -> b["text"].str()?.takeIf { it.isNotBlank() }?.let {
                             replyParts += it
                             committed += Item.Text(
                                 "t$seq.$i", it, live = false, at = messageTime, seq = seq, messageId = messageId,
+                                turn = ownerTurn, step = step,
                             )
                         }
                         "tool-call" -> {
@@ -614,7 +710,7 @@ class TranscriptReducer {
                             toolCallIds += id
                             upsertTool(
                                 id, b["name"].str().orEmpty(), b["arguments"].str().orEmpty(), e["time"].long(),
-                                turn = turn, step = step,
+                                turn = ownerTurn, step = step,
                             )
                         }
                     }
@@ -657,7 +753,7 @@ class TranscriptReducer {
                 openRetry = null; openMaxRetries = null; openRetryDelayMs = null; openLastAttemptError = null
                 // Chat locale message.stopped = 已停止. Trajectory marks interrupted on StepRecord
                 // (assistant cell isError) — do not invent a 系统 Context/System row here.
-                if (interrupted) committed += Item.Notice("i$seq", "已停止")
+                if (interrupted) committed += Item.Notice("i$seq", "已停止", turn = ownerTurn)
             }
             "tool/call" -> {
                 val id = data["callId"].str() ?: "c$seq"
@@ -984,9 +1080,19 @@ class TranscriptReducer {
 
     private fun stream(f: JsonElement?) {
         when (f["type"].str()) {
-            "start" -> { live = LiveAttempt(f["attemptId"].str() ?: "live"); running = true }
+            "start" -> {
+                live = LiveAttempt(
+                    f["attemptId"].str() ?: "live",
+                    f["turn"].long()?.toInt() ?: openTurn,
+                    f["step"].long()?.toInt() ?: openStep,
+                )
+                openTurn = live?.turn ?: openTurn
+                openStep = live?.step ?: openStep
+                live?.turn?.let { turnFacts.getOrPut(it) { TurnRecord(it) } }
+                running = true
+            }
             "chunk" -> {
-                val l = live ?: LiveAttempt(f["attemptId"].str() ?: "live").also { live = it }
+                val l = live ?: LiveAttempt(f["attemptId"].str() ?: "live", openTurn, openStep).also { live = it }
                 l.chunk(f["chunk"], f["time"].long())
             }
             // Cancel / abort ends the attempt with abandoned; clear running even if turn/end is delayed.
@@ -1030,7 +1136,7 @@ class TranscriptReducer {
 }
 
 /** In-flight model attempt assembled from StreamChunks. */
-private class LiveAttempt(val id: String) {
+private class LiveAttempt(val id: String, val turn: Int?, val step: Int?) {
     private class Block(val type: String, val sb: StringBuilder = StringBuilder(), var toolId: String? = null, var toolName: String? = null, var startedAt: Long? = null)
     private val blocks = sortedMapOf<Int, Block>()
     /** Desktop firstTokenTime — first non-reasoning delta wall time. */
@@ -1077,9 +1183,12 @@ private class LiveAttempt(val id: String) {
 
     fun items(): List<Item> = blocks.map { (i, b) ->
         when (b.type) {
-            "reasoning" -> Item.Reasoning("live-$id-$i", b.sb.toString(), null, live = true)
-            "tool-call" -> Item.Tool("live-$id-$i", b.toolId ?: "", b.toolName ?: "…", b.sb.toString(), ToolStatus.Running)
-            else -> Item.Text("live-$id-$i", b.sb.toString(), live = true)
+            "reasoning" -> Item.Reasoning("live-$id-$i", b.sb.toString(), null, live = true, turn = turn, step = step)
+            "tool-call" -> Item.Tool(
+                "live-$id-$i", b.toolId ?: "", b.toolName ?: "…", b.sb.toString(), ToolStatus.Running,
+                turn = turn, step = step,
+            )
+            else -> Item.Text("live-$id-$i", b.sb.toString(), live = true, turn = turn, step = step)
         }
     }.filter { it !is Item.Text || it.text.isNotEmpty() }
 }

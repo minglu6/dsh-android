@@ -1,25 +1,22 @@
 package dev.dsh.pocket.app
 
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
-import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.Text
-import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.collectAsState
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.liveRegion
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.launch
+
+private fun terminalText(zh: String, en: String) = if (Pocket.prefs.language == AppLanguage.En) en else zh
 
 @Composable
 fun TerminalSheet(sessionId: String, onDismiss: () -> Unit, onBack: (() -> Unit)? = null) {
@@ -27,56 +24,101 @@ fun TerminalSheet(sessionId: String, onDismiss: () -> Unit, onBack: (() -> Unit)
     val meta by Pocket.terminalMeta.collectAsState()
     val active by Pocket.active.collectAsState()
     val connections by Pocket.status.collectAsState()
+    val ops by Pocket.ops.collectAsState()
     var opening by remember(sessionId) { mutableStateOf(true) }
+    var attempt by remember(sessionId) { mutableIntStateOf(0) }
+    var forceNew by remember(sessionId) { mutableStateOf(false) }
+    var everAttached by remember(sessionId) { mutableStateOf(false) }
+    var confirmTerminate by remember(sessionId) { mutableStateOf(false) }
+    var terminating by remember(sessionId) { mutableStateOf(false) }
+    var operationError by remember(sessionId) { mutableStateOf<String?>(null) }
+    val scope = rememberCoroutineScope()
     val online = connections[active] == Dot.Online
     val current = meta?.takeIf { it.sessionId == sessionId && !opening }
-    val en = Pocket.prefs.language == AppLanguage.En
+    val running = online && !opening && !terminating && current?.state == "running"
 
-    LaunchedEffect(sessionId) {
-        val attachment = Pocket.openTerminal(sessionId)
+    LaunchedEffect(sessionId, online, attempt) {
+        if (!online) { opening = false; return@LaunchedEffect }
+        opening = true
+        operationError = null
+        val attachment = Pocket.openTerminal(sessionId, forceNew = forceNew)
+        forceNew = false
         try {
             attachment.join()
             opening = false
+            if (Pocket.terminalMeta.value?.sessionId == sessionId) everAttached = true
             awaitCancellation()
         } finally {
-            // Leave the host shell alive; only this panel's output subscription is released.
             attachment.cancel()
+            // Back and collapse only detach. Killing the shell is an explicit, confirmed action.
             Pocket.closeTerminalFollow()
         }
     }
 
+    if (confirmTerminate) AlertDialog(
+        onDismissRequest = { confirmTerminate = false },
+        title = { Text(terminalText("终止终端？", "Terminate terminal?")) },
+        text = { Text(terminalText("这将结束 Shell 和其中正在运行的命令。仅关闭面板不会终止它们。", "This ends the shell and its running commands. Closing the panel only detaches.")) },
+        confirmButton = {
+            TextButton(onClick = {
+                confirmTerminate = false
+                terminating = true
+                scope.launch {
+                    try { Pocket.terminateTerminal(sessionId) }
+                    catch (cancelled: CancellationException) { throw cancelled }
+                    catch (failure: Exception) { operationError = failure.message }
+                    finally { terminating = false }
+                }
+            }) { Text(terminalText("终止", "Terminate"), color = T.Err) }
+        },
+        dismissButton = { TextButton(onClick = { confirmTerminate = false }) { Text(terminalText("取消", "Cancel")) } },
+    )
+
     RightPanelFrame(
-        title = current?.title?.takeIf { it.isNotBlank() } ?: if (en) "Terminal" else "终端",
+        title = current?.title?.takeIf { it.isNotBlank() } ?: terminalText("终端", "Terminal"),
         onDismiss = onDismiss,
         onBack = onBack,
     ) {
         val status = when {
-            !online -> if (en) "Disconnected." else "连接已断开。"
-            opening -> if (en) "Connecting…" else "正在连接…"
-            current == null -> if (en) "Unavailable" else "不可用"
-            current.state == "closed" || current.state == "exited" -> if (en) "Terminal closed." else "终端已关闭。"
-            current.state != "running" -> if (en) "Unavailable" else "不可用"
+            !online -> terminalText("连接已断开；连接恢复后会重新附加。", "Disconnected; reattaching when the connection returns.")
+            opening -> terminalText("正在连接…", "Connecting…")
+            terminating -> terminalText("正在终止…", "Terminating…")
+            current == null -> terminalText("终端不可用", "Terminal unavailable")
+            current.state == "closed" || current.state == "exited" -> terminalText("终端已结束。", "Terminal ended.")
+            current.state != "running" -> terminalText("终端不可用", "Terminal unavailable")
             else -> null
         }
-        if (current != null) {
-            status?.let {
-                Text(it, color = T.Text3, fontSize = 12.sp, modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp))
+        if (status != null || operationError != null) {
+            Text(operationError ?: status.orEmpty(), color = if (operationError != null) T.Err else T.Text3, fontSize = 12.sp,
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp).semantics { liveRegion = LiveRegionMode.Polite })
+        }
+        Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), verticalAlignment = Alignment.CenterVertically) {
+            if (!running) {
+                TextButton(onClick = { attempt++ }, enabled = online && !opening && !terminating) {
+                    Icon(D.refresh, null, Modifier.size(16.dp))
+                    Spacer(Modifier.width(6.dp))
+                    Text(terminalText("重新连接", "Reconnect"))
+                }
+                TextButton(onClick = { forceNew = true; attempt++ }, enabled = online && !opening && !terminating && "terminal.create" in ops) {
+                    Text(terminalText("新建终端", "New terminal"))
+                }
             }
+            if (current != null && "terminal.close" in ops) TextButton(onClick = { confirmTerminate = true }, enabled = running) {
+                Text(terminalText("终止终端", "Terminate"), color = if (running) T.Err else T.Text3)
+            }
+        }
+        if (current != null || everAttached) {
             TerminalView(
                 terminal = Pocket.terminal,
                 revision = revision,
-                modifier = Modifier.fillMaxSize().padding(12.dp),
-                onResize = { cols, rows -> Pocket.resizeTerminal(cols, rows) },
-                onInput = { if (online && current.state == "running") Pocket.writeTerminal(it) },
+                modifier = Modifier.fillMaxWidth().weight(1f).padding(8.dp),
+                enabled = running,
+                onResize = { cols, rows -> if (online) Pocket.resizeTerminal(cols, rows) },
+                onInput = { if (running) Pocket.writeTerminal(it) },
             )
         } else {
-            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                    if (opening && online) {
-                        CircularProgressIndicator(modifier = Modifier.size(24.dp), color = T.Accent, strokeWidth = 2.dp)
-                    }
-                    Text(status.orEmpty(), color = T.Text3, fontSize = 13.sp)
-                }
+            Box(Modifier.fillMaxWidth().weight(1f), contentAlignment = Alignment.Center) {
+                if (opening && online) CircularProgressIndicator(modifier = Modifier.size(24.dp), color = T.Accent, strokeWidth = 2.dp)
             }
         }
     }

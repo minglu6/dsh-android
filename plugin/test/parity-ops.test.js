@@ -2,7 +2,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import {
   searchOps, workspaceOps, feedbackOps, fileReferenceOps, sessionReferenceOps,
-  attachmentOps, workspaceChangesOps, uploadOps, userQuestionOps,
+  attachmentOps, workspaceChangesOps, uploadOps, userQuestionOps, goalOps, directoryOps,
 } from '../src/parity-ops.js'
 import { createUserQuestionHook } from '../src/user-question-hook.js'
 
@@ -20,48 +20,89 @@ test('sessions.search forwards query to sessionController.search', async () => {
   await assert.rejects(() => ops['sessions.search']({}), /query required/)
 })
 
-test('workspace archive/pin use registry fallback and return id sets', async () => {
-  const state = { archivedSessionIds: [], pinnedSessionIds: [] }
-  const registry = {
-    get archivedSessionIds() { return state.archivedSessionIds },
-    get pinnedSessionIds() { return state.pinnedSessionIds },
-    async archiveSession(id, opts = {}) {
-      if (!state.archivedSessionIds.includes(id)) state.archivedSessionIds = [...state.archivedSessionIds, id]
-      state.pinnedSessionIds = state.pinnedSessionIds.filter((x) => x !== id)
-      this._lastArchiveOpts = opts
-    },
-    async unarchiveSession(id) {
-      state.archivedSessionIds = state.archivedSessionIds.filter((x) => x !== id)
-    },
-    async pinSession(id) {
-      if (!state.pinnedSessionIds.includes(id)) state.pinnedSessionIds = [id, ...state.pinnedSessionIds]
-    },
-    async unpinSession(id) {
-      state.pinnedSessionIds = state.pinnedSessionIds.filter((x) => x !== id)
-    },
+test('native and unknown picker capabilities do not advertise directory browsing', () => {
+  let invoked = false
+  const controller = { list: () => { invoked = true; throw new Error('native picker has no browse capability') } }
+  for (const kind of ['native', 'external-picker']) {
+    const ops = directoryOps(controller, { capability: () => ({ kind }) })
+    assert.equal(Object.hasOwn(ops, 'workspace.directoryList'), false)
+    assert.deepEqual(Object.keys(ops), [])
   }
-  const ops = workspaceOps(null, registry)
-  assert.deepEqual(ops['workspace.state'](), { archivedSessionIds: [], pinnedSessionIds: [] })
-  await ops['workspace.pinSession']({ sessionId: 'a' })
-  assert.deepEqual(ops['workspace.state']().pinnedSessionIds, ['a'])
-  const archived = await ops['workspace.archiveSession']({ sessionId: 'a', stopActivity: true })
-  assert.deepEqual(archived.archivedSessionIds, ['a'])
-  assert.deepEqual(ops['workspace.state']().pinnedSessionIds, [])
-  assert.equal(registry._lastArchiveOpts.stopActivity, true)
-  await ops['workspace.unarchiveSession']({ sessionId: 'a' })
-  assert.deepEqual(ops['workspace.state']().archivedSessionIds, [])
+  assert.equal(invoked, false)
 })
 
-test('workspace ops prefer workspaceController when present', async () => {
-  const calls = []
+test('browse capability exposes the official controller and preserves its cancellation and failures', async () => {
+  const signal = new AbortController().signal
+  const listing = { path: '/workspace', home: '/home', crumbs: [], entries: [], truncated: false }
+  const refused = Object.assign(new Error('cannot list directory'), { code: 'directory-picker/unreadable' })
+  const ops = directoryOps({
+    async list(path, callerSignal) {
+      assert.equal(callerSignal, signal)
+      if (path === '/denied') throw refused
+      assert.equal(path, undefined)
+      return listing
+    },
+  }, { capability: () => ({ kind: 'browse' }) })
+  assert.equal(await ops['workspace.directoryList']({}, signal), listing)
+  await assert.rejects(ops['workspace.directoryList']({ path: '/denied' }, signal), (error) => error === refused)
+})
+
+test('workspace baseline retains entity identity/order and closes the source after reading', async () => {
+  const baseline = {
+    items: [{ workspaceId: 'w1', path: '/project', title: 'Project', sessionIds: ['fork', 'root'] }],
+    archivedSessionIds: ['old'], pinnedSessionIds: ['root'],
+  }
+  let closed = false
+  let signal
   const ops = workspaceOps({
-    archiveSession: async (req) => { calls.push(['archive', req]); return { archivedSessionIds: [req.sessionId] } },
-    pinSession: async (req) => { calls.push(['pin', req]); return { pinnedSessionIds: [req.sessionId] } },
-  }, { archivedSessionIds: [], pinnedSessionIds: [] })
-  await ops['workspace.archiveSession']({ sessionId: 's1', stopActivity: true })
-  await ops['workspace.pinSession']({ sessionId: 's2' })
-  assert.deepEqual(calls[0], ['archive', { sessionId: 's1', stopActivity: true }])
-  assert.deepEqual(calls[1], ['pin', { sessionId: 's2' }])
+    async *follow(s) {
+      signal = s
+      try { yield { type: 'baseline', value: baseline } }
+      finally { closed = true }
+    },
+  })
+  assert.deepEqual(await ops['workspace.state']({}, AbortSignal.timeout(1000)), baseline)
+  assert.equal(closed, true)
+  assert.equal(signal.aborted, true)
+  assert.equal('workspace.create' in ops, false)
+})
+
+test('workspace archive preserves admission refusal and explicit stop consent', async () => {
+  let archived = false
+  const activity = [{ kind: 'job', id: 'bash-1' }]
+  const refusal = Object.assign(new Error('active work'), {
+    code: 'workspace/session-active', details: { sessionId: 's1', activity },
+  })
+  const ops = workspaceOps({
+    archiveSession: async (request) => {
+      if (request.stopActivity !== true) throw refusal
+      archived = true
+      return { archivedSessionIds: [request.sessionId] }
+    },
+  })
+  await assert.rejects(ops['workspace.archiveSession']({ sessionId: 's1' }), (error) => error === refusal)
+  assert.equal(archived, false)
+  assert.deepEqual(await ops['workspace.archiveSession']({ sessionId: 's1', stopActivity: true }), { archivedSessionIds: ['s1'] })
+  assert.equal(archived, true)
+})
+
+test('goal mutation requires a real revision fence and preserves stale-revision refusal', () => {
+  const conflict = Object.assign(new Error('goal changed'), { code: 'goal/conflict' })
+  let writes = 0
+  const ops = goalOps({
+    get: () => undefined,
+    pause: (_agent, ref) => {
+      if (ref.revision !== 2) throw conflict
+      writes++
+      return { ...ref, revision: 3, phase: 'paused' }
+    },
+  }, { get: () => ({ id: 's1' }) })
+  assert.deepEqual(ops['goals.get']({ sessionId: 's1' }), { goal: null })
+  assert.throws(() => ops['goals.pause']({ sessionId: 's1', ref: { id: 'g1' } }), /id\/revision required/)
+  assert.throws(() => ops['goals.pause']({ sessionId: 's1', ref: { id: 'g1', revision: 1 } }), (error) => error === conflict)
+  assert.equal(writes, 0)
+  assert.equal(ops['goals.pause']({ sessionId: 's1', ref: { id: 'g1', revision: 2 } }).goal.phase, 'paused')
+  assert.equal(writes, 1)
 })
 
 test('feedback.get/set map to messageFeedback list/put/delete', async () => {

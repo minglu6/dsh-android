@@ -1,6 +1,18 @@
 package dev.dsh.pocket.app
 
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertTextContains
+import androidx.compose.ui.test.hasSetTextAction
+import androidx.compose.ui.test.hasText
+import androidx.compose.ui.test.performScrollTo
+import dev.dsh.pocket.protocol.FrameTransport
+import dev.dsh.pocket.protocol.PocketClient
+import dev.dsh.pocket.protocol.PocketJson
+import dev.dsh.pocket.protocol.Route
+import dev.dsh.pocket.protocol.get
+import dev.dsh.pocket.protocol.str
+import kotlinx.coroutines.flow.emptyFlow
+import org.junit.Assert.assertEquals
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
@@ -29,10 +41,12 @@ class SlashCommandTest {
         Pocket.active.value = "p1"
         Pocket.status.value = mapOf("p1" to Dot.Online)
         Pocket.catalog.value = null
-        Pocket.ops.value = setOf("commands.execute", "session.export", "permissions.get", "models.catalog")
+        Pocket.ops.value = setOf("commands.list", "commands.execute", "session.export", "permissions.catalog", "permissions.get", "models.catalog")
         Pocket.sessions.value = emptyList()
         Pocket.chat.value = ChatState("s1", title = "Greeting", running = false, loaded = true)
         Pocket.approvals.value = emptyList()
+        Pocket.userQuestions.value = emptyList()
+        Pocket.permissionCatalog.value = null
         Pocket.permission.value = mapOf("s1" to "workspace-write")
         Pocket.model.value = emptyMap()
     }
@@ -50,27 +64,64 @@ class SlashCommandTest {
         rule.onNodeWithTag("planChip").assertDoesNotExist()
     }
 
-    @Test fun slashOpensCommandPopupWithDesktopRows() {
+    @Test fun slashSearchUsesHostCatalogAndInsertsSelectedCommand() = withHostCatalog {
         rule.setContent { PocketTheme { ChatRoot(onMenu = {}) } }
-        rule.waitForIdle()
         rule.onNodeWithTag("composerInput").performTextInput("/")
+        rule.mainClock.advanceTimeBy(1500)
         rule.waitForIdle()
-        rule.onNodeWithText("文件").assertIsDisplayed()
-        rule.onNodeWithText("目标").assertIsDisplayed()
-        rule.onNodeWithText("压缩").assertIsDisplayed()
-        rule.onNodeWithText("权限").assertIsDisplayed()
-        rule.onNodeWithText("模型").assertIsDisplayed()
-        rule.onNodeWithText("下载日志").assertIsDisplayed()
+        rule.onNodeWithText("/inspect-worktree").performScrollTo().assertIsDisplayed()
+        rule.onNode(hasSetTextAction() and hasText("搜索指令")).performTextInput("inspect")
+        rule.waitForIdle()
+        rule.onNodeWithText("/access-team").assertDoesNotExist()
+        rule.onNodeWithText("/inspect-worktree").performScrollTo().performClick()
+        rule.waitForIdle()
+        rule.onNodeWithTag("composerInput").assertTextContains("/inspect-worktree", substring = true)
     }
 
-    @Test fun pickingPermissionOpensPicker() {
+    @Test fun renamedOfficialPermissionCommandOpensLivePicker() = withHostCatalog {
         rule.setContent { PocketTheme { ChatRoot(onMenu = {}) } }
-        rule.waitForIdle()
         rule.onNodeWithTag("composerInput").performTextInput("/")
+        rule.mainClock.advanceTimeBy(1500)
         rule.waitForIdle()
-        rule.onNodeWithText("权限").performClick()
+        rule.onNodeWithText("/access-team").performScrollTo().performClick()
+        rule.mainClock.advanceTimeBy(1500)
         rule.waitForIdle()
-        rule.onNodeWithText("访问模式").assertIsDisplayed()
+        rule.onNodeWithText("Team policy").assertIsDisplayed()
+        rule.onNodeWithText("/access-team").assertDoesNotExist()
+    }
+
+    private fun withHostCatalog(block: () -> Unit) {
+        val client = PocketClient()
+        val onFrame = client.javaClass.getDeclaredMethod("onFrame", String::class.java).apply { isAccessible = true }
+        val commands = """{"commands":[
+            {"name":"access-team","description":"Choose the workspace policy","definitionId":"@deepseek-ai/dsh-permission-presets"},
+            {"name":"inspect-worktree","description":"Inspect repository changes","definitionId":"team/worktree"}
+        ]}"""
+        val permissions = """{"options":[{"value":"team","name":"Team policy"}],"defaultOptions":[{"value":"team","name":"Team policy"}],"defaultPreset":"team"}"""
+        val transport = object : FrameTransport {
+            override val route = Route.WsLocal
+            override val incoming = emptyFlow<String>()
+            override val closeReason: String? = null
+            override suspend fun send(text: String) {
+                val request = PocketJson.parseToJsonElement(text)
+                val result = when (request["op"].str()) {
+                    "commands.list" -> {
+                        assertEquals("s1", request["args"]["sessionId"].str())
+                        commands
+                    }
+                    "permissions.catalog" -> permissions
+                    else -> error("Unexpected operation: ${request["op"]}")
+                }
+                onFrame.invoke(client, """{"id":${request["id"]},"ok":true,"result":$result}""")
+            }
+            override fun close() {}
+        }
+        client.javaClass.getDeclaredField("transport").apply { isAccessible = true }.set(client, transport)
+        val field = Pocket.javaClass.getDeclaredField("client").apply { isAccessible = true }
+        val previous = field.get(Pocket)
+        field.set(Pocket, client)
+        try { block() }
+        finally { client.close(); field.set(Pocket, previous) }
     }
 
     @Test fun chatTopBarShowsTitleWithoutProfileName() {

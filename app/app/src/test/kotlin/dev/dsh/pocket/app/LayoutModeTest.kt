@@ -6,16 +6,17 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class LayoutModeTest {
-    @Test fun autoUses600DpBreakpoint() {
+    @Test fun autoReservesConversationWidthBesideSidebar() {
         assertFalse(useTwoPaneLayout(360, LayoutMode.Auto))
-        assertFalse(useTwoPaneLayout(599, LayoutMode.Auto))
-        assertTrue(useTwoPaneLayout(600, LayoutMode.Auto))
+        assertFalse(useTwoPaneLayout(759, LayoutMode.Auto))
+        assertTrue(useTwoPaneLayout(760, LayoutMode.Auto))
         assertTrue(useTwoPaneLayout(900, LayoutMode.Auto))
     }
 
     @Test fun phoneAndDesktopForceMode() {
         assertFalse(useTwoPaneLayout(900, LayoutMode.Phone))
-        assertTrue(useTwoPaneLayout(360, LayoutMode.Desktop))
+        assertFalse(useTwoPaneLayout(360, LayoutMode.Desktop))
+        assertTrue(useTwoPaneLayout(760, LayoutMode.Desktop))
     }
 
     @Test fun previewKindDetectsMedia() {

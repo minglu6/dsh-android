@@ -57,6 +57,7 @@ export function slimSessionSummary(item) {
     blank: item.blank,
     cwd: item.cwd,
     parentSessionId: item.parentSessionId,
+    origin: item.origin,
   }
   if (title !== undefined && title !== null) {
     out.projections = { values: { title } }
@@ -309,11 +310,11 @@ export function createPocketServer(opts) {
   const approvals = new Map()
   /** callId (or synthetic id) -> { payload, settle(answer), close } */
   const userQuestions = new Map()
-  /** sessionId -> true when known to be a subagent (has parentSessionId). */
+  /** Session ids explicitly marked as delegated subagents; a fork is still a root. */
   const childSessions = new Set()
   const authedClients = () => [...clients].filter((c) => c.device)
   const broadcast = (m) => { for (const c of authedClients()) c.push(m) }
-  const projectionKeys = new Set(['sessionStats', 'tokenUsage', 'contextPressure', 'contextBreakdown', 'permissions', 'modelSelection'])
+  const projectionKeys = new Set(['sessionStats', 'tokenUsage', 'contextPressure', 'contextBreakdown', 'permissions', 'modelSelection', 'agentPreset', 'goal', 'plan'])
   // Follow's snapshot is the baseline. Hold newer projections until it is sent,
   // including while a reconnect snapshot is paged or trimmed for the wire.
   const followProjections = new WeakMap()
@@ -330,7 +331,7 @@ export function createPocketServer(opts) {
   const unsub = opts.onSessionEvent?.((kind, args) => {
     if (kind === 'added') {
       const summary = args[0]
-      if (summary?.parentSessionId) childSessions.add(summary.sessionId)
+      if (summary?.origin === 'subagent') childSessions.add(summary.sessionId)
       else if (summary?.sessionId) childSessions.delete(summary.sessionId)
     } else if (kind === 'removed') {
       childSessions.delete(args[0])
@@ -408,7 +409,7 @@ export function createPocketServer(opts) {
       if (msg === null || typeof msg !== 'object') { client.close(1007, 'bad frame'); return }
       if (msg.op === 'pong') return
       const reply = (body) => client.push({ id: msg.id, ...body })
-      const fail = (code, message) => reply({ ok: false, error: { code, message } })
+      const fail = (code, message, details) => reply({ ok: false, error: { code, message, ...(details === undefined ? {} : { details }) } })
       if (!client.device) {
         if (busy) return
         if (msg.op !== 'hello' && msg.op !== 'pair') { fail('auth/denied', 'hello with a valid token required'); client.close(4401, 'unauthorized'); return }
@@ -497,7 +498,7 @@ export function createPocketServer(opts) {
       const result = await op(args, AbortSignal.timeout(120_000), client)
       reply({ ok: true, result: result ?? null })
     } catch (error) {
-      fail(error?.code ?? 'internal', String(error?.message ?? error))
+      fail(error?.code ?? 'internal', String(error?.message ?? error), error?.details)
     }
   }
 
@@ -568,8 +569,13 @@ export function createPocketServer(opts) {
     /** Register extra ops; returns a disposer. */
     registerOps(table) {
       Object.assign(extraOps, table)
-      return () => { for (const k of Object.keys(table)) if (extraOps[k] === table[k]) delete extraOps[k] }
+      broadcast({ ev: 'ops.changed', ops: allOps() })
+      return () => {
+        for (const k of Object.keys(table)) if (extraOps[k] === table[k]) delete extraOps[k]
+        broadcast({ ev: 'ops.changed', ops: allOps() })
+      }
     },
+    broadcastEvent(ev, payload = {}) { broadcast({ ...payload, ev }) },
     hasDevices: () => authedClients().length > 0,
     /** Device ids currently authenticated on a live connection. */
     onlineDeviceIds: () => new Set(authedClients().filter((c) => !c.device.owner).map((c) => c.device.id)),

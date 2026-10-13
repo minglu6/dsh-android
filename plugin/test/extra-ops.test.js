@@ -17,6 +17,17 @@ test('commands.execute prefixes slash and returns Host result', async () => {
   await assert.rejects(() => ops['commands.execute']({ sessionId: 'missing', line: '/plan' }), /no live agent/)
 })
 
+test('commands catalog is scoped to the requested live agent', () => {
+  const ops = commandOps({
+    list: (agent) => agent.id === 'standard'
+      ? [{ name: 'goal', definitionId: '@deepseek-ai/dsh-command-goal', description: 'Objective', input: { hint: 'text' } }]
+      : [],
+  }, { get: (id) => ['standard', 'minimal'].includes(id) ? { id } : undefined })
+  assert.equal(ops['commands.list']({ sessionId: 'minimal' }).commands.length, 0)
+  assert.equal(ops['commands.list']({ sessionId: 'standard' }).commands[0].input.hint, 'text')
+  assert.throws(() => ops['commands.list']({ sessionId: 'gone' }), /no live agent/)
+})
+
 test('files.list builds scope from session header cwd', async () => {
   const ops = filesOps({
     list: async (scope, path) => ({ path, scope, entries: [{ name: 'a.ts', type: 'file' }] }),
@@ -61,6 +72,34 @@ test('jobs.list returns first rows frame then stops', async () => {
   assert.equal(r.jobs[0].id, 'j1')
   const k = ops['jobs.kill']({ sessionId: 's1', jobId: 'j1' })
   assert.equal(k.outcome, 'requested')
+})
+
+test('job output subscription forwards retained offsets and cancels its source on unfollow', async () => {
+  let disposed
+  const closed = new Promise((resolve) => { disposed = resolve })
+  let observed
+  const opened = new Promise((resolve) => { observed = resolve })
+  const ops = jobsOps({
+    async *follow(request, signal) {
+      try {
+        yield { type: 'opened', job: { id: request.jobId }, from: request.from }
+        await new Promise((resolve) => {
+          signal.addEventListener('abort', resolve, { once: true })
+          observed()
+        })
+      } finally { disposed() }
+    },
+  })
+  const pushed = []
+  const client = { nextSub: 1, subs: new Map(), push: (frame) => pushed.push(frame) }
+  const receipt = ops['jobs.follow']({ sessionId: 's1', jobId: 'bash-1', from: 24 }, null, client)
+  await opened
+  assert.equal(pushed[0].frame.from, 24)
+  client.subs.get(receipt.subId).abort()
+  await closed
+  await new Promise((resolve) => setImmediate(resolve))
+  assert.equal(client.subs.has(receipt.subId), false)
+  assert.equal(pushed.some((frame) => frame.ev === 'job.end'), false)
 })
 
 test('terminal.create/write/follow pumps frames then unfollow aborts', async () => {

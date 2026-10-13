@@ -8,6 +8,23 @@ class ParityItemsTest {
     private fun ev(seq: Int, type: String, data: String) =
         j("""{"type":"event","event":{"type":"$type","seq":$seq,"time":${1000 + seq},"data":$data}}""")
 
+    @Test fun preservesForkIdentityAndSearchSnippetSeparately() {
+        val fork = assertNotNull(SessionSummary.parse(j("""{"sessionId":"fork","parentSessionId":"root","snippet":"matched text"}""")))
+        assertNull(fork.origin)
+        assertEquals("root", fork.parentSessionId)
+        assertNull(fork.title)
+        assertEquals("matched text", fork.searchSnippet)
+        val subagent = assertNotNull(SessionSummary.parse(j("""{"sessionId":"child","origin":"subagent"}""")))
+        assertEquals("subagent", subagent.origin)
+    }
+
+    @Test fun workspaceRetainsHostIdentityAndManualSessionOrder() {
+        val workspace = assertNotNull(WorkspaceView.parse(j("""{"workspaceId":"w1","path":"/project","title":"Project","sessionIds":["b","a"],"createdAt":"2026-10-13T00:00:00Z"}""")))
+        assertEquals("w1", workspace.workspaceId)
+        assertEquals(listOf("b", "a"), workspace.sessionIds)
+        assertNull(WorkspaceView.parse(j("""{"path":"/project","title":"No identity"}""")))
+    }
+
     @Test fun parsesUserImageRefs() {
         val r = TranscriptReducer()
         r.apply(j("""{"type":"snapshot","cursor":0,"records":[],"projections":{}}"""))

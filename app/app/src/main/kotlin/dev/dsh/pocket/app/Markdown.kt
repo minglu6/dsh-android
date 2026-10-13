@@ -38,6 +38,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalUriHandler
@@ -319,7 +320,7 @@ private fun plainText(node: Node): String = buildString {
 // region Compose
 
 @Composable
-fun MarkdownView(text: String, streaming: Boolean = false, modifier: Modifier = Modifier) {
+fun MarkdownView(text: String, streaming: Boolean = false, modifier: Modifier = Modifier, bodyColor: Color = T.Ink) {
     val blocks = remember(text, streaming) { parseMarkdown(text, streaming) }
     val bodySp = Pocket.prefs.fontSize.sp
     // One SelectionContainer for the whole message: paragraphs, lists, tables, fences.
@@ -327,7 +328,7 @@ fun MarkdownView(text: String, streaming: Boolean = false, modifier: Modifier = 
         Column(Modifier.fillMaxWidth()) {
             blocks.forEachIndexed { i, block ->
                 if (i > 0) Spacer(Modifier.height(blockGap(blocks[i - 1], block)))
-                MdBlockView(block, bodySp)
+                MdBlockView(block, bodySp, bodyColor)
             }
         }
     }
@@ -339,16 +340,16 @@ private fun blockGap(prev: MdBlock, cur: MdBlock): androidx.compose.ui.unit.Dp =
 }
 
 @Composable
-private fun MdBlockView(block: MdBlock, bodySp: TextUnit) {
+private fun MdBlockView(block: MdBlock, bodySp: TextUnit, bodyColor: Color) {
     when (block) {
-        is MdBlock.Paragraph -> InlineRichText(block.spans, TextStyle(fontSize = bodySp, lineHeight = (bodySp.value + 10).sp, color = T.Ink))
+        is MdBlock.Paragraph -> InlineRichText(block.spans, TextStyle(fontSize = bodySp, lineHeight = (bodySp.value + 10).sp, color = bodyColor))
         is MdBlock.Heading -> {
             val size = when (block.level) {
                 1 -> 28.sp; 2 -> 24.sp; 3 -> 20.sp; 4 -> 17.sp; else -> bodySp
             }
             InlineRichText(
                 block.spans,
-                TextStyle(fontSize = size, lineHeight = (size.value + 8).sp, fontWeight = FontWeight.SemiBold, color = T.Ink),
+                TextStyle(fontSize = size, lineHeight = (size.value + 8).sp, fontWeight = FontWeight.SemiBold, color = bodyColor),
             )
         }
         is MdBlock.BulletList -> Column {
@@ -356,7 +357,7 @@ private fun MdBlockView(block: MdBlock, bodySp: TextUnit) {
                 if (idx > 0) Spacer(Modifier.height(6.dp))
                 Row(Modifier.fillMaxWidth()) {
                     Text("•", color = T.Text2, fontSize = bodySp, modifier = Modifier.width(18.dp))
-                    Column(Modifier.weight(1f)) { item.forEach { MdBlockView(it, bodySp) } }
+                    Column(Modifier.weight(1f)) { item.forEach { MdBlockView(it, bodySp, bodyColor) } }
                 }
             }
         }
@@ -365,7 +366,7 @@ private fun MdBlockView(block: MdBlock, bodySp: TextUnit) {
                 if (idx > 0) Spacer(Modifier.height(6.dp))
                 Row(Modifier.fillMaxWidth()) {
                     Text("${block.start + idx}.", color = T.Text2, fontSize = bodySp, modifier = Modifier.width(22.dp))
-                    Column(Modifier.weight(1f)) { item.forEach { MdBlockView(it, bodySp) } }
+                    Column(Modifier.weight(1f)) { item.forEach { MdBlockView(it, bodySp, bodyColor) } }
                 }
             }
         }
@@ -374,12 +375,12 @@ private fun MdBlockView(block: MdBlock, bodySp: TextUnit) {
             Column(Modifier.padding(start = 14.dp).weight(1f)) {
                 block.children.forEachIndexed { i, child ->
                     if (i > 0) Spacer(Modifier.height(8.dp))
-                    MdBlockView(child, bodySp)
+                    MdBlockView(child, bodySp, bodyColor)
                 }
             }
         }
         is MdBlock.Code -> FencedCode(block.language, block.literal, block.incomplete)
-        is MdBlock.Table -> GfmTable(block)
+        is MdBlock.Table -> GfmTable(block, bodyColor)
         is MdBlock.Rule -> HorizontalDivider(color = T.Border, thickness = 0.5.dp, modifier = Modifier.padding(vertical = 8.dp))
     }
 }
@@ -388,8 +389,7 @@ private fun MdBlockView(block: MdBlock, bodySp: TextUnit) {
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun FencedCode(language: String?, literal: String, incomplete: Boolean) {
-    // Default wrap ON (phone); toggle restores horizontal scroll for desk-like viewing.
-    var wrapped by remember { mutableStateOf(true) }
+    var wrapped by remember(Pocket.prefs.codeWordWrap) { mutableStateOf(Pocket.prefs.codeWordWrap) }
     val display = if (wrapped) literal.breakAnywhere() else literal
     val highlighted = remember(display, language) { highlightCode(display, language) }
     val clip = LocalClipboardManager.current
@@ -441,8 +441,8 @@ private fun FencedCode(language: String?, literal: String, incomplete: Boolean) 
             highlighted,
             style = TextStyle(
                 fontFamily = MesloNerdFamily,
-                fontSize = 13.sp,
-                lineHeight = 20.sp,
+                fontSize = Pocket.prefs.codeFontSize.sp,
+                lineHeight = (Pocket.prefs.codeFontSize + 7).sp,
                 color = TokyoNight.Fg,
             ),
             softWrap = wrapped,
@@ -483,24 +483,24 @@ private fun CodeHeaderIcon(
 }
 
 @Composable
-private fun GfmTable(table: MdBlock.Table) {
+private fun GfmTable(table: MdBlock.Table, bodyColor: Color) {
     val scroll = rememberScrollState()
     Column(Modifier.fillMaxWidth().horizontalScroll(scroll)) {
         if (table.headers.isNotEmpty()) {
             table.headers.forEach { header ->
-                TableRowView(header, header = true)
+                TableRowView(header, header = true, bodyColor = bodyColor)
                 HorizontalDivider(color = T.Border, thickness = 0.5.dp)
             }
         }
         table.rows.forEachIndexed { i, row ->
-            TableRowView(row, header = false)
+            TableRowView(row, header = false, bodyColor = bodyColor)
             if (i != table.rows.lastIndex) HorizontalDivider(color = T.Border, thickness = 0.5.dp)
         }
     }
 }
 
 @Composable
-private fun TableRowView(cells: List<List<MdSpan>>, header: Boolean) {
+private fun TableRowView(cells: List<List<MdSpan>>, header: Boolean, bodyColor: Color) {
     Row(verticalAlignment = Alignment.CenterVertically) {
         cells.forEachIndexed { i, cell ->
             Box(
@@ -514,7 +514,7 @@ private fun TableRowView(cells: List<List<MdSpan>>, header: Boolean) {
                         fontSize = 14.sp,
                         lineHeight = 22.sp,
                         fontWeight = if (header) FontWeight.SemiBold else FontWeight.Normal,
-                        color = T.Ink,
+                        color = bodyColor,
                     ),
                 )
             }
@@ -540,7 +540,7 @@ private fun InlineRichText(spans: List<MdSpan>, style: TextStyle) {
                     fontStyle = if (s.italic) FontStyle.Italic else FontStyle.Normal,
                 ),
             )
-            is MdSpan.Code -> InlineCodeChip(s.text, style.fontSize)
+            is MdSpan.Code -> InlineCodeChip(s.text)
             is MdSpan.FileChip -> FileLinkChip(s.path, s.label)
             is MdSpan.Link -> Text(
                 s.text,
@@ -556,12 +556,12 @@ private fun InlineRichText(spans: List<MdSpan>, style: TextStyle) {
 }
 
 @Composable
-private fun InlineCodeChip(text: String, surrounding: TextUnit) {
+private fun InlineCodeChip(text: String) {
     Text(
         text,
         style = TextStyle(
             fontFamily = MesloNerdFamily,
-            fontSize = (surrounding.value * 0.875f).sp,
+            fontSize = Pocket.prefs.codeFontSize.sp,
             color = T.Ink,
         ),
         modifier = Modifier

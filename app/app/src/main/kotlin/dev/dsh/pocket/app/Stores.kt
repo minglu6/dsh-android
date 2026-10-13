@@ -1,6 +1,8 @@
 package dev.dsh.pocket.app
 
 import android.content.Context
+import android.content.SharedPreferences
+import androidx.compose.runtime.mutableIntStateOf
 import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
 import android.util.Base64
@@ -8,6 +10,7 @@ import dev.dsh.pocket.protocol.Route
 import dev.dsh.pocket.protocol.classifyWsRoute
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.builtins.ListSerializer
+import kotlinx.serialization.builtins.serializer
 import kotlinx.serialization.json.Json
 import java.security.KeyStore
 import javax.crypto.Cipher
@@ -151,7 +154,22 @@ enum class SessionOrderBy { Manual, Updated }
 enum class ArchivedFilter { Default, Show, Only }
 
 class AppPrefs(ctx: Context) {
-    private val p = ctx.getSharedPreferences("app", Context.MODE_PRIVATE)
+    private val storage = ctx.getSharedPreferences("app", Context.MODE_PRIVATE)
+    private val version = mutableIntStateOf(0)
+    private val preferenceListener = SharedPreferences.OnSharedPreferenceChangeListener { _, _ ->
+        version.intValue++
+    }
+
+    init {
+        storage.registerOnSharedPreferenceChangeListener(preferenceListener)
+    }
+
+    /** Observe reads without maintaining a second, potentially stale preference cache. */
+    private val p: SharedPreferences
+        get() {
+            version.intValue
+            return storage
+        }
     private val json = Json { ignoreUnknownKeys = true }
     var profiles: List<Profile>
         get() = p.getString("profiles", null)?.let { runCatching { json.decodeFromString(ListSerializer(Profile.serializer()), it) }.getOrNull() } ?: emptyList()
@@ -181,8 +199,20 @@ class AppPrefs(ctx: Context) {
         get() = runCatching { Appearance.valueOf(p.getString("appearance", null) ?: "Light") }.getOrDefault(Appearance.Light)
         set(v) = p.edit().putString("appearance", v.name).apply()
     var fontSize: Int
-        get() = p.getInt("fontSize", 14).coerceIn(12, 22)
-        set(v) = p.edit().putInt("fontSize", v.coerceIn(12, 22)).apply()
+        get() = p.getInt("fontSize", 14).coerceIn(10, 22)
+        set(v) = p.edit().putInt("fontSize", v.coerceIn(10, 22)).apply()
+    var codeFontSize: Int
+        get() = p.getInt("codeFontSize", 11).coerceIn(10, 16)
+        set(v) = p.edit().putInt("codeFontSize", v.coerceIn(10, 16)).apply()
+    var terminalFontSize: Int
+        get() = p.getInt("terminalFontSize", 13).coerceIn(10, 20)
+        set(v) = p.edit().putInt("terminalFontSize", v.coerceIn(10, 20)).apply()
+    var showCodeWorkView: Boolean
+        get() = p.getBoolean("showCodeWorkView", true)
+        set(v) = p.edit().putBoolean("showCodeWorkView", v).apply()
+    var codeWordWrap: Boolean
+        get() = p.getBoolean("codeWordWrap", false)
+        set(v) = p.edit().putBoolean("codeWordWrap", v).apply()
     var transcriptView: TranscriptView
         get() = runCatching { TranscriptView.valueOf(p.getString("transcriptView", null) ?: "Detailed") }.getOrDefault(TranscriptView.Detailed)
         set(v) = p.edit().putString("transcriptView", v.name).apply()
@@ -206,4 +236,23 @@ class AppPrefs(ctx: Context) {
     var archivedFilter: ArchivedFilter
         get() = runCatching { ArchivedFilter.valueOf(p.getString("archivedFilter", null) ?: "Default") }.getOrDefault(ArchivedFilter.Default)
         set(v) = p.edit().putString("archivedFilter", v.name).apply()
+    var sidebarCollapsed: Boolean
+        get() = p.getBoolean("sidebarCollapsed", false)
+        set(v) = p.edit().putBoolean("sidebarCollapsed", v).apply()
+
+    fun collapsedWorkspaces(hostId: String): Set<String> =
+        p.getStringSet("collapsedWorkspaces:$hostId", emptySet()).orEmpty().toSet()
+
+    fun setCollapsedWorkspaces(hostId: String, value: Set<String>) {
+        p.edit().putStringSet("collapsedWorkspaces:$hostId", value.toSet()).apply()
+    }
+
+    fun manualSessionOrder(hostId: String): List<String> =
+        p.getString("manualSessionOrder:$hostId", null)?.let {
+            runCatching { json.decodeFromString(ListSerializer(String.serializer()), it) }.getOrNull()
+        }.orEmpty()
+
+    fun setManualSessionOrder(hostId: String, value: List<String>) {
+        p.edit().putString("manualSessionOrder:$hostId", json.encodeToString(ListSerializer(String.serializer()), value.distinct())).apply()
+    }
 }

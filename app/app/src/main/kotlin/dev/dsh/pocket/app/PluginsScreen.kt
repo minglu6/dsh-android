@@ -31,6 +31,7 @@ import dev.dsh.pocket.protocol.get
 import dev.dsh.pocket.protocol.str
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.flow.first
 import kotlinx.serialization.json.*
 import java.util.UUID
 
@@ -38,7 +39,7 @@ private fun pt(zh: String, en: String) = if (Pocket.prefs.language == AppLanguag
 private val pluginJson = Json { prettyPrint = true }
 private fun pretty(value: JsonElement?) = value?.let { pluginJson.encodeToString(JsonElement.serializer(), it) }.orEmpty()
 private fun localized(value: JsonElement?): String? = value.str() ?: value[if (Pocket.prefs.language == AppLanguage.En) "en" else "zh"].str() ?: value["en"].str()
-private fun pluginTitle(value: JsonElement) = localized(value["meta"]["title"]) ?: value["name"].str() ?: value["moduleName"].str().orEmpty()
+private fun pluginTitle(value: JsonElement) = localized(value["meta"]["title"]) ?: value["name"].str() ?: value["rowId"].str() ?: value["moduleName"].str().orEmpty()
 private fun pluginDescription(value: JsonElement) = localized(value["meta"]["description"]) ?: value["description"].str().orEmpty()
 private fun configurationTitle(ns: String, plugins: List<JsonElement>): String {
     val runtime = plugins.firstOrNull { it["patchId"].str() == ns }
@@ -101,6 +102,31 @@ internal fun pluginLiveRow(row: JsonElement, plugins: List<JsonElement>): JsonEl
     return plugins.firstOrNull { it["entryId"].str() == id }
 }
 
+internal data class PluginParts(val total: Int, val running: Int, val off: Int, val failed: Int)
+
+internal fun pluginParts(rows: List<JsonElement>, plugins: List<JsonElement>): PluginParts {
+    var running = 0
+    var off = 0
+    var failed = 0
+    rows.forEach { row ->
+        val live = pluginLiveRow(row, plugins)
+        if (live["enabled"].bool() != true) off++
+        else if (live["fiberPhase"].str() == "active") running++
+        if (live["fiberPhase"].str() == "failed") failed++
+    }
+    return PluginParts(rows.size, running, off, failed)
+}
+
+private fun partsSummary(rows: List<JsonElement>, plugins: List<JsonElement>): String {
+    val counts = pluginParts(rows, plugins)
+    return buildList {
+        add(pt("${counts.total} 个组件", "${counts.total} components"))
+        if (counts.running > 0) add(pt("${counts.running} 个运行中", "${counts.running} running"))
+        if (counts.off > 0) add(pt("${counts.off} 个已停用", "${counts.off} disabled"))
+        if (counts.failed > 0) add(pt("${counts.failed} 个异常", "${counts.failed} failed"))
+    }.joinToString(" · ")
+}
+
 @Composable
 fun PluginsSettingsScreen(onBack: () -> Unit) {
     val profile by Pocket.active.collectAsState()
@@ -115,6 +141,7 @@ fun PluginsSettingsScreen(onBack: () -> Unit) {
 private fun PluginsPage(profile: String?, onBack: () -> Unit) {
     val ops by Pocket.ops.collectAsState()
     val status by Pocket.status.collectAsState()
+    val catalogRevision by Pocket.pluginCatalogRevision.collectAsState()
     val online = profile != null && status[profile] == Dot.Online
     val scope = rememberCoroutineScope()
     var bundles by remember { mutableStateOf<List<JsonElement>>(emptyList()) }
@@ -122,6 +149,7 @@ private fun PluginsPage(profile: String?, onBack: () -> Unit) {
     var namespaces by remember { mutableStateOf<List<JsonElement>>(emptyList()) }
     var writable by remember { mutableStateOf(false) }
     var loading by remember { mutableStateOf(false) }
+    var loaded by remember { mutableStateOf(false) }
     var busy by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
     var advancedConfigurations by remember { mutableStateOf(false) }
@@ -130,6 +158,7 @@ private fun PluginsPage(profile: String?, onBack: () -> Unit) {
     var outcome by remember { mutableStateOf<JsonElement?>(null) }
     var query by remember { mutableStateOf("") }
     var detail by remember { mutableStateOf<String?>(null) }
+    var partsQuery by remember(detail) { mutableStateOf("") }
     var config by remember { mutableStateOf<JsonElement?>(null) }
     var uninstall by remember { mutableStateOf<JsonElement?>(null) }
     var installOpen by remember { mutableStateOf(false) }
@@ -163,6 +192,7 @@ private fun PluginsPage(profile: String?, onBack: () -> Unit) {
             check(data["managementAvailable"].bool() != false) { pt("插件管理不可用", "Plugin management unavailable") }
             bundles = data["bundles"].arr().orEmpty().filter { it["name"].str() !in hiddenProfileBundles }
             plugins = data["plugins"].arr().orEmpty()
+            loaded = true
             if (detail != null && bundles.none { it["name"].str() == detail }) detail = null
             if ("plugins.settingsDescribe" in ops) {
                 try {
@@ -230,7 +260,12 @@ private fun PluginsPage(profile: String?, onBack: () -> Unit) {
             finally { installing = false }
         }
     }
-    LaunchedEffect(profile, online, ops) { if (online && !busy && !installing) refresh() }
+    LaunchedEffect(profile, online, ops, catalogRevision) {
+        if (online) {
+            snapshotFlow { busy || loading || installing || checking || installRequest != null }.first { !it }
+            refresh()
+        }
+    }
     fun back() {
         when {
             config != null -> config = null
@@ -256,7 +291,7 @@ private fun PluginsPage(profile: String?, onBack: () -> Unit) {
     } else {
         val selected = bundles.firstOrNull { it["name"].str() == detail }
         SettingsScaffold(selected?.let(::pluginTitle) ?: pt("插件", "Plugins"), ::back, actions = {
-            TextButton(::reload, enabled = online && !locked) { Text(pt("刷新", "Refresh"), fontSize = 13.sp) }
+            IconButton(::reload, enabled = online && !locked) { Icon(D.refresh, pt("刷新", "Refresh")) }
             if (selected == null || installRequest != null) {
                 Button({ openInstall() }, enabled = online && (installRequest != null || !busy),
                     shape = T.R8, contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp)) {
@@ -272,7 +307,7 @@ private fun PluginsPage(profile: String?, onBack: () -> Unit) {
                 PluginMessage(pt("安装、启用和配置插件", "Install, enable and configure plugins"))
                 OutlinedTextField(query, { query = it }, label = { Text(pt("搜索插件或配置", "Search plugins or configuration")) }, singleLine = true, modifier = Modifier.fillMaxWidth().padding(horizontal = 18.dp))
                 val matchingNamespaces = namespaces.filter { (it["ns"].str().orEmpty() + " " + configurationTitle(it["ns"].str().orEmpty(), plugins)).contains(query, true) }
-                PluginSection(pt("内置插件配置", "Official configuration"))
+                PluginSection(pt("内置插件配置", "Official configuration") + " · " + matchingNamespaces.count { it["ns"].str() in officialConfigurations })
                 configError?.let { PluginMessage(it, true) }
                 matchingNamespaces.filter { it["ns"].str() in officialConfigurations }
                     .sortedBy { officialConfigurations.indexOf(it["ns"].str()) }.forEach { ns ->
@@ -295,13 +330,13 @@ private fun PluginsPage(profile: String?, onBack: () -> Unit) {
                 }
                 listOf(true, false).forEach { official ->
                     Row(Modifier.fillMaxWidth().padding(end = 18.dp), verticalAlignment = Alignment.CenterVertically) {
-                        Box(Modifier.weight(1f)) { PluginSection(if (official) pt("实验性插件", "Experimental plugins") else pt("已安装插件", "Installed plugins")) }
+                        Box(Modifier.weight(1f)) { PluginSection((if (official) pt("实验性插件", "Experimental plugins") else pt("已安装插件", "Installed plugins")) + " · " + visible.count { (it["official"].bool() == true) == official }) }
                         if (official) TextButton({ moreOptional = !moreOptional }) { Text(if (moreOptional) pt("收起", "Less") else pt("更多", "More")) }
                     }
                     val group = visible.filter { (it["official"].bool() == true) == official }
                         .filter { !official || moreOptional || query.isNotBlank() || it["name"].str() in primaryOptionalBundles }
                         .sortedBy { primaryOptionalBundles.indexOf(it["name"].str()).let { rank -> if (rank < 0) Int.MAX_VALUE else rank } }
-                    if (group.isEmpty()) PluginMessage(pt("没有匹配的插件", "No matching plugins"))
+                    if (group.isEmpty() && loaded && !loading && error == null) PluginMessage(pt("没有匹配的插件", "No matching plugins"))
                     group.forEach { bundle ->
                         val name = bundle["name"].str().orEmpty()
                         val state = when {
@@ -309,7 +344,8 @@ private fun PluginsPage(profile: String?, onBack: () -> Unit) {
                             bundle["availability"].str() == "missing" -> if (bundle["installed"].bool() == true) pt("包不可用", "Package unavailable") else pt("未安装", "Not installed")
                             else -> ""
                         }
-                        PluginCard(pluginTitle(bundle), pluginDescription(bundle), state, { detail = name }, bundle["version"].str(),
+                        val summary = bundle["rows"].arr()?.takeIf { it.isNotEmpty() }?.let { partsSummary(it, plugins) }
+                        PluginCard(pluginTitle(bundle), pluginDescription(bundle), listOfNotNull(state.takeIf { it.isNotBlank() }, summary).joinToString(" · "), { detail = name }, bundle["version"].str(),
                             enabled = bundle["enabled"].bool() == true,
                             switchAvailable = online && !locked && bundle["readOnlyReason"].str() == null && "plugins.setEnabled" in ops &&
                                 (bundle["availability"].str() != "missing" || bundle["installTarget"]["spec"].str() != null),
@@ -334,6 +370,7 @@ private fun PluginsPage(profile: String?, onBack: () -> Unit) {
                         }
                         if (reason != null) Text(readOnlyText(reason), color = MaterialTheme.colorScheme.onSurfaceVariant)
                         selected["error"]?.let { SelectionContainer { Text(pretty(it), color = MaterialTheme.colorScheme.error, fontSize = 12.sp) } }
+                        selected["meta"]["error"].str()?.let { Text(pt("包元信息错误：", "Package metadata error: ") + it, color = MaterialTheme.colorScheme.error, fontSize = 12.sp) }
                         Text(pt("来源：", "Source: ") + (selected["source"].str() ?: if (selected["availability"].str() == "installation") pt("内置", "Built-in") else name), fontSize = 12.sp)
                         selected["version"].str()?.let { Text(pt("当前版本：", "Version: ") + it, fontSize = 12.sp) }
                         val target = selected["installTarget"]
@@ -350,12 +387,21 @@ private fun PluginsPage(profile: String?, onBack: () -> Unit) {
                 PluginSection(pt("包含的组件", "Components"))
                 val rows = selected["rows"].arr().orEmpty()
                 if (rows.isEmpty()) PluginMessage(pt("这个插件包不包含任何组件。", "This bundle contains no components."))
-                rows.forEach { row ->
+                if (rows.isNotEmpty()) PluginMessage(partsSummary(rows, plugins))
+                if (rows.size > 10) OutlinedTextField(partsQuery, { partsQuery = it }, label = { Text(pt("筛选组件", "Filter components")) },
+                    singleLine = true, modifier = Modifier.fillMaxWidth().padding(horizontal = 18.dp))
+                val shownRows = rows.filter { row ->
+                    listOf(pluginTitle(row), pluginDescription(row), row["rowId"].str().orEmpty(), row["moduleName"].str().orEmpty())
+                        .any { it.contains(partsQuery.trim(), ignoreCase = true) }
+                }
+                if (rows.isNotEmpty() && shownRows.isEmpty()) PluginMessage(pt("没有匹配的组件", "No matching components"))
+                shownRows.forEach { row ->
                     val live = pluginLiveRow(row, plugins)
                     val ns = namespaces.firstOrNull { it["ns"].str() == row["rowId"].str() }
                     SettingsCard {
                         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                             Row(verticalAlignment = Alignment.CenterVertically) {
+                                PluginMetadataArtwork(row["meta"]["icon"].str(), Modifier.padding(end = 10.dp).size(36.dp))
                                 Column(Modifier.weight(1f)) {
                                     Text(pluginTitle(row), fontWeight = FontWeight.Medium)
                                     Text(phaseText(live), fontSize = 12.sp, color = if (live["fiberPhase"].str() == "failed") MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant)
@@ -363,6 +409,9 @@ private fun PluginsPage(profile: String?, onBack: () -> Unit) {
                                 Switch(live["enabled"].bool() == true, { enabled -> mutate { it.pluginsSetEnabled(enabled, id = row["entryId"].str()) } }, enabled = online && !locked && live != null && live["readOnlyReason"].str() == null && "plugins.setEnabled" in ops)
                             }
                             if (pluginDescription(row).isNotBlank()) Text(pluginDescription(row), fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            row["rowId"].str()?.takeIf { it != pluginTitle(row) }?.let { Text(it, style = T.Mono, fontSize = 11.sp) }
+                            row["moduleName"].str()?.takeIf { it != pluginTitle(row) && it != row["rowId"].str() }?.let { Text(it, style = T.Mono, fontSize = 11.sp) }
+                            row["meta"]["error"].str()?.let { Text(pt("包元信息错误：", "Package metadata error: ") + it, color = MaterialTheme.colorScheme.error, fontSize = 12.sp) }
                             live["readOnlyReason"].str()?.let { Text(readOnlyText(it), fontSize = 12.sp) }
                             if (ns != null) TextButton({ config = ns }) { Text(pt("配置组件", "Configure component")) }
                         }
@@ -475,7 +524,7 @@ private fun PluginCard(
             Text(title, fontSize = 14.sp, fontWeight = FontWeight.Medium)
             if (description.isNotBlank()) Text(description, fontSize = 12.sp, color = cs.onSurfaceVariant)
             if (status.isNotEmpty()) Text(status, fontSize = 11.sp, color = cs.onSurfaceVariant)
-            if (version != null && status.isNotEmpty()) Text("v$version", fontSize = 11.sp, color = cs.onSurfaceVariant)
+            if (version != null) Text("v$version", fontSize = 11.sp, color = cs.onSurfaceVariant)
         }
         if (enabled != null) Switch(enabled, onToggle, enabled = switchAvailable,
             colors = SwitchDefaults.colors(checkedTrackColor = T.PrimaryButton, checkedThumbColor = T.OnPrimary, uncheckedTrackColor = cs.surfaceVariant, uncheckedBorderColor = cs.surfaceVariant))
@@ -490,7 +539,7 @@ private fun PluginOutcome(result: JsonElement) {
     result["warnings"].arr()?.takeIf { it.isNotEmpty() }?.let { PluginMessage(it.joinToString("\n") { warning -> warning.str().orEmpty() }) }
     if (result["packageResult"] != null || result["pendingBuilds"] != null) {
         TextButton({ expanded = !expanded }, modifier = Modifier.padding(horizontal = 10.dp)) { Text(if (expanded) pt("收起安装详情", "Hide installation details") else pt("查看安装详情", "Show installation details")) }
-        if (expanded) SelectionContainer { Text(pretty(result), modifier = Modifier.padding(18.dp), style = T.Mono, fontSize = 11.sp) }
+        if (expanded) SelectionContainer { Text(pretty(result), modifier = Modifier.padding(18.dp).fillMaxWidth().heightIn(max = 220.dp).verticalScroll(rememberScrollState()), style = T.Mono, fontSize = 11.sp) }
     }
 }
 
@@ -504,13 +553,25 @@ private fun PluginInstallDialog(
     onCancel: () -> Unit, onReconcile: () -> Unit, onEnable: () -> Unit,
 ) {
     var registryOpen by remember { mutableStateOf(false) }
+    var guideOpen by remember { mutableStateOf(false) }
+    val pending = result["pendingBuilds"].arr().orEmpty().mapNotNull { it.str() }
     Dialog(onDismissRequest = onClose, properties = DialogProperties(usePlatformDefaultWidth = false)) {
-        Surface(Modifier.fillMaxWidth().padding(16.dp).heightIn(max = 720.dp), shape = T.R16) {
-            Column(Modifier.verticalScroll(rememberScrollState()).padding(18.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                Text(pt("添加插件", "Add plugin"), fontSize = 20.sp, fontWeight = FontWeight.Medium)
+        Surface(Modifier.fillMaxWidth().imePadding().padding(16.dp).heightIn(max = 720.dp), shape = T.R16) {
+            Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                    Text(pt("添加插件", "Add plugin"), fontSize = 20.sp, fontWeight = FontWeight.Medium, modifier = Modifier.weight(1f))
+                    TextButton(onClose) { Text(if (unresolved) pt("收起", "Hide") else pt("关闭", "Close")) }
+                }
+                Column(Modifier.weight(1f, fill = false).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 Text(pt("输入 npm 包名、Git 仓库、tarball 地址或主机目录路径。路径属于主机，不是手机。", "Enter an npm package, Git repository, tarball URL or host directory path. Paths refer to the host, not this phone."), fontSize = 13.sp)
                 Text(pt("只安装可信插件：插件在主机以你的权限运行，可访问你的数据。", "Only install trusted plugins: they execute with your host permissions and can access your data."), fontSize = 12.sp, color = MaterialTheme.colorScheme.error)
                 OutlinedTextField(spec, onSpec, enabled = !busy && !unresolved, label = { Text(pt("包名或地址", "Package or address")) }, modifier = Modifier.fillMaxWidth(), minLines = 1, maxLines = 3)
+                TextButton({ guideOpen = !guideOpen }) { Text(if (guideOpen) pt("收起引导", "Hide the guide") else pt("插件安装引导和示例", "Install guide and examples")) }
+                if (guideOpen) {
+                    Text(pt("填入插件 npm 包名：社区插件 README 安装命令中 dsh plugin add 或 pnpm add 之后的部分，例如 dsh-xxx 或 @作者/插件名。", "Enter the npm package name: the part after dsh plugin add or pnpm add in the community plugin README, such as dsh-xxx or @author/plugin."), fontSize = 13.sp)
+                    TextButton({ onSpec("dsh-plugin-whale-pet") }, enabled = !busy && !unresolved) { Text(pt("填入示例：", "Use example: ") + "dsh-plugin-whale-pet") }
+                    Text(pt("按需安装的官方插件提供更新；其他插件请先卸载再安装新版。原生 Android 无法运行第三方 React 自定义页面，只能编辑主机公开的配置。", "On-demand official plugins offer updates. Uninstall other plugins before installing a newer version. Native Android cannot execute third-party React pages; only host-exposed settings are editable."), fontSize = 12.sp)
+                }
                 TextButton({ registryOpen = !registryOpen }) { Text(pt("安装源", "Registry")) }
                 if (registryOpen) {
                     (listOf("") + registries).distinct().forEach { url ->
@@ -533,12 +594,13 @@ private fun PluginInstallDialog(
                     else SelectionContainer { Text(pretty(r), color = MaterialTheme.colorScheme.error, fontSize = 12.sp) }
                 }
                 result?.let { PluginOutcome(it) }
-                val pending = result["pendingBuilds"].arr().orEmpty().mapNotNull { it.str() }
                 if (pending.isNotEmpty()) {
                     Text(pt("下列依赖需要执行安装脚本：", "The following dependencies require installation scripts:") + "\n" + pending.joinToString("\n"), fontSize = 13.sp)
                     Row(verticalAlignment = Alignment.CenterVertically) { Checkbox(approval, onApproval, enabled = !busy && !unresolved); Text(pt("允许这些包在主机执行脚本", "Allow these packages to run scripts on the host"), fontSize = 12.sp) }
-                    Button(onApprove, enabled = approval && online && !busy && !unresolved) { Text(pt("允许并重试", "Approve and retry")) }
                 }
+                }
+                HorizontalDivider()
+                if (pending.isNotEmpty()) Button(onApprove, enabled = approval && online && !busy && !unresolved) { Text(pt("允许并重试", "Approve and retry")) }
                 if (unresolved) {
                     if (canCancel) TextButton(onCancel, enabled = online && !cancelling) { Text(if (cancelling) pt("正在取消…", "Cancelling…") else pt("取消安装", "Cancel installation")) }
                     TextButton(onReconcile, enabled = online && !busy) { Text(pt("核对安装状态", "Reconcile installation")) }
@@ -549,7 +611,6 @@ private fun PluginInstallDialog(
                     }
                     if (result["bundle"].str() != null && result["application"].str() == "applied" && result["enabled"].bool() == false) Button(onEnable, enabled = online && !busy) { Text(pt("立即启用", "Enable now")) }
                 }
-                TextButton(onClose) { Text(if (unresolved) pt("收起（任务继续）", "Hide (task continues)") else pt("关闭", "Close")) }
             }
         }
     }

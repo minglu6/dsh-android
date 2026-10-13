@@ -8,6 +8,8 @@ import kotlinx.coroutines.*
 import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.flow.*
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonNull
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicLong
@@ -32,6 +34,11 @@ data class ChatState(
     /** Host `plan` projection — plan mode is on (desktop PlanChip). */
     val planMode: Boolean = false,
     val composerMetrics: ComposerMetrics = ComposerMetrics(),
+    val goal: JsonObject? = null,
+    val agentPreset: String? = null,
+    val turns: List<TurnRecord> = emptyList(),
+    /** Original Host events in the loaded history window; never inferred from rendered items. */
+    val inspectorRecords: List<JsonObject> = emptyList(),
 )
 
 data class ModelChoice(val provider: String, val model: String, val name: String, val effort: String?)
@@ -93,7 +100,14 @@ object Pocket {
     private val modelSelectionEpoch = AtomicLong()
     private var modelProjectionSeq = -1L
     private var modelUsesDefault = false
-    val presets = MutableStateFlow<List<String>>(emptyList())
+    val presetRoster = MutableStateFlow<List<JsonObject>>(emptyList())
+    val workspaces = MutableStateFlow<List<WorkspaceView>>(emptyList())
+    val goalActivation = MutableStateFlow<String?>(null)
+    val pluginCatalogRevision = MutableStateFlow(0L)
+    val scheduleCatalogRevision = MutableStateFlow(0L)
+    private var goalProjectionSeq = -1L
+    private var goalActivationEpoch = 0L
+    private var presetProjectionSeq = -1L
     val ops = MutableStateFlow<Set<String>>(emptySet())
     val chat = MutableStateFlow<ChatState?>(null)
     val permission = MutableStateFlow<Map<String, String>>(emptyMap())
@@ -130,10 +144,14 @@ object Pocket {
     private var client: PocketClient? = null
     private var connJob: Job? = null
     private var reducer = TranscriptReducer()
+    private var inspectorLog = SessionInspectorLog()
     private var subId: String? = null
     private val followEpoch = AtomicLong()
     private var pendingFollowEpoch: Long? = null
     private var terminalSubId: String? = null
+    private val terminalOpenEpoch = AtomicLong()
+    private var terminalOpening = false
+    private val terminalStray = HashMap<String, MutableList<JsonObject>>()
     /** Last panel grid size from [TerminalView]; used when creating / attaching a PTY. */
     private var wantCols = 80
     private var wantRows = 24
@@ -218,7 +236,10 @@ object Pocket {
         detachFollow()
         active.value = profileId; prefs.activeProfile = profileId
         sessions.value = emptyList(); chat.value = null; approvals.value = emptyList()
+        inspectorLog = SessionInspectorLog()
         userQuestions.value = emptyList(); archivedIds.value = emptySet(); pinnedIds.value = emptySet()
+        workspaces.value = emptyList(); presetRoster.value = emptyList(); ops.value = emptySet()
+        closeTerminalFollow()
         feedback.value = emptyMap(); attachmentCache.clear()
         invalidatePermissionCatalog()
         invalidateModelCatalog()
@@ -289,6 +310,8 @@ object Pocket {
             client = null; c.close(); setRoute(profileId, null)
             followEpoch.incrementAndGet()
             detachFollow()
+            closeTerminalFollow()
+            ops.value = emptySet()
             invalidatePermissionCatalog()
             invalidateModelCatalog()
             permissionChanging.value = false
@@ -329,7 +352,12 @@ object Pocket {
         runCatching { approvals.value = c.call("approval.pending")["approvals"].arr().orEmpty().mapNotNull { (it as? JsonObject)?.let(Approval::parse) } }
         loadModelCatalog(c)
         if ("permissions.catalog" in ops.value) loadPermissionCatalog(c)
-        if ("presets.list" in ops.value) runCatching { presets.value = c.presets() }
+        if ("presets.list" in ops.value) runCatching {
+            val roster = c.call("presets.list")["presets"].arr().orEmpty().filterIsInstance<JsonObject>()
+            if (client === c) presetRoster.value = roster
+        }
+        pluginCatalogRevision.value++
+        scheduleCatalogRevision.value++
         if ("workspace.state" in ops.value) runCatching { refreshWorkspaceState(c) }
         chat.value?.let { st ->
             refollow(c, st.sessionId, reducer.cursor.takeIf { s -> s >= 0 })
@@ -447,12 +475,43 @@ object Pocket {
 
     private suspend fun refreshWorkspaceState(c: PocketClient) {
         val state = c.workspaceState()
+        if (client !== c) return
+        workspaces.value = state["items"].arr().orEmpty().mapNotNull(WorkspaceView::parse)
         archivedIds.value = state["archivedSessionIds"].arr().orEmpty().mapNotNull { it.str() }.toSet()
         pinnedIds.value = state["pinnedSessionIds"].arr().orEmpty().mapNotNull { it.str() }.toSet()
     }
 
     private fun onPush(m: JsonObject) {
         when (m["ev"].str()) {
+            "ops.changed" -> ops.value = m["ops"].arr().orEmpty().mapNotNull { it.str() }.toSet()
+            "plugins.changed" -> pluginCatalogRevision.value++
+            "workspace.changed" -> {
+                val frame = m["frame"]
+                when (frame["type"].str()) {
+                    "baseline" -> {
+                        val value = frame["value"]
+                        workspaces.value = value["items"].arr().orEmpty().mapNotNull(WorkspaceView::parse)
+                        archivedIds.value = value["archivedSessionIds"].arr().orEmpty().mapNotNull { it.str() }.toSet()
+                        pinnedIds.value = value["pinnedSessionIds"].arr().orEmpty().mapNotNull { it.str() }.toSet()
+                    }
+                    "upsert" -> WorkspaceView.parse(frame["workspace"])?.let { row ->
+                        workspaces.value = if (workspaces.value.any { it.workspaceId == row.workspaceId })
+                            workspaces.value.map { if (it.workspaceId == row.workspaceId) row else it } else workspaces.value + row
+                    }
+                    "remove" -> workspaces.value = workspaces.value.filter { it.workspaceId != frame["workspaceId"].str() }
+                    "order" -> {
+                        val rows = workspaces.value.associateBy { it.workspaceId }
+                        workspaces.value = frame["workspaceIds"].arr().orEmpty().mapNotNull { rows[it.str()] }
+                    }
+                    "archived" -> archivedIds.value = frame["archivedSessionIds"].arr().orEmpty().mapNotNull { it.str() }.toSet()
+                    "pinned" -> pinnedIds.value = frame["pinnedSessionIds"].arr().orEmpty().mapNotNull { it.str() }.toSet()
+                }
+            }
+            "schedule.changed" -> scheduleCatalogRevision.value++
+            "goal.activation" -> if (m["sessionId"].str() == chat.value?.sessionId) {
+                goalActivationEpoch++
+                goalActivation.value = m["goal"]["activation"].str()
+            }
             "permission-presets/catalog-changed" -> {
                 invalidatePermissionCatalog()
                 client?.let { c -> main.launch { loadPermissionCatalog(c) } }
@@ -498,10 +557,15 @@ object Pocket {
                 userQuestions.value = userQuestions.value.filter { it.questionId != id }
             }
             "task" -> TaskEvent.parse(m)?.let { taskEvents.tryEmit(it) }
-            "terminal" -> if (m["subId"].str() == terminalSubId) applyTerminalFrame(m["frame"])
-            "terminal.end", "terminal.error" -> if (m["subId"].str() == terminalSubId) {
-                m["error"]["message"].str()?.let { errors.tryEmit(it) }
-                terminalSubId = null
+            "terminal", "terminal.end", "terminal.error" -> {
+                val id = m["subId"].str() ?: return
+                if (id == terminalSubId) {
+                    if (m["ev"].str() == "terminal") applyTerminalFrame(m["frame"])
+                    else {
+                        m["error"]["message"].str()?.let { errors.tryEmit(it) }
+                        terminalSubId = null
+                    }
+                } else if (terminalOpening) terminalStray.getOrPut(id) { mutableListOf() }.add(m)
             }
         }
     }
@@ -538,6 +602,7 @@ object Pocket {
         if (f["type"].str() == "projection" && frameSession == null) return
         val wasRunning = reducer.running
         reducer.apply(f)
+        inspectorLog.apply(f)
         val projection = when (f["type"].str()) {
             "snapshot", "resume" -> f["projections"]
             else -> null
@@ -566,9 +631,27 @@ object Pocket {
             applyModelProjection(st.sessionId, f["seq"].long() ?: -1L, f["value"])
         }
         if (f["type"].str() == "snapshot") followAttempts.remove(st.sessionId)
+        var goal = st.goal
+        var preset = st.agentPreset
+        val values = projection?.get("values") as? JsonObject
+        val seq = projection?.get("asOfSeq").long() ?: f["seq"].long() ?: f["cursor"].long() ?: -1L
+        if (f["type"].str() == "snapshot" || values?.containsKey("goal") == true || f["key"].str() == "goal") {
+            if (seq >= goalProjectionSeq) {
+                goalProjectionSeq = seq
+                goal = (values?.get("goal") ?: f["value"])["goal"] as? JsonObject
+            }
+        }
+        if (f["type"].str() == "snapshot" || values?.containsKey("agentPreset") == true || f["key"].str() == "agentPreset") {
+            if (seq >= presetProjectionSeq) {
+                presetProjectionSeq = seq
+                preset = (values?.get("agentPreset") ?: f["value"]).str()
+            }
+        }
         chat.value = st.copy(
             items = reducer.items(),
             steps = reducer.stepRecords(),
+            turns = reducer.turnRecords(),
+            inspectorRecords = inspectorLog.snapshot(),
             title = reducer.title ?: st.title,
             running = reducer.running,
             usage = reducer.usage,
@@ -579,6 +662,8 @@ object Pocket {
             runStartedAt = if (reducer.running) (if (wasRunning) st.runStartedAt else System.currentTimeMillis()) else null,
             todos = reducer.todos(),
             planMode = reducer.planMode,
+            goal = goal,
+            agentPreset = preset,
         )
     }
 
@@ -587,6 +672,11 @@ object Pocket {
         val old = subId
         subId = null
         pendingFollowEpoch = null
+        goalProjectionSeq = -1L
+        presetProjectionSeq = -1L
+        goalActivation.value = null
+        goalActivationEpoch++
+        chat.value?.takeIf { it.loadingOlder }?.let { chat.value = it.copy(loadingOlder = false) }
         stray.clear()
         return old
     }
@@ -641,6 +731,7 @@ object Pocket {
     fun openSession(sessionId: String) = main.launch {
         followAttempts.remove(sessionId)
         reducer = TranscriptReducer()
+        inspectorLog = SessionInspectorLog()
         permissionProjectionSeq = -1L
         modelProjectionSeq = -1L
         modelUsesDefault = false
@@ -670,6 +761,8 @@ object Pocket {
     fun loadOlderHistory() = main.launch {
         val st = chat.value ?: return@launch
         val c = client ?: return@launch
+        val epoch = followEpoch.get()
+        val historyReducer = reducer
         if (!HistoryPagingPolicy.canLoadOlder(st.hasMore, st.loadingOlder, st.firstSeq)) return@launch
         chat.value = st.copy(loadingOlder = true)
         try {
@@ -680,16 +773,22 @@ object Pocket {
                 beforeSeq = req.beforeSeq,
                 maxMessages = req.maxMessages,
             )
+            if (!currentFollow(c, st.sessionId, epoch) || reducer !== historyReducer) return@launch
             reducer.prepend(page["records"], page["hasMore"].bool() ?: false)
+            inspectorLog.prepend(page["records"])
             chat.value = chat.value?.copy(
                 items = reducer.items(),
                 steps = reducer.stepRecords(),
+                turns = reducer.turnRecords(),
+                inspectorRecords = inspectorLog.snapshot(),
                 composerMetrics = reducer.composerMetrics,
                 hasMore = reducer.hasMore,
                 firstSeq = reducer.firstSeq,
                 loadingOlder = false,
             )
         } catch (e: Exception) {
+            if (e is CancellationException) throw e
+            if (!currentFollow(c, st.sessionId, epoch) || reducer !== historyReducer) return@launch
             errors.tryEmit(e.message ?: "加载历史失败")
             chat.value = chat.value?.copy(loadingOlder = false)
         }
@@ -699,6 +798,7 @@ object Pocket {
         followEpoch.incrementAndGet()
         val old = detachFollow()
         chat.value = null
+        inspectorLog = SessionInspectorLog()
         if (old != null) client?.let { c ->
             try { c.unfollow(old) }
             catch (e: CancellationException) { throw e }
@@ -706,20 +806,34 @@ object Pocket {
         }
     }
 
-    /**
-     * Desktop add-workspace → startSession: create a blank session in [cwd].
-     * Phone has no Host OS directory picker; the path comes from a typed/picked host path.
-     */
-    fun startInWorkspace(cwd: String) = main.launch {
-        val path = cwd.trim()
-        if (path.isEmpty()) return@launch errors.tryEmit(L.workspacePathPlaceholder()).let { }
-        val c = client ?: return@launch errors.tryEmit("未连接").let { }
-        try {
-            val id = c.createSession(cwd = path)
-            openSession(id).join()
-        } catch (e: Exception) {
-            errors.tryEmit(e.message ?: e.toString())
+    /** Desktop workspace navigation prepares an addressable blank Session before using its tools. */
+    suspend fun prepareSidebarSession(
+        cwd: String? = null,
+        preset: String? = null,
+        pendingPermission: String? = null,
+        pendingModel: ModelChoice? = null,
+    ): String? = withContext(main.coroutineContext.minusKey(Job)) {
+        chat.value?.let { return@withContext it.sessionId }
+        val c = requireClient()
+        val epoch = followEpoch.get()
+        fun current() = client === c && followEpoch.get() == epoch && chat.value == null
+        val workspaceId = workspaces.value.firstOrNull { it.path == cwd }?.workspaceId
+        val id = c.createSession(cwd = if (workspaceId == null) cwd else null, agentPreset = preset, workspaceId = workspaceId)
+        if (!current()) return@withContext null
+        pendingModel?.let { m ->
+            val selected = modelChoice(c.selectModel(id, m.provider, m.model, m.effort)["selected"])
+                ?: error("主机未返回已应用的模型")
+            if (!current()) return@withContext null
+            model.value = model.value + (id to selected)
         }
+        pendingPermission?.let { p ->
+            val selected = c.setPermission(id, p)
+            if (!current()) return@withContext null
+            permission.value = permission.value + (id to selected)
+        }
+        ensureActive()
+        openSession(id).join()
+        id.takeIf { client === c && chat.value?.sessionId == id }
     }
 
     /** Create a session (optionally with preset), then send [text] into it. */
@@ -732,7 +846,8 @@ object Pocket {
                     "权限目录已变化，请重新选择访问模式"
                 }
             }
-            val id = c.createSession(cwd = cwd, agentPreset = preset)
+            val workspaceId = workspaces.value.firstOrNull { it.path == cwd }?.workspaceId
+            val id = c.createSession(cwd = if (workspaceId == null) cwd else null, agentPreset = preset, workspaceId = workspaceId)
             pendingModel?.let { m ->
                 val selected = modelChoice(c.selectModel(id, m.provider, m.model, m.effort)["selected"])
                     ?: error("主机未返回已应用的模型")
@@ -839,52 +954,159 @@ object Pocket {
         }
     }
 
-    fun rename(sessionId: String, title: String) = main.launch { runCatching { client?.call("sessions.rename", jsonOf("sessionId" to sessionId, "title" to title)) } }
+    fun rename(sessionId: String, title: String, onResult: (Boolean) -> Unit = {}) = mutation(onResult) { c ->
+        c.call("sessions.rename", jsonOf("sessionId" to sessionId, "title" to title))
+        refreshTitles(c)
+    }
 
     /**
      * Fork the open session at [atSeq] (desktop `message.branch`).
      * Omitting [atSeq] uses the Host's latest completed-turn prefix.
      */
-    fun forkSession(atSeq: Long? = null) = main.launch {
+    fun forkSession(atSeq: Long? = null): Job = forkSessionFrom(chat.value?.sessionId.orEmpty(), atSeq)
+
+    fun forkSessionFrom(sessionId: String, atSeq: Long? = null) = main.launch {
         val c = client ?: run { errors.tryEmit("未连接"); return@launch }
-        val st = chat.value ?: run { errors.tryEmit("无会话"); return@launch }
+        if (sessionId.isBlank()) { errors.tryEmit("无会话"); return@launch }
         if (!hasOp("sessions.fork")) { errors.tryEmit("桌面端未提供分叉"); return@launch }
         runCatching {
-            val childId = c.forkSession(st.sessionId, atSeq)["sessionId"].str()
+            val childId = c.forkSession(sessionId, atSeq)["sessionId"].str()
                 ?: error("fork 未返回 sessionId")
             refreshTitles(c)
             openSession(childId)
         }.onFailure { errors.tryEmit(it.message ?: "无法分叉会话，请重试") }
     }
 
-    fun answer(approvalId: String, outcome: String) = main.launch {
+    fun answer(approvalId: String, outcome: String, onResult: (Boolean) -> Unit = {}) = mutation(onResult) { c ->
+        check(c.answerApproval(approvalId, outcome)["accepted"].bool() == true) { "审批未被主机接受" }
         approvals.value = approvals.value.filter { it.approvalId != approvalId }
-        runCatching { client?.answerApproval(approvalId, outcome) }.onFailure { errors.tryEmit(it.message ?: "审批失败") }
+    }
+
+    private fun mutation(onResult: (Boolean) -> Unit, action: suspend (PocketClient) -> Unit) = main.launch {
+        try {
+            action(client ?: throw PocketError("transport", "未连接"))
+            onResult(true)
+        } catch (e: CancellationException) {
+            onResult(false)
+            throw e
+        } catch (e: Exception) {
+            errors.tryEmit(e.message ?: "操作失败")
+            onResult(false)
+        }
     }
 
     fun hasOp(op: String) = op in ops.value
 
+    private fun requireClient(): PocketClient = client ?: throw PocketError("transport", "未连接")
+
+    suspend fun presetsSettings(): JsonElement {
+        val c = requireClient()
+        val result = c.call("presets.settings")
+        if (client === c) presetRoster.value = result["presets"].arr().orEmpty().filterIsInstance<JsonObject>()
+        return result
+    }
+    suspend fun readPreset(id: String): JsonElement = requireClient().call("presets.read", jsonOf("id" to id))
+
+    suspend fun createWorkspace(path: String): WorkspaceView {
+        val c = requireClient()
+        val workspace = WorkspaceView.parse(c.call("workspace.create", jsonOf("path" to path))["workspace"])
+            ?: throw PocketError("bad-reply", "missing workspace")
+        refreshWorkspaceState(c)
+        return workspace
+    }
+
+    suspend fun renameWorkspace(id: String, title: String): WorkspaceView {
+        val c = requireClient()
+        val workspace = WorkspaceView.parse(c.call("workspace.rename", jsonOf("workspaceId" to id, "title" to title))["workspace"])
+            ?: throw PocketError("bad-reply", "missing workspace")
+        refreshWorkspaceState(c)
+        return workspace
+    }
+
+    suspend fun deleteWorkspace(id: String) {
+        val c = requireClient()
+        c.call("workspace.delete", jsonOf("workspaceId" to id))
+        refreshWorkspaceState(c)
+    }
+
+    suspend fun moveWorkspace(id: String, beforeId: String? = null) {
+        val c = requireClient()
+        c.call("workspace.insertBefore", jsonOf("workspaceId" to id, "beforeWorkspaceId" to beforeId))
+        refreshWorkspaceState(c)
+    }
+
+    suspend fun moveWorkspaceSession(workspaceId: String, sessionId: String, beforeSessionId: String? = null) {
+        val c = requireClient()
+        c.call("workspace.insertSessionBefore", jsonOf("workspaceId" to workspaceId, "sessionId" to sessionId, "beforeSessionId" to beforeSessionId))
+        refreshWorkspaceState(c)
+    }
+
+    suspend fun listWorkspaceDirectories(path: String? = null): JsonElement =
+        requireClient().call("workspace.directoryList", jsonOf("path" to path))
+
+    suspend fun startWorkspaceSession(workspaceId: String): String {
+        val c = requireClient()
+        val id = c.createSession(workspaceId = workspaceId)
+        refreshTitles(c)
+        refreshWorkspaceState(c)
+        return id
+    }
+
+    suspend fun commandCatalog(sessionId: String): List<JsonObject> =
+        requireClient().call("commands.list", jsonOf("sessionId" to sessionId))["commands"].arr().orEmpty().filterIsInstance<JsonObject>()
+
+    suspend fun getGoal(sessionId: String): JsonElement {
+        val c = requireClient()
+        val activationEpoch = goalActivationEpoch
+        val goal = c.call("goals.get", jsonOf("sessionId" to sessionId))["goal"] ?: JsonNull
+        if (client === c && chat.value?.sessionId == sessionId && goalActivationEpoch == activationEpoch) {
+            goalActivation.value = goal["activation"].str()
+        }
+        return goal
+    }
+
+    suspend fun mutateGoal(sessionId: String, action: String, ref: JsonObject, objective: String? = null): JsonElement {
+        require(action in setOf("edit", "pause", "resume", "clear"))
+        val c = requireClient()
+        val activationEpoch = goalActivationEpoch
+        val response = c.call("goals.$action", jsonOf("sessionId" to sessionId, "ref" to ref, "request" to jsonOf("objective" to objective)))
+        if (client === c && chat.value?.sessionId == sessionId && goalActivationEpoch == activationEpoch) {
+            goalActivation.value = response["goal"]["activation"].str()
+        }
+        return response
+    }
+
+    suspend fun referenceFiles(sessionId: String, query: String): List<FileReference> =
+        requireClient().referenceFiles(sessionId, query)["items"].arr().orEmpty().mapNotNull(FileReference::parse)
+
+    suspend fun referenceSessions(sessionId: String, query: String): List<SessionReference> =
+        requireClient().referenceSessions(sessionId, query)["items"].arr().orEmpty().mapNotNull(SessionReference::parse)
+
+    fun followJob(sessionId: String, jobId: String, from: Long? = null): Flow<JsonObject> =
+        flow { emitAll(requireClient().followJob(sessionId, jobId, from)) }
+
+    suspend fun terminateTerminal(sessionId: String) {
+        val meta = terminalMeta.value?.takeIf { it.sessionId == sessionId }
+            ?: throw PocketError("terminal/not-attached", "没有已连接的终端")
+        requireClient().closeTerminal(sessionId, meta.id)
+        closeTerminalFollow().join()
+    }
+
     /** Live pocket client while connected; null when idle/disconnected. */
     fun clientOrNull(): PocketClient? = client
 
-    fun executeCommand(line: String) = main.launch {
-        val c = client ?: run { errors.tryEmit("未连接"); return@launch }
-        val st = chat.value ?: run { errors.tryEmit("无会话"); return@launch }
-        if (!hasOp("commands.execute")) { errors.tryEmit("桌面端未提供指令"); return@launch }
-        runCatching {
-            val r = c.executeCommand(st.sessionId, line)
-            r["result"]["text"].str()?.takeIf { it.isNotBlank() }?.let { errors.tryEmit(it) }
-            // Optimistic PlanChip: host `plan/mode` may arrive later; mirror toggle immediately.
-            val trimmed = line.trim()
-            when {
-                trimmed == "/plan off" || trimmed.startsWith("/plan off ") ->
-                    chat.value = chat.value?.copy(planMode = false)
-                trimmed == "/plan" ->
-                    chat.value = chat.value?.copy(planMode = !(chat.value?.planMode ?: false))
-                trimmed.startsWith("/plan ") ->
-                    chat.value = chat.value?.copy(planMode = true)
-            }
-        }.onFailure { errors.tryEmit(it.message ?: "指令失败") }
+    fun executeCommand(line: String, onResult: (Boolean) -> Unit = {}) = mutation(onResult) { c ->
+        val st = chat.value ?: error("无会话")
+        val result = c.executeCommand(st.sessionId, line)["result"]
+        check(result["kind"].str() != "error") { result["text"].str() ?: "指令失败" }
+        result["text"].str()?.takeIf { it.isNotBlank() }?.let { notices.tryEmit(it) }
+    }
+
+    fun recordSessionFeedback(category: String?, note: String, onResult: (Boolean) -> Unit = {}) = mutation(onResult) { c ->
+        val st = chat.value ?: error("无会话")
+        val receipt = c.call("sessionFeedback.record", jsonOf("sessionId" to st.sessionId, "category" to category, "text" to note))
+        check(receipt["recorded"].bool() == true) { "反馈未被主机记录" }
+        notices.tryEmit(L.thanksFeedback())
     }
 
     fun exportSession(onBytes: (filename: String, bytes: ByteArray) -> Unit) = main.launch {
@@ -937,39 +1159,29 @@ object Pocket {
         }.getOrNull()
     }
 
-    fun searchSessions(query: String, onResult: (List<SessionSummary>) -> Unit) = main.launch {
-        val c = client ?: run { onResult(emptyList()); return@launch }
-        if (!hasOp("sessions.search") || query.isBlank()) {
-            onResult(emptyList()); return@launch
-        }
-        runCatching {
-            val r = c.searchSessions(query)
-            val items = r["items"].arr().orEmpty().mapNotNull(SessionSummary::parse)
-            onResult(items)
-        }.onFailure {
-            errors.tryEmit(it.message ?: "搜索失败")
-            onResult(emptyList())
-        }
+    fun searchSessions(query: String, onResult: (Result<List<SessionSummary>>) -> Unit) = main.launch {
+        try {
+            val c = client ?: throw PocketError("transport", "未连接")
+            val items = if (query.isBlank()) emptyList() else c.searchSessions(query)["items"].arr().orEmpty().mapNotNull(SessionSummary::parse)
+            onResult(Result.success(items))
+        } catch (e: CancellationException) { throw e }
+        catch (e: Exception) { onResult(Result.failure(e)) }
     }
 
-    fun archiveSession(sessionId: String, stopActivity: Boolean = true) = main.launch {
-        val c = client ?: return@launch
-        if (!hasOp("workspace.archiveSession")) { errors.tryEmit("桌面端未提供归档"); return@launch }
-        runCatching {
-            c.archiveSession(sessionId, stopActivity = stopActivity)
-            lastArchivedId = sessionId
-            refreshWorkspaceState(c)
-            notices.tryEmit(L.archivedToast())
-        }.onFailure { errors.tryEmit(it.message ?: "归档失败") }
+    fun archiveSession(sessionId: String, stopActivity: Boolean = false, onResult: (Boolean) -> Unit = {}, onActivity: (JsonElement) -> Unit = {}) = mutation(onResult) { c ->
+        try { c.archiveSession(sessionId, stopActivity) }
+        catch (e: PocketError) {
+            if (e.code == "workspace/session-active") onActivity(e.details ?: JsonNull)
+            throw e
+        }
+        lastArchivedId = sessionId
+        refreshWorkspaceState(c)
+        notices.tryEmit(L.archivedToast())
     }
 
-    fun unarchiveSession(sessionId: String) = main.launch {
-        val c = client ?: return@launch
-        if (!hasOp("workspace.unarchiveSession")) return@launch
-        runCatching {
-            c.unarchiveSession(sessionId)
-            refreshWorkspaceState(c)
-        }.onFailure { errors.tryEmit(it.message ?: "取消归档失败") }
+    fun unarchiveSession(sessionId: String, onResult: (Boolean) -> Unit = {}) = mutation(onResult) { c ->
+        c.unarchiveSession(sessionId)
+        refreshWorkspaceState(c)
     }
 
     fun pinSession(sessionId: String) = main.launch {
@@ -998,46 +1210,22 @@ object Pocket {
         rating: String?,
         category: String? = null,
         note: String? = null,
-    ) = main.launch {
-        val c = client ?: return@launch
-        val st = chat.value ?: return@launch
-        if (!hasOp("feedback.set")) { errors.tryEmit("桌面端未提供反馈"); return@launch }
+        onResult: (Boolean) -> Unit = {},
+    ) = mutation(onResult) { c ->
+        val st = chat.value ?: error("无会话")
         val prev = feedback.value[messageId]
-        runCatching {
-            val r = c.setFeedback(
-                st.sessionId, messageId, rating, category, note, prev?.version,
-            )
-            val next = MessageFeedback.parse(r) ?: MessageFeedback(messageId, rating, category = category, note = note)
-            feedback.value = if (rating == null) feedback.value - messageId else feedback.value + (messageId to next)
-            if (rating != null) notices.tryEmit(L.thanksFeedback())
-        }.onFailure { errors.tryEmit(it.message ?: "反馈保存失败") }
+        val result = c.setFeedback(st.sessionId, messageId, rating, category, note, prev?.version)
+        feedback.value = if (rating == null) feedback.value - messageId else {
+            val next = MessageFeedback.parse(result) ?: throw PocketError("bad-reply", "主机未返回已保存的反馈")
+            feedback.value + (messageId to next)
+        }
+        if (rating != null) notices.tryEmit(L.thanksFeedback())
     }
 
-    fun lookupFileRefs(query: String, onResult: (List<FileReference>) -> Unit) = main.launch {
-        val c = client ?: run { onResult(emptyList()); return@launch }
-        val st = chat.value ?: run { onResult(emptyList()); return@launch }
-        if (!hasOp("references.files")) { onResult(emptyList()); return@launch }
-        runCatching {
-            onResult(c.referenceFiles(st.sessionId, query)["items"].arr().orEmpty().mapNotNull(FileReference::parse))
-        }.onFailure { onResult(emptyList()) }
-    }
-
-    fun lookupSessionRefs(query: String, onResult: (List<SessionReference>) -> Unit) = main.launch {
-        val c = client ?: run { onResult(emptyList()); return@launch }
-        val st = chat.value ?: run { onResult(emptyList()); return@launch }
-        if (!hasOp("references.sessions")) { onResult(emptyList()); return@launch }
-        runCatching {
-            onResult(c.referenceSessions(st.sessionId, query)["items"].arr().orEmpty().mapNotNull(SessionReference::parse))
-        }.onFailure { onResult(emptyList()) }
-    }
-
-    fun answerUserQuestion(callId: String, answers: List<JsonObject>) = main.launch {
-        val c = client ?: return@launch
-        val st = chat.value ?: return@launch
-        if (!hasOp("userQuestions.answer")) { errors.tryEmit("桌面端未提供提问"); return@launch }
+    fun answerUserQuestion(callId: String, answers: List<JsonObject>, onResult: (Boolean) -> Unit = {}) = mutation(onResult) { c ->
+        val st = chat.value ?: error("无会话")
+        check(c.answerUserQuestion(st.sessionId, callId, answers)["accepted"].bool() == true) { "提问已变化或答案未被接受" }
         userQuestions.value = userQuestions.value.filter { it.callId != callId && it.questionId != callId }
-        runCatching { c.answerUserQuestion(st.sessionId, callId, answers) }
-            .onFailure { errors.tryEmit(it.message ?: "回答失败") }
     }
 
     /** Insert a mention token into the open composer (`@path` / session mention). */
@@ -1087,15 +1275,19 @@ object Pocket {
         ?: throw PocketError("transport", "未连接")
     suspend fun listJobs(sessionId: String) = client?.listJobs(sessionId)
         ?: throw PocketError("transport", "未连接")
-    fun killJob(sessionId: String, jobId: String) = main.launch {
-        runCatching { client?.killJob(sessionId, jobId) }.onFailure { errors.tryEmit(it.message ?: "终止失败") }
+    fun killJob(sessionId: String, jobId: String, onResult: (Boolean) -> Unit = {}) = mutation(onResult) { c ->
+        c.killJob(sessionId, jobId)
     }
 
     /** Open (or reuse) a host PTY for [sessionId] and start following its screen. */
-    fun openTerminal(sessionId: String) = main.launch {
+    fun openTerminal(sessionId: String, forceNew: Boolean = false) = main.launch(start = CoroutineStart.UNDISPATCHED) {
+        val epoch = terminalOpenEpoch.incrementAndGet()
+        terminalOpening = true
+        terminalStray.clear()
         terminalMeta.value = null
-        val c = client ?: run { errors.tryEmit("未连接"); return@launch }
+        val c = client ?: run { terminalOpening = false; errors.tryEmit("未连接"); return@launch }
         if (!hasOp("terminal.create") || !hasOp("terminal.follow")) {
+            terminalOpening = false
             errors.tryEmit("桌面端未提供终端"); return@launch
         }
         val cols = wantCols
@@ -1111,14 +1303,24 @@ object Pocket {
             terminal.resize(cols, rows)
             terminal.clear()
             terminalRevision.value = terminal.revision
-            val existing = c.listTerminals(sessionId)["terminals"].arr().orEmpty()
+            val existing = if (forceNew) null else c.listTerminals(sessionId)["terminals"].arr().orEmpty()
                 .firstOrNull { it["state"].str() == "running" }
             val info = existing ?: c.createTerminal(sessionId, cols = cols, rows = rows)["terminal"]
+            if (client !== c || terminalOpenEpoch.get() != epoch) return@launch
             val id = info["id"].str() ?: error("no terminal id")
             val follow = c.followTerminal(sessionId, id)
             val attachmentId = follow["attachmentId"].str() ?: error("no attachmentId")
-            terminalSubId = follow["subId"].str()
+            val newSubId = follow["subId"].str() ?: error("no terminal subscription")
+            if (client !== c || terminalOpenEpoch.get() != epoch) {
+                runCatching { c.unfollow(newSubId) }
+                return@launch
+            }
+            terminalSubId = newSubId
             terminalMeta.value = TerminalMeta(sessionId, id, attachmentId, info["title"].str(), info["state"].str())
+            terminalOpening = false
+            val buffered = terminalStray.remove(newSubId)
+            terminalStray.clear()
+            buffered?.forEach(::onPush)
             // Align PTY to the latest panel grid (view may have measured while we were attaching).
             val cCols = wantCols
             val cRows = wantRows
@@ -1130,6 +1332,10 @@ object Pocket {
         }.onFailure {
             if (it is CancellationException) throw it
             errors.tryEmit(it.message ?: "打开终端失败")
+        }
+        if (terminalOpenEpoch.get() == epoch) {
+            terminalOpening = false
+            terminalStray.clear()
         }
     }
 
@@ -1155,6 +1361,9 @@ object Pocket {
 
     fun closeTerminalFollow(): Job {
         // Detach before suspending so an older unfollow cannot erase a newly opened panel.
+        terminalOpenEpoch.incrementAndGet()
+        terminalOpening = false
+        terminalStray.clear()
         val c = client
         val old = terminalSubId
         terminalSubId = null
@@ -1246,6 +1455,10 @@ object Pocket {
             detachFollow()
             active.value = null; prefs.activeProfile = null
             sessions.value = emptyList(); chat.value = null
+            workspaces.value = emptyList(); presetRoster.value = emptyList(); ops.value = emptySet()
+            approvals.value = emptyList(); userQuestions.value = emptyList()
+            archivedIds.value = emptySet(); pinnedIds.value = emptySet()
+            closeTerminalFollow()
             invalidatePermissionCatalog()
             invalidateModelCatalog()
             permission.value = emptyMap()

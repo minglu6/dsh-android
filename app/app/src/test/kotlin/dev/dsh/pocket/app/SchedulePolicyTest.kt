@@ -113,4 +113,49 @@ class SchedulePolicyTest {
         assertThrows(IllegalStateException::class.java) { scheduleConfirmDeleted(jsonOf("deleted" to false, "code" to "schedule_not_found")) }
         assertThrows(IllegalStateException::class.java) { scheduleConfirmDeleted(jsonOf("ok" to true)) }
     }
+
+    @Test fun commonCronBuilderRoundTripsAllOfficialShapes() {
+        listOf(
+            ScheduleCronShape("minutely", step = 15),
+            ScheduleCronShape("hourly", step = 3, minute = 12),
+            ScheduleCronShape("daily", hour = 23, minute = 59),
+            ScheduleCronShape("weekly", hour = 9, weekdays = setOf(1, 3, 7)),
+            ScheduleCronShape("monthly", days = setOf(1, 2, 3, 15, 31)),
+        ).forEach { shape ->
+            assertEquals(shape, scheduleCronShape(scheduleCronExpression(shape)))
+            assertTrue(scheduleCronValid(scheduleCronExpression(shape)))
+        }
+        assertEquals("0 9 * * 0,1,3", scheduleCronExpression(ScheduleCronShape("weekly", weekdays = setOf(1, 3, 7))))
+        assertEquals("0 9 1-3,15,31 * *", scheduleCronExpression(ScheduleCronShape("monthly", days = setOf(1, 2, 3, 15, 31))))
+    }
+
+    @Test fun cronRecognitionPreservesExplicitDaySetsAndRejectsUnionOrMonthRestrictions() {
+        assertEquals("weekly", scheduleCronShape("0 9 * * 0-6")?.kind)
+        assertEquals((1..7).toSet(), scheduleCronShape("0 9 * * 0-7")?.weekdays)
+        assertEquals("monthly", scheduleCronShape("0 9 1-31 * *")?.kind)
+        assertEquals(15, scheduleCronShape("0-59/15 * * * *")?.step)
+        assertNull(scheduleCronShape("0 9 1 * 1"))
+        assertNull(scheduleCronShape("0 9 * 1 *"))
+        assertNull(scheduleCronShape("0,10,25 * * * *"))
+        assertNull(scheduleCronShape("invalid"))
+    }
+
+    @Test fun cronAdvancedSourceAndUnmodifiedTimingRemainUntouched() {
+        val row = jsonOf("id" to "c", "sessionId" to "s", "kind" to "cron", "title" to "Cron", "prompt" to "Do",
+            "scheduledAt" to "2026-10-15T01:00:00.000Z", "expression" to "0  9 1 * 1", "timeZone" to "US/Eastern")
+        val draft = scheduleTimingDraft(row)
+        assertFalse(scheduleUpdateRequest(row, "Renamed", "Do", draft, draft).containsKey("change"))
+        assertEquals("0  9 1 * 1", scheduleTimingChange(draft.copy(zone = "UTC"))["cron"]["expression"].str())
+        assertEquals("US/Eastern", draft.zone)
+        assertThrows(IllegalArgumentException::class.java) { scheduleCronExpression(ScheduleCronShape("monthly", days = emptySet())) }
+    }
+
+    @Test fun relativeTimeUsesOfficialFutureCeilAndOverdueFloor() {
+        val now = java.time.Instant.parse("2026-10-15T00:00:00Z")
+        assertEquals(ScheduleRelativeTime(1, 2, "minute"), scheduleRelativeTime("2026-10-15T00:01:01Z", now))
+        assertEquals(ScheduleRelativeTime(-1, 1, "minute"), scheduleRelativeTime("2026-10-14T23:58:59Z", now))
+        assertEquals(0, scheduleRelativeTime(now.toString(), now)?.direction)
+        assertEquals(ScheduleRelativeTime(1, 1, "second"), scheduleRelativeTime("2026-10-15T00:00:00.123Z", now))
+        assertNull(scheduleRelativeTime("invalid", now))
+    }
 }

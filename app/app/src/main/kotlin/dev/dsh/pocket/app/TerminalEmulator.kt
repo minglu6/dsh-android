@@ -2,7 +2,7 @@ package dev.dsh.pocket.app
 
 import androidx.compose.ui.graphics.Color
 
-/** Tokyo Night Night palette — matches the desktop dsh / xterm terminal surface. */
+/** Syntax/ANSI palette. Terminal default foreground and background follow live DSH aliases. */
 object TokyoNight {
     val Bg = Color(0xFF1A1B26)
     val Fg = Color(0xFFC0CAF5)
@@ -40,19 +40,19 @@ data class TermCell(
     val wide: Boolean = false,
     val spacer: Boolean = false,
 ) {
-    fun fgColor(): Color {
+    fun fgColor(defaultForeground: Color): Color {
         val base = when {
             fg in 0..15 -> TokyoNight.Ansi[fg]
             fg in 16..255 -> xterm256(fg)
-            else -> TokyoNight.Fg
+            else -> defaultForeground
         }
         return if (dim) base.copy(alpha = 0.65f) else base
     }
 
-    fun bgColor(): Color = when {
+    fun bgColor(defaultBackground: Color): Color = when {
         bg in 0..15 -> TokyoNight.Ansi[bg]
         bg in 16..255 -> xterm256(bg)
-        else -> TokyoNight.Bg
+        else -> defaultBackground
     }
 }
 

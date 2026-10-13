@@ -1,6 +1,6 @@
 /**
  * Desktop settings Host surfaces for the phone: models providers, plugins,
- * schedules, and credentials.
+ * schedules, and model API-key writes.
  *
  * Data shapes and Host call patterns follow deepseek-harness client modules
  * (ui-settings-models, ui-plugin-manager, ui-schedule, settings-controller).
@@ -29,7 +29,6 @@ export function getPath(value, path) {
 /** Join configurable directory with live routes (ui-settings-models joinProviderDirectory). */
 export function joinProviderDirectory(registered, directory) {
   const active = new Set((registered ?? []).map((p) => p.id))
-  const declared = new Set((directory ?? []).map((e) => e.provider))
   const rows = (directory ?? []).map((entry) => ({
     provider: entry.provider,
     displayName: entry.displayName ?? entry.provider,
@@ -39,18 +38,39 @@ export function joinProviderDirectory(registered, directory) {
     ...(entry.declared === undefined ? {} : { declared: entry.declared }),
     ...(entry.error === undefined ? {} : { error: entry.error }),
   }))
-  for (const provider of registered ?? []) {
-    if (declared.has(provider.id)) continue
-    rows.push({
-      provider: provider.id,
-      displayName: provider.name ?? provider.id,
-      settingsNs: '',
-      settingsPath: [],
-      active: true,
-    })
-  }
   const rank = (id) => (id === 'deepseek-account' ? 0 : id === 'deepseek-official' ? 1 : 2)
   return rows.sort((a, b) => rank(a.provider) - rank(b.provider))
+}
+
+function resolveSchemaNode(schema, raw) {
+  const uid = raw && typeof raw === 'object' ? raw.uid : raw
+  return uid !== undefined && schema?.refs ? schema.refs[uid] : raw
+}
+
+/** Read the Host's serialized Schemastery graph without loading client services. */
+function schemaNodeAtPath(schema, path) {
+  const resolve = (raw) => resolveSchemaNode(schema, raw)
+  let node = resolve(schema)
+  for (const key of path) {
+    if (node?.type === 'object') node = resolve(node.dict?.[key])
+    else if (node?.type === 'dict' || node?.type === 'array') node = resolve(node.inner)
+    else return undefined
+  }
+  return node
+}
+
+function protocolChoices(namespace) {
+  const schema = namespace?.schema
+  const node = schemaNodeAtPath(schema, ['providers', '\u0000probe', 'api'])
+  if (node?.type !== 'union' || !Array.isArray(node.list)) return []
+  return node.list.map((raw) => resolveSchemaNode(schema, raw)?.value)
+    .filter((value) => typeof value === 'string')
+}
+
+function hasPath(value, path) {
+  if (path.length === 0) return value !== undefined
+  const parent = getPath(value, path.slice(0, -1))
+  return parent !== null && typeof parent === 'object' && Object.hasOwn(parent, path.at(-1))
 }
 
 function projectCredentialInfo(info) {
@@ -90,12 +110,16 @@ export function modelsSettingsOps({ llm, settings, settingsController, credentia
   }
 
   const describeCreds = async (refs) => {
-    if (!credentials?.describe) return {}
-    const out = {}
-    await Promise.all(refs.map(async (ref) => {
-      out[ref] = projectCredentialInfo(await credentials.describe(ref))
-    }))
-    return out
+    if (!credentials?.describe) return { values: {}, error: refs.length ? 'credentials unavailable' : null }
+    try {
+      const entries = await Promise.all(refs.map(async (ref) => [
+        ref, projectCredentialInfo(await credentials.describe(ref)),
+      ]))
+      return { values: Object.fromEntries(entries), error: null }
+    } catch {
+      // Credential state enriches the page; an unavailable backend must not hide settings.
+      return { values: {}, error: 'credentials unavailable' }
+    }
   }
 
   return {
@@ -108,39 +132,44 @@ export function modelsSettingsOps({ llm, settings, settingsController, credentia
       const providers = joinProviderDirectory(registered, directory)
       const described = describeSettings()
       const namespaces = new Map((described.namespaces ?? []).map((n) => [n.ns, n]))
-      const rows = providers.map((entry) => {
+      const rows = providers.filter((entry) => namespaces.has(entry.settingsNs)).map((entry) => {
         const ns = namespaces.get(entry.settingsNs)
-        const profile = ns ? getPath(ns.value, entry.settingsPath) : undefined
-        const configured = entry.settingsPath.length === 0
-          ? entry.active
-          : profile !== undefined
-        const apiKeyEnv = (profile && typeof profile === 'object' && str(profile.apiKeyEnv))
+        const profile = getPath(ns.value, entry.settingsPath)
+        const configured = entry.settingsPath.length === 0 || profile !== undefined
+        const apiKeyEnv = entry.provider !== 'deepseek-account' && str(profile?.apiKeyEnv)
           ? profile.apiKeyEnv
-          : (entry.provider === 'deepseek-account' ? undefined : deriveKeyRef(entry.provider))
+          : undefined
         return {
           ...entry,
           configured,
+          editable: described.writable !== false,
+          removable: entry.settingsPath.length > 0
+            && hasPath(ns.user, entry.settingsPath) && !hasPath(ns.base, entry.settingsPath),
           apiKeyEnv,
-          credential: undefined,
-          profile: profile && typeof profile === 'object'
-            ? {
-              ...(str(profile.apiKeyEnv) ? { apiKeyEnv: profile.apiKeyEnv } : {}),
-              ...(Array.isArray(profile.models) ? { models: profile.models } : {}),
-              ...(str(profile.baseUrl) ? { baseUrl: profile.baseUrl } : {}),
-              ...(str(profile.api) ? { api: profile.api } : {}),
-            }
-            : undefined,
+          profile: profile && typeof profile === 'object' ? profile : undefined,
         }
       })
-      const refs = [...new Set(rows.map((r) => r.apiKeyEnv).filter(str))]
-      const credentialsMap = await describeCreds(refs)
+      const account = rows.find((row) => row.provider === 'deepseek-account')
+      if (account) {
+        try {
+          account.accountAvailable = account.active && (await llm.listModels(account.provider)).length > 0
+        } catch {
+          account.accountAvailable = false
+        }
+      }
+      const refs = [...new Set(rows.filter((row) => row.provider !== 'deepseek-account')
+        .map((row) => row.apiKeyEnv ?? deriveKeyRef(row.provider)))]
+      const { values: credentialsMap, error: credentialError } = await describeCreds(refs)
       return {
-        writable: described.writable !== false,
-        rows: rows.map((row) => ({
+        writable: described.writable !== false && typeof settingsController?.mutate === 'function',
+        namespaces: described.namespaces ?? [],
+        protocols: protocolChoices(namespaces.get('llm-pi-ai')),
+        credentialError,
+        rows: rows.filter((row) => row.provider !== 'deepseek-account' || row.accountAvailable).map((row) => ({
           ...row,
-          ...(row.apiKeyEnv && credentialsMap[row.apiKeyEnv]
+          ...(row.provider === 'deepseek-account' ? {} : row.apiKeyEnv
             ? { credential: credentialsMap[row.apiKeyEnv] }
-            : {}),
+            : { derivedCredential: credentialsMap[deriveKeyRef(row.provider)] }),
         })),
       }
     },
@@ -150,19 +179,33 @@ export function modelsSettingsOps({ llm, settings, settingsController, credentia
       const listed = await modelsSettingsOps({ llm, settings, settingsController, credentials })['models.providers']()
       const row = listed.rows.find((r) => r.provider === a.provider)
       if (!row) throw Object.assign(new Error(`unknown provider: ${a.provider}`), { code: 'not-found' })
-      return { writable: listed.writable, provider: row }
+      const namespace = listed.namespaces.find((ns) => ns.ns === row.settingsNs)
+      const modelsPath = [...row.settingsPath, 'models']
+      let catalog = []
+      let catalogError = null
+      if (row.active) {
+        try {
+          catalog = await llm.listModels(row.provider)
+        } catch {
+          catalogError = 'model catalog unavailable'
+        }
+      }
+      return {
+        writable: listed.writable, provider: row, namespace, protocols: listed.protocols,
+        catalog, catalogError,
+        inheritedModels: getPath(namespace?.base, modelsPath)
+          ?? schemaNodeAtPath(namespace?.schema, modelsPath)?.meta?.default,
+      }
     },
 
     'models.settingsMutate': async (a) => {
       if (!str(a.ns) || !Array.isArray(a.ops)) throw bad('ns and ops required')
+      if (!Number.isSafeInteger(a.expectedRevision) || a.expectedRevision < 0) throw bad('expectedRevision required')
       const controller = settingsController
       if (controller?.mutate) {
         return controller.mutate(a.ns, a.ops, a.expectedRevision)
       }
-      if (!settings?.mutate) throw Object.assign(new Error('settings unavailable'), { code: 'unavailable' })
-      await settings.mutate(a.ns, a.ops, a.expectedRevision)
-      const view = settings.describe({ redactSecrets: true }).find((d) => d.ns === a.ns)
-      return view ? namespaceView(view) : { ns: a.ns }
+      throw Object.assign(new Error('safe settings controller unavailable'), { code: 'unavailable' })
     },
 
     'models.discover': async (a, signal) => {
@@ -321,54 +364,11 @@ export function scheduleOps(schedule) {
   }
 }
 
-/**
- * Credentials refs (API keys). Values never leave the Host — only configured /
- * source / writable, matching desktop masking. Refs are discovered from model
- * providers (desktop has no ref enumeration API); callers may also pass refs.
- */
-export function credentialsOps({ credentials, llm, settings, settingsController }) {
+/** Model API-key writes return only metadata; Host credential records stay private. */
+export function credentialsOps({ credentials }) {
   if (!credentials) throw bad('credentials service required')
 
-  const discoverRefs = async () => {
-    const refs = new Set()
-    if (llm?.listConfigurableProviders && llm?.listProviders) {
-      try {
-        const ops = modelsSettingsOps({ llm, settings, settingsController, credentials })
-        const listed = await ops['models.providers']()
-        for (const row of listed.rows) if (str(row.apiKeyEnv)) refs.add(row.apiKeyEnv)
-      } catch {
-        /* provider discovery optional for a bare credential list */
-      }
-    }
-    return [...refs]
-  }
-
   return {
-    'credentials.list': async (a) => {
-      const extra = Array.isArray(a?.refs) ? a.refs.filter(str) : []
-      const discovered = await discoverRefs()
-      const refs = [...new Set([...discovered, ...extra])]
-      const items = []
-      for (const ref of refs) {
-        items.push({ ref, ...projectCredentialInfo(await credentials.describe(ref)) })
-      }
-      let records = []
-      if (typeof credentials.listRecords === 'function') {
-        records = (await credentials.listRecords()).map((e) => ({
-          key: e.key,
-          kind: e.kind,
-        }))
-      }
-      return { items, records }
-    },
-    'credentials.describe': async (a) => {
-      const refs = Array.isArray(a?.refs) ? a.refs.filter(str) : []
-      if (refs.length === 0) throw bad('refs required')
-      if (refs.length > 64) throw bad('at most 64 refs')
-      const out = {}
-      for (const ref of refs) out[ref] = projectCredentialInfo(await credentials.describe(ref))
-      return out
-    },
     'credentials.set': async (a) => {
       if (!str(a.ref) || !str(a.value)) throw bad('ref and non-empty value required')
       await credentials.set(a.ref, a.value)
@@ -378,14 +378,6 @@ export function credentialsOps({ credentials, llm, settings, settingsController 
       if (!str(a.ref)) throw bad('ref required')
       await credentials.unset(a.ref)
       return { ref: a.ref, ...projectCredentialInfo(await credentials.describe(a.ref)) }
-    },
-    'credentials.deleteRecord': async (a) => {
-      if (!str(a.key)) throw bad('key required')
-      if (typeof credentials.deleteRecord !== 'function') {
-        throw Object.assign(new Error('credential records unavailable'), { code: 'unavailable' })
-      }
-      await credentials.deleteRecord(a.key)
-      return { key: a.key, deleted: true }
     },
   }
 }

@@ -8,6 +8,18 @@ import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performTextInput
+import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.performScrollTo
+import androidx.compose.runtime.mutableStateMapOf
+import dev.dsh.pocket.protocol.Approval
+import dev.dsh.pocket.protocol.UserQuestion
+import dev.dsh.pocket.protocol.UserQuestionItem
+import dev.dsh.pocket.protocol.UserQuestionOption
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonPrimitive
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
@@ -35,6 +47,7 @@ class ComposerTest {
         Pocket.sessions.value = emptyList()
         Pocket.chat.value = null
         Pocket.approvals.value = emptyList()
+        Pocket.userQuestions.value = emptyList()
     }
 
     @Test fun newSessionSendStaysEnabledWhenDraftNonEmpty() {
@@ -71,5 +84,82 @@ class ComposerTest {
         rule.setContent { PocketTheme { ChatRoot(onMenu = {}) } }
         rule.waitForIdle()
         rule.onNodeWithTag("composerSend").assertIsDisplayed()
+    }
+    @Test fun questionNavigationRetainsEveryAnswerAndSubmitLocksUntilSettlement() {
+        val q = UserQuestion("q", "s1", "call", listOf(
+            UserQuestionItem("one", "First question", options = listOf(UserQuestionOption("A"))),
+            UserQuestionItem("two", "Second question", options = listOf(UserQuestionOption("B"))),
+        ))
+        val drafts = mutableStateMapOf<String, QuestionDraft>()
+        var submitted: List<JsonObject>? = null
+        var calls = 0
+        var settle: ((Boolean) -> Unit)? = null
+        rule.setContent { PocketTheme {
+            UserQuestionCard(q, drafts, onDismiss = {}, onAnswer = { _, answers, done ->
+                calls++; submitted = answers; settle = done
+            })
+        } }
+        rule.onNodeWithText("A").performClick()
+        rule.onNodeWithText(L.nextQuestion()).performScrollTo().performClick()
+        rule.onNodeWithText("B").performClick()
+        rule.onNodeWithText("上一题").performScrollTo().performClick()
+        rule.onNodeWithText(L.nextQuestion()).performScrollTo().performClick()
+        rule.onNodeWithText("提交答案").performScrollTo().performClick()
+        rule.onNodeWithText("提交答案").assertIsNotEnabled()
+        assertEquals(1, calls)
+        assertEquals("A", submitted!![0]["selected"]!!.jsonArray.single().jsonPrimitive.content)
+        assertEquals("B", submitted!![1]["selected"]!!.jsonArray.single().jsonPrimitive.content)
+        rule.runOnIdle { settle!!(false) }
+        rule.onNodeWithText("提交答案").assertIsEnabled()
+        rule.onNodeWithText("提交答案").performClick()
+        assertEquals(2, calls)
+    }
+
+    @Test fun planDiscussionOnlyDismissesWithoutAnswer() {
+        var dismissed = 0
+        var answers = 0
+        val q = UserQuestion("plan", "s1", "call", listOf(UserQuestionItem("plan", "Review plan",
+            options = listOf(UserQuestionOption("Approve")), intentKind = "plan-review", approveLabel = "Approve")))
+        rule.setContent { PocketTheme {
+            UserQuestionCard(q, mutableStateMapOf(), onDismiss = { dismissed++ },
+                onAnswer = { _, _, _ -> answers++ })
+        } }
+        rule.onNodeWithText("继续讨论").performScrollTo().performClick()
+        assertEquals(1, dismissed)
+        assertEquals(0, answers)
+    }
+
+    @Test fun approvalCannotReenterAndFailureRestoresControls() {
+        var calls = 0
+        var settle: ((Boolean) -> Unit)? = null
+        rule.setContent { PocketTheme {
+            ApprovalCard(Approval("approval", "s1", "bash", null, "Requires workspace write access")) { _, _, done ->
+                calls++; settle = done
+            }
+        } }
+        rule.onNodeWithText("允许一次").performClick()
+        rule.onNodeWithText("拒绝").assertIsNotEnabled()
+        rule.onNodeWithText("提交中…").assertIsNotEnabled()
+        assertEquals(1, calls)
+        rule.runOnIdle { settle!!(false) }
+        rule.onNodeWithText("允许一次").assertIsEnabled()
+        rule.onNodeWithText("拒绝").performClick()
+        assertEquals(2, calls)
+    }
+
+    @Test fun triggerAndReplacementRespectCaretAndSuffix() {
+        assertNull(composerTrigger("mail@example.com", 9))
+        assertNull(composerTrigger("path/src", 8))
+        assertNull(composerTrigger("explain /goal", 13))
+        assertEquals("src", composerTrigger("look @src after", 9)?.query)
+        assertEquals("look @src/Main.kt  after" to 18, replaceComposerToken("look @src after", 9, "@src/Main.kt"))
+        assertEquals("/model  suffix" to 7, replaceComposerToken("/mo suffix", 3, "/model"))
+        assertEquals("folder name", composerTrigger("read @\"folder name", 18)?.query)
+        assertEquals("@\"folder name/a.kt\"", fileReferenceToken("folder name/a.kt", false))
+        assertEquals("@src/", fileReferenceToken("src", true))
+        assertNull(fileReferenceToken("invalid\"name", false))
+        assertNull(fileReferenceToken("invalid\nname", false))
+        assertEquals("goal", builtinCommandName("@deepseek-ai/dsh-command-goal"))
+        assertNull(builtinCommandName("custom-goal"))
     }
 }

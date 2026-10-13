@@ -34,8 +34,26 @@ export function permissionOps(presets, agents) {
 }
 
 /** presets.list over the agentPresets registry (same roster the web UI uses). */
-export function presetOps(agentPresets) {
-  return { 'presets.list': () => agentPresets.remoteExportList() }
+export function presetOps(agentPresets, settingsController) {
+  return {
+    'presets.list': () => agentPresets.remoteExportList(),
+    ...(typeof agentPresets.readDocument === 'function' ? {
+      'presets.read': (a) => {
+        if (!str(a.id)) throw bad('preset id required')
+        return agentPresets.readDocument(a.id)
+      },
+    } : {}),
+    ...(settingsController?.describe ? {
+      'presets.settings': async () => {
+        const described = await settingsController.describe()
+        return {
+          ...await agentPresets.remoteExportList(),
+          writable: described.writable !== false && typeof settingsController?.mutate === 'function',
+          namespace: described.namespaces.find((ns) => ns.ns === 'agent-preset-registry'),
+        }
+      },
+    } : {}),
+  }
 }
 
 /**
@@ -44,6 +62,7 @@ export function presetOps(agentPresets) {
  */
 export function commandOps(commands, agents) {
   return {
+    'commands.list': (a) => ({ commands: commands.list(agentOf(agents, a.sessionId)) }),
     'commands.execute': async (a, signal) => {
       if (!str(a.sessionId) || !str(a.line)) throw bad('sessionId and line required')
       const agent = agents.get(a.sessionId)
@@ -188,6 +207,25 @@ export function terminalOps(terminalController, agents) {
  */
 export function jobsOps(jobController) {
   return {
+    'jobs.follow': (a, _signal, client) => {
+      if (!str(a.sessionId) || !str(a.jobId)) throw bad('sessionId and jobId required')
+      if (a.from !== undefined && (!Number.isSafeInteger(a.from) || a.from < 0)) throw bad('invalid output offset')
+      const subId = `j${client.nextSub++}`
+      const ac = new AbortController()
+      client.subs.set(subId, ac)
+      void (async () => {
+        try {
+          for await (const frame of jobController.follow(a, ac.signal)) {
+            if (ac.signal.aborted) break
+            client.push({ ev: 'job', subId, frame })
+          }
+          if (!ac.signal.aborted) client.push({ ev: 'job.end', subId })
+        } catch (error) {
+          if (!ac.signal.aborted) client.push({ ev: 'job.error', subId, error: { code: error?.code ?? 'internal', message: String(error?.message ?? error) } })
+        } finally { client.subs.delete(subId) }
+      })()
+      return { subId }
+    },
     'jobs.list': async (a, signal) => {
       if (!str(a.sessionId)) throw bad('sessionId required')
       const ac = new AbortController()

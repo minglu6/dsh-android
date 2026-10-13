@@ -36,7 +36,7 @@ class PocketFollowTest {
     @Suppress("UNCHECKED_CAST")
     @Before fun setUp() {
         Pocket.init(RuntimeEnvironment.getApplication())
-        val fields = listOf("client", "subId", "pendingFollowEpoch", "reducer", "permissionProjectionSeq",
+        val fields = listOf("client", "subId", "pendingFollowEpoch", "reducer", "inspectorLog", "permissionProjectionSeq",
             "modelProjectionSeq", "modelUsesDefault").associateWith(::get)
         val modelEpochs = listOf("modelCatalogEpoch", "modelSelectionEpoch").associateWith { (get(it) as AtomicLong).get() }
         val modelFlows = listOf("catalog", "model", "_catalogLoading", "_catalogError", "_modelPending")
@@ -76,6 +76,7 @@ class PocketFollowTest {
         put("subId", "sub-A")
         put("pendingFollowEpoch", null)
         put("reducer", TranscriptReducer())
+        put("inspectorLog", SessionInspectorLog())
         put("permissionProjectionSeq", -1L)
         put("modelProjectionSeq", -1L)
         put("modelUsesDefault", false)
@@ -126,6 +127,68 @@ class PocketFollowTest {
 
     private fun modelCatalog(defaultModel: String = "default") = ModelCatalog.parse(PocketJson.parseToJsonElement(
         """{"groups":[{"id":"p","models":[{"id":"default","name":"Default"},{"id":"next","name":"Next"},{"id":"desktop","name":"Desktop"}]}],"default":{"provider":"p","model":"$defaultModel","reasoningEffort":"high"}}"""))
+
+    @Test fun sidebarCreatesBlankSessionWithoutSendingPromptOrRequiringSelection() = runBlocking {
+        Pocket.chat.value = null
+        put("subId", null)
+        val preparing = async { Pocket.prepareSidebarSession() }.also { jobs += it }
+        reply(request("sessions.create"), """{"sessionId":"blank-sidebar"}""")
+        val follow = request("follow")
+        snapshot("sub-blank", 0)
+        reply(follow, """{"subId":"sub-blank"}""")
+        assertEquals("blank-sidebar", withTimeout(5000) { preparing.await() })
+        assertEquals("blank-sidebar", Pocket.chat.value?.sessionId)
+        assertTrue(Pocket.chat.value!!.loaded)
+        assertTrue(requests.tryReceive().isFailure)
+    }
+
+    @Test fun cancelledSidebarCreationCannotStealASelectedSession() = runBlocking {
+        Pocket.chat.value = null
+        put("subId", null)
+        val preparing = async { Pocket.prepareSidebarSession() }.also { jobs += it }
+        val create = request("sessions.create")
+        val opening = open("B")
+        val follow = request("follow")
+        snapshot("sub-B")
+        reply(follow, """{"subId":"sub-B"}""")
+        finish(opening)
+        reply(create, """{"sessionId":"late-blank"}""")
+        assertNull(withTimeout(5000) { preparing.await() })
+        assertEquals("B", Pocket.chat.value?.sessionId)
+        assertTrue(requests.tryReceive().isFailure)
+    }
+
+    @Test fun lateHistoryPageCannotLeakRawRecordsIntoAnotherSession() = runBlocking {
+        push("sub-A", """{"type":"snapshot","cursor":10,"hasMore":true,"records":[{"type":"event","event":{"seq":10,"time":1,"type":"user/message","data":{"content":[{"type":"text","text":"A current"}]}}}]}""")
+        val paging = Pocket.loadOlderHistory().also { jobs += it }
+        val pageRequest = request("history.page")
+        val opening = open("B")
+        reply(request("unfollow"), """{"stopped":true}""")
+        val follow = request("follow")
+        push("sub-B", """{"type":"snapshot","cursor":2,"records":[{"type":"event","event":{"seq":2,"time":2,"type":"user/message","data":{"content":[{"type":"text","text":"B current"}]}}}]}""")
+        reply(follow, """{"subId":"sub-B"}""")
+        finish(opening)
+        val before = Pocket.chat.value
+        reply(pageRequest, """{"hasMore":false,"records":[{"type":"event","event":{"seq":1,"time":0,"type":"user/message","data":{"content":[{"type":"text","text":"A private history"}]}}}]}""")
+        finish(paging)
+        assertEquals(before, Pocket.chat.value)
+        assertEquals("B", Pocket.chat.value?.sessionId)
+        assertEquals(listOf(2L), Pocket.chat.value?.inspectorRecords?.map { it["seq"].long() })
+    }
+
+    @Test fun inspectorPagesOriginalEventsWithoutLosingLiveRecords() = runBlocking {
+        push("sub-A", """{"type":"snapshot","cursor":10,"hasMore":true,"records":[{"type":"event","event":{"seq":10,"time":1234,"type":"custom/event","data":{"field":"original"}}}]}""")
+        val paging = Pocket.loadOlderHistory().also { jobs += it }
+        val pageRequest = request("history.page")
+        push("sub-A", """{"type":"event","event":{"seq":11,"time":2345,"type":"custom/live","data":{"field":"live"}}}""")
+        reply(pageRequest, """{"hasMore":false,"records":[{"type":"event","event":{"seq":1,"time":123,"type":"custom/older","data":{"field":"older"}}}]}""")
+        finish(paging)
+        val state = Pocket.chat.value!!
+        assertEquals(listOf(1L, 10L, 11L), state.inspectorRecords.map { it["seq"].long() })
+        assertEquals("original", state.inspectorRecords[1]["data"]["field"].str())
+        assertFalse(state.loadingOlder)
+        assertFalse(state.hasMore)
+    }
 
     @Test fun detachedOldFramesCannotPoisonTheNewSessionBeforeUnsubscribeCompletes() = runBlocking {
         val opening = open("B")

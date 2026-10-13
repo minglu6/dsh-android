@@ -101,12 +101,12 @@ fun drawerWidthFor(screenWidth: Dp, fraction: Float = 0.8f, max: Dp = DrawerMaxW
 val DrawerMaxWidth = 320.dp
 val SidebarPaneWidth = 280.dp
 
-/** Breakpoint matching Material compact/medium (≥600dp → desktop two-pane). */
-const val WideLayoutMinDp = 600
+/** Sidebar plus a usable 480dp conversation; forcing desktop never crushes the composer. */
+const val WideLayoutMinDp = 760
 
 fun useTwoPaneLayout(widthDp: Int, mode: LayoutMode = runCatching { Pocket.prefs.layoutMode }.getOrDefault(LayoutMode.Auto)): Boolean =
     when (mode) {
-        LayoutMode.Desktop -> true
+        LayoutMode.Desktop -> widthDp >= WideLayoutMinDp
         LayoutMode.Phone -> false
         LayoutMode.Auto -> widthDp >= WideLayoutMinDp
     }
@@ -121,6 +121,7 @@ fun SessionDrawer(
     onSchedule: () -> Unit = {},
     permanent: Boolean = false,
     onMenuOpenChange: (Boolean) -> Unit = {},
+    onCollapse: (() -> Unit)? = null,
 ) {
     val drawerWidth = if (permanent) SidebarPaneWidth else drawerWidthFor(LocalConfiguration.current.screenWidthDp.dp)
     val body: @Composable () -> Unit = {
@@ -132,6 +133,7 @@ fun SessionDrawer(
             onPlugins = onPlugins,
             onSchedule = onSchedule,
             onMenuOpenChange = onMenuOpenChange,
+            onCollapse = onCollapse,
         )
     }
     if (permanent) {
@@ -164,6 +166,7 @@ private fun SessionDrawerBody(
     onPlugins: () -> Unit,
     onSchedule: () -> Unit,
     onMenuOpenChange: (Boolean) -> Unit,
+    onCollapse: (() -> Unit)?,
 ) {
     val sessions by Pocket.sessions.collectAsState()
     val chat by Pocket.chat.collectAsState()
@@ -173,41 +176,109 @@ private fun SessionDrawerBody(
     val pinned by Pocket.pinnedIds.collectAsState()
     val ops by Pocket.ops.collectAsState()
     val profile = Pocket.profiles.collectAsState().value.firstOrNull { it.id == active }
-    var search by remember { mutableStateOf("") }
+    val workspaces by Pocket.workspaces.collectAsState()
+    val host = active.orEmpty()
+    var search by remember(host) { mutableStateOf("") }
     var searchExpanded by remember { mutableStateOf(false) }
     var searching by remember { mutableStateOf(false) }
-    var searchHits by remember { mutableStateOf<List<dev.dsh.pocket.protocol.SessionSummary>?>(null) }
+    var searchError by remember { mutableStateOf<String?>(null) }
+    var searchHits by remember(host) { mutableStateOf<List<dev.dsh.pocket.protocol.SessionSummary>>(emptyList()) }
     var groupBy by remember { mutableStateOf(Pocket.prefs.sessionGroupBy) }
     var orderBy by remember { mutableStateOf(Pocket.prefs.sessionOrderBy) }
     var archivedFilter by remember { mutableStateOf(Pocket.prefs.archivedFilter) }
     var viewOptionsOpen by remember { mutableStateOf(false) }
     var addWorkspaceOpen by remember { mutableStateOf(false) }
     var menuSessionId by remember { mutableStateOf<String?>(null) }
-    var collapsedWorkspaces by remember { mutableStateOf(setOf<String>()) }
+    var collapsedWorkspaces by remember(host) { mutableStateOf(Pocket.prefs.collapsedWorkspaces(host)) }
+    var savedOrder by remember(host) { mutableStateOf(Pocket.prefs.manualSessionOrder(host)) }
+    val currentBlank = sessions.firstOrNull { it.sessionId == chat?.sessionId && it.blank }?.sessionId
+    val completeOrder = reconcileSessionOrder(sessions, savedOrder).let { ids ->
+        if (currentBlank == null) ids else listOf(currentBlank) + ids.filterNot { it == currentBlank }
+    }
+    val ordered = if (orderBy == SessionOrderBy.Updated) sessions.sortedByDescending { it.updatedAt }
+        else completeOrder.mapNotNull { id -> sessions.firstOrNull { it.sessionId == id } }
+    val moveOrder = if (orderBy == SessionOrderBy.Updated) ordered.map { it.sessionId } else completeOrder
+    val visible = ordered.filter { visibleDrawerSession(it, chat?.sessionId, archived, archivedFilter) }
+        .sortedByDescending { it.blank && it.sessionId == chat?.sessionId }
     val searchFocus = remember { FocusRequester() }
-    LaunchedEffect(menuSessionId) { onMenuOpenChange(menuSessionId != null) }
-    LaunchedEffect(search) {
-        if (search.isBlank() || "sessions.search" !in ops) {
-            searchHits = null; searching = false; return@LaunchedEffect
+    val currentSearch by rememberUpdatedState(search)
+    val currentHost by rememberUpdatedState(host)
+    fun saveOrder(ids: List<String>) {
+        savedOrder = ids
+        Pocket.prefs.setManualSessionOrder(host, ids)
+        orderBy = SessionOrderBy.Manual
+        Pocket.prefs.sessionOrderBy = orderBy
+    }
+    fun toggleGroup(key: String) {
+        collapsedWorkspaces = if (key in collapsedWorkspaces) collapsedWorkspaces - key else collapsedWorkspaces + key
+        Pocket.prefs.setCollapsedWorkspaces(host, collapsedWorkspaces)
+    }
+    @Composable fun sessionRows(rows: List<dev.dsh.pocket.protocol.SessionSummary>) {
+        val peers = rows.filter { !it.blank && it.sessionId !in archived && it.archived != true }.map { it.sessionId }
+        rows.forEach { s ->
+            key(s.sessionId) {
+                SessionRow(s, s.sessionId == chat?.sessionId, s.sessionId in archived || s.archived == true,
+                    s.sessionId in pinned && s.sessionId !in archived, menuSessionId == s.sessionId,
+                    onPick = {
+                        search = ""; searchExpanded = false
+                        val workspace = workspaces.firstOrNull { s.sessionId in it.sessionIds }
+                        if (workspace != null) {
+                            val ancestors = workspaces.filter { workspace.path == it.path || workspace.path.startsWith(it.path.trimEnd('/') + "/") }
+                                .map { "workspace:${it.workspaceId}" }.toSet()
+                            collapsedWorkspaces = collapsedWorkspaces - ancestors
+                            Pocket.prefs.setCollapsedWorkspaces(host, collapsedWorkspaces)
+                        }
+                        onPick(s.sessionId)
+                    },
+                    onMenuOpenChange = { menuSessionId = if (it) s.sessionId else null },
+                    onMoveUp = peers.indexOf(s.sessionId).takeIf { search.isBlank() && it > 0 }?.let {
+                        { saveOrder(moveSession(moveOrder, peers, s.sessionId, -1)) }
+                    },
+                    onMoveDown = peers.indexOf(s.sessionId).takeIf { search.isBlank() && it >= 0 && it < peers.lastIndex }?.let {
+                        { saveOrder(moveSession(moveOrder, peers, s.sessionId, 1)) }
+                    },
+                )
+            }
         }
+    }
+    LaunchedEffect(menuSessionId) { onMenuOpenChange(menuSessionId != null) }
+    DisposableEffect(Unit) { onDispose { onMenuOpenChange(false) } }
+    LaunchedEffect(completeOrder, orderBy, host) {
+        if (orderBy == SessionOrderBy.Manual && sessions.isNotEmpty() && savedOrder != completeOrder) {
+            savedOrder = completeOrder
+            Pocket.prefs.setManualSessionOrder(host, completeOrder)
+        }
+    }
+    LaunchedEffect(search, host, ops) {
+        searchHits = emptyList(); searchError = null
+        if (search.isBlank() || "sessions.search" !in ops) { searching = false; return@LaunchedEffect }
         searching = true
         kotlinx.coroutines.delay(250)
-        Pocket.searchSessions(search) { searchHits = it; searching = false }
+        val query = search
+        val requestHost = host
+        Pocket.searchSessions(query) { result ->
+            if (currentSearch == query && currentHost == requestHost) {
+                searchHits = result.getOrDefault(emptyList())
+                searchError = result.exceptionOrNull()?.message
+                searching = false
+            }
+        }
     }
-    LaunchedEffect(searchExpanded) {
-        if (searchExpanded) searchFocus.requestFocus()
-    }
+    LaunchedEffect(searchExpanded) { if (searchExpanded) searchFocus.requestFocus() }
+    BackHandler(searchExpanded && menuSessionId == null) { searchExpanded = false; search = "" }
     Column(Modifier.fillMaxHeight()) {
         Row(Modifier.padding(start = 18.dp, end = 18.dp, top = 18.dp, bottom = 12.dp), verticalAlignment = Alignment.CenterVertically) {
             androidx.compose.foundation.Image(D.wordmark, "deepseek HARNESS", modifier = Modifier.height(22.dp).width(167.dp))
+            Spacer(Modifier.weight(1f))
+            onCollapse?.let { IconButton(it) { Icon(D.chevronLeft, navText("收起侧栏", "Collapse sidebar"), Modifier.size(18.dp)) } }
         }
         Row(
-            Modifier.padding(horizontal = 12.dp).fillMaxWidth().height(38.dp).clip(T.R12).background(T.Surface).border(1.dp, T.Border, T.R12)
+            Modifier.padding(horizontal = 12.dp).fillMaxWidth().height(48.dp).clip(T.R12).background(T.Surface).border(1.dp, T.Border, T.R12)
                 .clickable(onClick = onNew).padding(horizontal = 12.dp),
             horizontalArrangement = Arrangement.Center,
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Icon(D.newChat, null, Modifier.size(16.dp), tint = T.Ink); Spacer(Modifier.width(6.dp)); Text("新会话", fontSize = 14.sp, fontWeight = FontWeight.Medium)
+            Icon(D.newChat, null, Modifier.size(16.dp), tint = T.Ink); Spacer(Modifier.width(6.dp)); Text(navText("新会话", "New session"), fontSize = 14.sp, fontWeight = FontWeight.Medium)
         }
         Spacer(Modifier.height(12.dp))
         Column(Modifier.padding(horizontal = 10.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
@@ -222,7 +293,7 @@ private fun SessionDrawerBody(
             Spacer(Modifier.height(8.dp))
         }
         Row(
-            Modifier.fillMaxWidth().height(36.dp).padding(start = 14.dp, end = 8.dp),
+            Modifier.fillMaxWidth().height(48.dp).padding(start = 14.dp, end = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             if (searchExpanded) {
@@ -241,17 +312,11 @@ private fun SessionDrawerBody(
                     },
                 )
                 if (search.isNotEmpty()) {
-                    Text(L.clearSearch(), fontSize = 12.sp, color = T.Text3, modifier = Modifier.clickable {
-                        search = ""; searchHits = null
-                    })
+                    TextButton({ search = ""; searchHits = emptyList() }) { Text(L.clearSearch(), fontSize = 12.sp) }
                 } else {
-                    Icon(
-                        D.chevronLeft, L.clearSearch(),
-                        Modifier.size(18.dp).clickable {
-                            searchExpanded = false; search = ""; searchHits = null
-                        },
-                        tint = T.Text3,
-                    )
+                    IconButton({ searchExpanded = false; search = ""; searchHits = emptyList() }) {
+                        Icon(D.chevronLeft, navText("关闭搜索", "Close search"), Modifier.size(18.dp), tint = T.Text3)
+                    }
                 }
             } else {
                 Text(
@@ -266,116 +331,43 @@ private fun SessionDrawerBody(
                 Spacer(Modifier.weight(1f))
                 DrawerHeaderIcon(D.search, L.search()) { searchExpanded = true }
                 DrawerHeaderIcon(D.sliders, L.viewOptions()) { viewOptionsOpen = true }
-                DrawerHeaderIcon(D.projectAdd, L.addWorkspace()) { addWorkspaceOpen = true }
+                if ("workspace.create" in ops) DrawerHeaderIcon(D.projectAdd, L.addWorkspace()) { addWorkspaceOpen = true }
             }
         }
         Spacer(Modifier.height(4.dp))
         Column(Modifier.weight(1f).verticalScroll(rememberScrollState())) {
-            when {
-                searching -> Text(L.searchingSessions(), fontSize = 14.sp, color = T.Caption, modifier = Modifier.padding(horizontal = 22.dp, vertical = 10.dp))
-                searchHits != null -> {
-                    val hits = searchHits!!
-                    if (hits.isEmpty()) Text(L.noMatchingSessions(), fontSize = 14.sp, color = T.Caption, modifier = Modifier.padding(horizontal = 22.dp, vertical = 10.dp))
-                    else hits.forEach { s ->
-                        SessionRow(
-                            s, selected = s.sessionId == chat?.sessionId,
-                            archived = s.sessionId in archived, pinned = s.sessionId in pinned,
-                            menuOpen = menuSessionId == s.sessionId,
-                            onPick = { onPick(s.sessionId) },
-                            onMenuOpenChange = { open -> menuSessionId = if (open) s.sessionId else null },
-                        )
-                    }
+            if (search.isNotBlank()) {
+                val query = search.trim()
+                val local = sessions.filter { s ->
+                    s.title.orEmpty().contains(query, true) || s.cwd.orEmpty().contains(query, true) ||
+                        workspaces.any { s.sessionId in it.sessionIds && (it.title.orEmpty().contains(query, true) || it.path.contains(query, true)) }
                 }
-                else -> {
-                    val visible = sessions.filter { s ->
-                        if (s.parentSessionId != null || s.blank) return@filter false
-                        when (archivedFilter) {
-                            ArchivedFilter.Default -> s.sessionId !in archived
-                            ArchivedFilter.Show -> true
-                            ArchivedFilter.Only -> s.sessionId in archived
-                        }
-                    }
-                    val ordered = when (orderBy) {
-                        SessionOrderBy.Updated -> visible.sortedByDescending { it.updatedAt }
-                        SessionOrderBy.Manual -> visible
-                    }
-                    val pinnedList = ordered.filter { it.sessionId in pinned }
-                    val rest = ordered.filter { it.sessionId !in pinned }
-                    if (pinnedList.isEmpty() && rest.isEmpty()) {
-                        val empty = when {
-                            status[active] != Dot.Online -> "连接后显示会话"
-                            archivedFilter == ArchivedFilter.Only -> L.emptyArchivedSessions()
-                            else -> L.emptySessions()
-                        }
-                        Text(empty, fontSize = 14.sp, color = T.Caption, modifier = Modifier.padding(horizontal = 22.dp, vertical = 10.dp))
-                    }
-                    if (pinnedList.isNotEmpty()) {
-                        Text(L.pinned(), fontSize = 12.sp, color = T.Text3, modifier = Modifier.padding(horizontal = 22.dp, vertical = 4.dp))
-                        pinnedList.forEach { s ->
-                            SessionRow(
-                                s, selected = s.sessionId == chat?.sessionId,
-                                archived = s.sessionId in archived, pinned = true,
-                                menuOpen = menuSessionId == s.sessionId,
-                                onPick = { onPick(s.sessionId) },
-                                onMenuOpenChange = { open -> menuSessionId = if (open) s.sessionId else null },
-                            )
-                        }
-                    }
-                    when (groupBy) {
-                        SessionGroupBy.Flat -> rest.forEach { s ->
-                            SessionRow(
-                                s, selected = s.sessionId == chat?.sessionId,
-                                archived = s.sessionId in archived, pinned = s.sessionId in pinned,
-                                menuOpen = menuSessionId == s.sessionId,
-                                onPick = { onPick(s.sessionId) },
-                                onMenuOpenChange = { open -> menuSessionId = if (open) s.sessionId else null },
-                            )
-                        }
-                        SessionGroupBy.Workspace -> {
-                            rest.groupBy { it.cwd?.trimEnd('/')?.substringAfterLast('/') ?: L.ungrouped() }.forEach { (ws, list) ->
-                                WorkspaceCollapseGroup(
-                                    ws = ws,
-                                    list = list,
-                                    collapsed = ws in collapsedWorkspaces,
-                                    selectedId = chat?.sessionId,
-                                    archived = archived,
-                                    pinned = pinned,
-                                    menuSessionId = menuSessionId,
-                                    onToggle = {
-                                        collapsedWorkspaces = if (ws in collapsedWorkspaces) collapsedWorkspaces - ws else collapsedWorkspaces + ws
-                                    },
-                                    onPick = onPick,
-                                    onMenuOpenChange = { id, open -> menuSessionId = if (open) id else null },
-                                )
-                            }
-                        }
-                        SessionGroupBy.WorkspaceTree -> {
-                            rest.groupBy { cwd ->
-                                val path = cwd.cwd?.trimEnd('/')
-                                when {
-                                    path.isNullOrBlank() -> L.ungrouped()
-                                    path.contains('/') -> path.substringBeforeLast('/')
-                                    else -> path
-                                }
-                            }.forEach { (ws, list) ->
-                                val label = ws.substringAfterLast('/').ifBlank { ws }
-                                WorkspaceCollapseGroup(
-                                    ws = label,
-                                    list = list,
-                                    collapsed = label in collapsedWorkspaces,
-                                    selectedId = chat?.sessionId,
-                                    archived = archived,
-                                    pinned = pinned,
-                                    menuSessionId = menuSessionId,
-                                    onToggle = {
-                                        collapsedWorkspaces = if (label in collapsedWorkspaces) collapsedWorkspaces - label else collapsedWorkspaces + label
-                                    },
-                                    onPick = onPick,
-                                    onMenuOpenChange = { id, open -> menuSessionId = if (open) id else null },
-                                )
-                            }
-                        }
-                    }
+                val hits = (searchHits + local).distinctBy { it.sessionId }.filter {
+                    visibleDrawerSession(it, chat?.sessionId, archived, archivedFilter)
+                }
+                if (searching) Text(L.searchingSessions(), color = T.Caption, modifier = Modifier.padding(16.dp))
+                searchError?.let { Text(it, color = T.Err, modifier = Modifier.padding(16.dp)) }
+                if (hits.isEmpty() && !searching && searchError == null) Text(L.noMatchingSessions(), color = T.Caption, modifier = Modifier.padding(16.dp))
+                sessionRows(hits)
+            } else {
+                val pinnedRows = visible.filter { it.sessionId in pinned && it.sessionId !in archived }
+                val rest = visible.filter { it.sessionId !in pinned || it.sessionId in archived }
+                if (pinnedRows.isNotEmpty()) {
+                    Text(L.pinned(), fontSize = 12.sp, color = T.Text3, modifier = Modifier.padding(horizontal = 22.dp, vertical = 4.dp))
+                    sessionRows(pinnedRows)
+                }
+                if (visible.isEmpty() && workspaces.isEmpty()) {
+                    Text(if (status[active] != Dot.Online) navText("连接后显示会话", "Connect to view sessions")
+                        else if (archivedFilter == ArchivedFilter.Only) L.emptyArchivedSessions() else L.emptySessions(),
+                        color = T.Caption, modifier = Modifier.padding(16.dp))
+                }
+                if (groupBy == SessionGroupBy.Flat) sessionRows(rest)
+                else {
+                    WorkspaceNavigationGroups(
+                        workspaces, rest, groupBy == SessionGroupBy.WorkspaceTree,
+                        collapsedWorkspaces, ::toggleGroup, onPick,
+                        renderSessions = { sessionRows(it) },
+                    )
                 }
             }
         }
@@ -389,68 +381,26 @@ private fun SessionDrawerBody(
             archivedFilter = archivedFilter,
             onDismiss = { viewOptionsOpen = false },
             onGroup = { groupBy = it; Pocket.prefs.sessionGroupBy = it },
-            onOrder = { orderBy = it; Pocket.prefs.sessionOrderBy = it },
+            onOrder = {
+                orderBy = it; Pocket.prefs.sessionOrderBy = it
+                savedOrder = if (it == SessionOrderBy.Manual) sessions.sortedByDescending { s -> s.updatedAt }.map { s -> s.sessionId } else emptyList()
+                Pocket.prefs.setManualSessionOrder(host, savedOrder)
+            },
             onArchived = { archivedFilter = it; Pocket.prefs.archivedFilter = it },
         )
     }
     if (addWorkspaceOpen) {
-        AddWorkspaceSheet(
-            known = sessions.mapNotNull { it.cwd }.distinct(),
-            onDismiss = { addWorkspaceOpen = false },
-            onPick = { path ->
-                addWorkspaceOpen = false
-                Pocket.startInWorkspace(path)
-            },
-        )
+        WorkspaceDirectorySheet(onDismiss = { addWorkspaceOpen = false })
     }
 }
 
 
-@Composable
-private fun WorkspaceCollapseGroup(
-    ws: String,
-    list: List<dev.dsh.pocket.protocol.SessionSummary>,
-    collapsed: Boolean,
-    selectedId: String?,
-    archived: Set<String>,
-    pinned: Set<String>,
-    menuSessionId: String?,
-    onToggle: () -> Unit,
-    onPick: (String) -> Unit,
-    onMenuOpenChange: (String, Boolean) -> Unit,
-) {
-    Row(
-        Modifier
-            .fillMaxWidth()
-            .clip(T.R8)
-            .clickable(onClick = onToggle)
-            .padding(horizontal = 22.dp, vertical = 8.dp)
-            .testTag("workspaceCollapse:$ws"),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Icon(D.folderOpen, null, Modifier.size(17.dp), tint = T.Accent)
-        Spacer(Modifier.width(10.dp))
-        Text(ws, fontSize = 15.sp, color = T.Ink, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
-        Text(if (collapsed) L.expand() else L.collapse(), fontSize = 12.sp, color = T.Caption)
-    }
-    if (!collapsed) {
-        list.forEach { s ->
-            SessionRow(
-                s, selected = s.sessionId == selectedId,
-                archived = s.sessionId in archived, pinned = s.sessionId in pinned,
-                menuOpen = menuSessionId == s.sessionId,
-                onPick = { onPick(s.sessionId) },
-                onMenuOpenChange = { open -> onMenuOpenChange(s.sessionId, open) },
-            )
-        }
-    }
-}
 
 /** Desktop `.panelRow`: 16px icon, 8px gap, 14px label, min-height 36. */
 @Composable
 private fun DrawerPanelRow(icon: ImageVector, text: String, onClick: () -> Unit) {
     Row(
-        Modifier.fillMaxWidth().heightIn(min = 36.dp).clip(T.R12).clickable(onClick = onClick).padding(horizontal = 8.dp, vertical = 7.dp).testTag("drawerPanel:$text"),
+        Modifier.fillMaxWidth().heightIn(min = 48.dp).clip(T.R12).clickable(onClick = onClick).padding(horizontal = 8.dp, vertical = 7.dp).testTag("drawerPanel:$text"),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Icon(icon, null, Modifier.size(16.dp), tint = T.Ink)
@@ -463,7 +413,7 @@ private fun DrawerPanelRow(icon: ImageVector, text: String, onClick: () -> Unit)
 @Composable
 private fun DrawerHeaderIcon(icon: ImageVector, label: String, onClick: () -> Unit) {
     Box(
-        Modifier.size(28.dp).clip(T.R8).clickable(onClick = onClick).testTag("drawerHeader:$label"),
+        Modifier.size(48.dp).clip(T.R8).clickable(onClick = onClick).testTag("drawerHeader:$label"),
         contentAlignment = Alignment.Center,
     ) {
         Icon(icon, label, Modifier.size(16.dp), tint = T.Text2)
@@ -512,35 +462,6 @@ internal fun ViewOptionsSheet(
     }
 }
 
-@Composable
-private fun AddWorkspaceSheet(known: List<String>, onDismiss: () -> Unit, onPick: (String) -> Unit) {
-    var path by remember { mutableStateOf("") }
-    PocketSheet(onDismiss) {
-        SheetTitle(L.addWorkspace())
-        OutlinedTextField(
-            path,
-            { path = it },
-            placeholder = { Text(L.workspacePathPlaceholder()) },
-            shape = T.R12,
-            singleLine = true,
-            modifier = Modifier.padding(horizontal = 22.dp).fillMaxWidth().testTag("addWorkspacePath"),
-        )
-        Spacer(Modifier.height(8.dp))
-        Button(
-            { onPick(path.trim()) },
-            Modifier.padding(horizontal = 22.dp).fillMaxWidth().height(50.dp),
-            enabled = path.isNotBlank(),
-            shape = T.R12,
-            colors = PrimaryColors(),
-        ) { Text(L.addWorkspace()) }
-        if (known.isNotEmpty()) {
-            Text(L.sectionWorkspaces(), fontSize = 12.sp, color = T.Text3, modifier = Modifier.padding(horizontal = 22.dp, vertical = 8.dp))
-            known.forEach { w ->
-                OptionRow(w.substringAfterLast('/'), w, D.folderOpen) { onPick(w) }
-            }
-        }
-    }
-}
 
 @OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
@@ -552,22 +473,32 @@ private fun SessionRow(
     menuOpen: Boolean,
     onPick: () -> Unit,
     onMenuOpenChange: (Boolean) -> Unit,
+    onMoveUp: (() -> Unit)? = null,
+    onMoveDown: (() -> Unit)? = null,
 ) {
     val pending = Pocket.approvals.collectAsState().value.any { it.sessionId == s.sessionId }
     val ops by Pocket.ops.collectAsState()
     val archivedIds by Pocket.archivedIds.collectAsState()
     val pinnedIds by Pocket.pinnedIds.collectAsState()
-    val isArchived = s.sessionId in archivedIds
+    val isArchived = archived || s.sessionId in archivedIds
     val isPinned = s.sessionId in pinnedIds
+    var renameOpen by remember(s.sessionId) { mutableStateOf(false) }
+    var renameTitle by remember(s.sessionId, s.title) { mutableStateOf(s.title.orEmpty()) }
+    var busy by remember { mutableStateOf(false) }
+    var archiveConfirm by remember { mutableStateOf(false) }
+    var archiveActivity by remember { mutableStateOf<kotlinx.serialization.json.JsonElement?>(null) }
+    var restoreConfirm by remember { mutableStateOf(false) }
     Box {
         Row(
             Modifier.padding(horizontal = 10.dp).fillMaxWidth().clip(T.R8).background(if (selected) T.Fill else Color.Transparent)
-                .combinedClickable(onClick = onPick, onLongClick = { onMenuOpenChange(true) })
-                .padding(start = 38.dp, end = 8.dp, top = 11.dp, bottom = 11.dp),
+                .combinedClickable(onClick = { if (isArchived) restoreConfirm = true else onPick() }, onLongClick = { onMenuOpenChange(true) })
+                .heightIn(min = 48.dp).padding(start = 16.dp, end = 4.dp, top = 4.dp, bottom = 4.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Column(Modifier.weight(1f)) {
-                Text(s.title ?: "新会话", fontSize = 15.sp, color = T.Ink, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text(s.title ?: navText("新会话", "New session"), fontSize = 15.sp, color = if (isArchived) T.Caption else T.Ink, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                s.searchSnippet?.let { Text(it, color = T.Text2, fontSize = 12.sp, maxLines = 2, overflow = TextOverflow.Ellipsis) }
+                s.cwd?.let { Text(it, color = T.Caption, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis) }
                 if (archived || pinned) {
                     Text(
                         listOfNotNull(if (pinned) L.pinned() else null, if (archived) L.archived() else null).joinToString(" · "),
@@ -575,11 +506,9 @@ private fun SessionRow(
                     )
                 }
             }
-            Icon(
-                D.ellipsis, "更多",
-                Modifier.size(18.dp).clickable { onMenuOpenChange(true) }.testTag("sessionMenu:${s.sessionId}"),
-                tint = T.Caption,
-            )
+            IconButton({ onMenuOpenChange(true) }, Modifier.size(48.dp).testTag("sessionMenu:${s.sessionId}")) {
+                Icon(D.ellipsis, L.moreActions(), Modifier.size(18.dp), tint = T.Caption)
+            }
             Spacer(Modifier.width(6.dp))
             if (pending) Box(Modifier.size(7.dp).clip(CircleShape).background(T.WarnBorder))
             else if (s.running) Box(Modifier.size(7.dp).clip(CircleShape).background(T.Accent))
@@ -590,7 +519,11 @@ private fun SessionRow(
             onDismissRequest = { onMenuOpenChange(false) },
             containerColor = T.Surface,
         ) {
-            if ("workspace.pinSession" in ops) {
+            if ("sessions.rename" in ops && !isArchived) DropdownMenuItem(
+                text = { Text(L.rename()) },
+                onClick = { onMenuOpenChange(false); renameOpen = true },
+            )
+            if ("workspace.pinSession" in ops && !isArchived) {
                 DropdownMenuItem(
                     text = { Text(if (isPinned) L.unpinSession() else L.pinSession()) },
                     onClick = {
@@ -603,23 +536,62 @@ private fun SessionRow(
                 DropdownMenuItem(
                     text = { Text(if (isArchived) L.unarchiveSession() else L.archiveSession()) },
                     onClick = {
-                        if (isArchived) Pocket.unarchiveSession(s.sessionId) else Pocket.archiveSession(s.sessionId)
+                        if (isArchived) Pocket.unarchiveSession(s.sessionId)
+                        else Pocket.archiveSession(s.sessionId, stopActivity = false, onActivity = { details ->
+                            archiveActivity = details; archiveConfirm = true
+                        })
                         onMenuOpenChange(false)
                     },
                 )
             }
-            if ("sessions.fork" in ops) {
+            if ("sessions.fork" in ops && !isArchived) {
                 DropdownMenuItem(
-                    text = { Text("在新对话中分支") },
+                    text = { Text(navText("在新对话中分支", "Fork in new conversation")) },
                     onClick = {
-                        Pocket.openSession(s.sessionId)
-                        Pocket.forkSession(null)
+                        Pocket.forkSessionFrom(s.sessionId)
                         onMenuOpenChange(false)
                     },
                 )
+            }
+            if (!isArchived && !s.blank) {
+                onMoveUp?.let { move -> DropdownMenuItem(text = { Text(navText("上移", "Move up")) }, onClick = { move(); onMenuOpenChange(false) }) }
+                onMoveDown?.let { move -> DropdownMenuItem(text = { Text(navText("下移", "Move down")) }, onClick = { move(); onMenuOpenChange(false) }) }
             }
         }
     }
+    if (renameOpen) AlertDialog(
+        onDismissRequest = { if (!busy) renameOpen = false },
+        title = { Text(L.rename()) },
+        text = { OutlinedTextField(renameTitle, { renameTitle = it }, singleLine = true, enabled = !busy) },
+        confirmButton = { TextButton({
+            busy = true
+            Pocket.rename(s.sessionId, renameTitle.trim()) { ok -> busy = false; if (ok) renameOpen = false }
+        }, enabled = renameTitle.isNotBlank() && !busy) { Text(if (busy) navText("保存中…", "Saving…") else L.save()) } },
+        dismissButton = { TextButton({ renameOpen = false }, enabled = !busy) { Text(L.cancel()) } },
+    )
+    if (archiveConfirm) AlertDialog(
+        onDismissRequest = { if (!busy) archiveConfirm = false },
+        title = { Text(navText("停止工作并归档？", "Stop work and archive?")) },
+        text = { Column {
+            Text(navText("归档将停止以下工作；恢复会话不会自动重启工作。", "Archiving stops the following work. Restoring the session will not restart it."))
+            Text(archiveActivityDescription(archiveActivity), modifier = Modifier.padding(top = 12.dp))
+        } },
+        confirmButton = { TextButton({
+            busy = true
+            Pocket.archiveSession(s.sessionId, stopActivity = true, onResult = { ok -> busy = false; if (ok) archiveConfirm = false })
+        }, enabled = !busy) { Text(L.archiveSession()) } },
+        dismissButton = { TextButton({ archiveConfirm = false }, enabled = !busy) { Text(L.cancel()) } },
+    )
+    if (restoreConfirm) AlertDialog(
+        onDismissRequest = { if (!busy) restoreConfirm = false },
+        title = { Text(L.archived()) },
+        text = { Text(navText("已归档会话需先恢复才能打开。", "Restore this archived session before opening it.")) },
+        confirmButton = { TextButton({
+            busy = true
+            Pocket.unarchiveSession(s.sessionId) { ok -> busy = false; if (ok) { restoreConfirm = false; onPick() } }
+        }, enabled = !busy) { Text(L.unarchiveSession()) } },
+        dismissButton = { TextButton({ restoreConfirm = false }, enabled = !busy) { Text(L.cancel()) } },
+    )
 }
 
 private val RoundedCornerShapeEnd = androidx.compose.foundation.shape.RoundedCornerShape(topEnd = 20.dp, bottomEnd = 20.dp)
@@ -676,7 +648,7 @@ fun ConnectionsScreen(
     val status by Pocket.status.collectAsState()
     val active by Pocket.active.collectAsState()
     val ctx = LocalContext.current
-    val en = remember { runCatching { Pocket.prefs.language == AppLanguage.En }.getOrDefault(false) }
+    val en = Pocket.prefs.language == AppLanguage.En
     var pairing by remember { mutableStateOf<PairingLink?>(null) }
     var addressHintTab by remember { mutableStateOf(PeerTransport.Lan) }
     var pairPrefName by remember { mutableStateOf("") }
@@ -880,7 +852,7 @@ fun ConnectionsScreen(
 @Composable
 private fun ConnHeader(title: String, onBack: (() -> Unit)?, onOverflow: () -> Unit) {
     Row(Modifier.fillMaxWidth().height(52.dp).padding(horizontal = 6.dp), verticalAlignment = Alignment.CenterVertically) {
-        if (onBack != null) IconButton(onBack) { Icon(D.chevronLeft, null, tint = Conn.Fg) } else Spacer(Modifier.width(16.dp))
+        if (onBack != null) IconButton(onBack) { Icon(D.chevronLeft, navText("返回", "Back"), tint = Conn.Fg) } else Spacer(Modifier.width(16.dp))
         Text(title, fontSize = 18.sp, fontWeight = FontWeight.SemiBold, color = Conn.Fg, modifier = Modifier.weight(1f))
         IconButton(onOverflow) { Icon(D.ellipsis, L.moreActions(), tint = Conn.FgDim, modifier = Modifier.size(18.dp)) }
     }
@@ -1171,7 +1143,7 @@ fun PairSheet(
                 code,
                 { v -> code = v.filter(Char::isDigit).take(6); err = null },
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword),
-                modifier = Modifier.focusRequester(focus),
+                modifier = Modifier.focusRequester(focus).semantics { contentDescription = navText("六位配对码", "Six-digit pairing code") },
                 cursorBrush = SolidColor(Color.Transparent),
                 textStyle = TextStyle(color = Color.Transparent),
                 decorationBox = {
@@ -1220,7 +1192,7 @@ fun PairSheet(
                     }
                 }
             },
-            Modifier.padding(horizontal = 22.dp, vertical = 14.dp).fillMaxWidth().height(40.dp),
+            Modifier.padding(horizontal = 22.dp, vertical = 14.dp).fillMaxWidth().height(48.dp),
             enabled = canSubmit,
             shape = RoundedCornerShape(8.dp),
             colors = ConnPrimaryColors(),
@@ -1270,7 +1242,7 @@ private fun ConnField(label: String, v: String, hint: String, mono: Boolean = fa
                 singleLine = true,
                 textStyle = if (mono) Conn.Mono.copy(fontSize = 14.sp, color = Conn.Fg) else TextStyle.Default.copy(fontSize = 14.sp, color = Conn.Fg),
                 cursorBrush = SolidColor(Conn.Accent),
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier.fillMaxWidth().semantics { contentDescription = label },
             )
         }
     }
@@ -1297,50 +1269,31 @@ fun SettingsScreen(
     onModels: () -> Unit = {},
     onPlugins: () -> Unit = {},
     onSchedule: () -> Unit = {},
-    onCredentials: () -> Unit = {},
 ) {
     val profile = Pocket.activeProfile
     val ops by Pocket.ops.collectAsState()
     var notify by remember { mutableStateOf(Pocket.prefs.approvalNotify) }
-    var sheet by remember { mutableStateOf(false) }
+    var presets by remember { mutableStateOf(false) }
     var diagnostics by remember { mutableStateOf(false) }
-    Column(Modifier.fillMaxSize().background(T.Bg).systemBarsPadding().verticalScroll(rememberScrollState())) {
-        Header(L.settings(), onBack)
-        Card {
-            Row2(L.generalNav(), icon = D.settings, onClick = onGeneral)
-            if ("models.providers" in ops) {
-                Row2(L.modelsNav(), icon = D.dataMedium, onClick = onModels)
-            }
-            if ("plugins.list" in ops) {
-                Row2(L.pluginsNav(), icon = D.personalization, onClick = onPlugins)
-            }
-            if ("schedule.catalog" in ops) {
-                Row2(L.scheduleNav(), icon = D.clock, onClick = onSchedule)
-            }
-            if ("credentials.list" in ops) {
-                Row2(L.credentialsNav(), icon = D.shield, onClick = onCredentials)
-            }
-            Row2("Agent 预设", icon = D.agentPreset, value = "标准模式", divider = false, onClick = { sheet = true })
+    if (presets) { AgentPresetSettingsScreen { presets = false }; return }
+    SettingsScaffold(L.settings(), onBack) {
+        SettingsCard {
+            SettingsNavRow(L.generalNav(), D.settings, onClick = onGeneral)
+            if ("models.providers" in ops) SettingsNavRow(L.modelsNav(), D.dataMedium, onClick = onModels)
+            if ("plugins.list" in ops) SettingsNavRow(st("内置插件", "Built-in plugins"), D.personalization, onClick = onPlugins)
+            if ("schedule.catalog" in ops) SettingsNavRow(L.scheduleNav(), D.clock, onClick = onSchedule)
+            SettingsNavRow(st("Agent 预设", "Agent presets"), D.agentPreset, divider = false, onClick = { presets = true })
         }
-        Text("dsh-android", fontSize = 13.sp, color = T.Text3, modifier = Modifier.padding(start = 22.dp, top = 12.dp, bottom = 2.dp))
+        Text(st("移动端", "Mobile"), fontSize = 13.sp, color = T.Text3, modifier = Modifier.padding(start = 22.dp, top = 12.dp, bottom = 2.dp))
         Card {
-            Row2("连接", icon = D.rightUp, value = profile?.name ?: "未连接", onClick = onConnections)
+            Row2(st("连接", "Connections"), icon = D.rightUp, value = profile?.name ?: st("未连接", "Disconnected"), onClick = onConnections)
             Row2(L.diagnostics(), icon = D.inspect, onClick = { diagnostics = true })
-            Row2("审批通知", divider = false, trailing = {
-                Switch(
-                    notify,
-                    { notify = it; Pocket.prefs.approvalNotify = it },
-                    colors = SwitchDefaults.colors(
-                        checkedTrackColor = T.PrimaryButton,
-                        checkedThumbColor = T.OnPrimary,
-                    ),
-                )
+            Row2(st("审批通知", "Approval notifications"), divider = false, trailing = {
+                Switch(notify, { notify = it; Pocket.prefs.approvalNotify = it }, colors = SwitchDefaults.colors(checkedTrackColor = T.PrimaryButton, checkedThumbColor = T.OnPrimary))
             })
         }
-        Text("当前版本：${BuildConfig.VERSION_NAME}${profile?.let { " · ${it.name}" } ?: ""}", fontSize = 12.sp, color = T.Caption,
-            textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth().padding(16.dp))
+        Text(st("当前版本：", "Version: ") + BuildConfig.VERSION_NAME, fontSize = 12.sp, color = T.Caption, textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth().padding(16.dp))
     }
-    if (sheet) PresetSheet("standard", editable = false, onDismiss = { sheet = false }) {}
     if (diagnostics) DiagnosticsSheet(onDismiss = { diagnostics = false })
 }
 
@@ -1409,6 +1362,10 @@ fun GeneralSettingsScreen(onBack: () -> Unit) {
     var lang by remember { mutableStateOf(Pocket.prefs.language) }
     var appearance by remember { mutableStateOf(Pocket.prefs.appearance) }
     var fontSize by remember { mutableIntStateOf(Pocket.prefs.fontSize) }
+    var codeFontSize by remember { mutableIntStateOf(Pocket.prefs.codeFontSize) }
+    var terminalFontSize by remember { mutableIntStateOf(Pocket.prefs.terminalFontSize) }
+    var codeWork by remember { mutableStateOf(Pocket.prefs.showCodeWorkView) }
+    var codeWrap by remember { mutableStateOf(Pocket.prefs.codeWordWrap) }
     var transcript by remember { mutableStateOf(Pocket.prefs.transcriptView) }
     var collapse by remember { mutableStateOf(Pocket.prefs.collapseTiming) }
     var perf by remember { mutableStateOf(Pocket.prefs.performanceUsage) }
@@ -1422,46 +1379,42 @@ fun GeneralSettingsScreen(onBack: () -> Unit) {
     val permissionOnline = connections[activeHost] == Dot.Online
     LaunchedEffect(sheet) { if (sheet == "perm") Pocket.reloadPermissionCatalog() }
     LaunchedEffect(permissionDirectory, permissionOnline, activeHost) {
-        if (sheet == "permRisk" && (!permissionOnline ||
-                permissionDirectory?.allowsDefault("danger-full-access") != true)) sheet = null
+        if (sheet == "permRisk" && (!permissionOnline || permissionDirectory?.allowsDefault("danger-full-access") != true)) sheet = null
     }
-    Column(Modifier.fillMaxSize().background(T.Bg).systemBarsPadding().verticalScroll(rememberScrollState())) {
-        Header("通用设置", onBack)
-        Card {
-            Row2("权限", "选择新会话的默认权限模式", value = permissionLabel(perm, permissionDirectory?.find(perm)), onClick = { sheet = "perm" }, trailing = { DownArrow() })
-            Row2(L.language(), value = lang.label, onClick = { sheet = "lang" }, trailing = { DownArrow() })
-            Row2(
-                L.appearance(),
-                value = when (appearance) {
-                    Appearance.Light -> L.light()
-                    Appearance.Dark -> L.dark()
-                    Appearance.System -> L.followSystem()
-                },
-                onClick = { sheet = "appearance" },
-                trailing = { DownArrow() },
-            )
-            Row2(
-                L.layout(),
-                "宽屏（≥${WideLayoutMinDp}dp）时侧栏常显",
-                value = when (layout) {
-                    LayoutMode.Auto -> L.layoutAuto()
-                    LayoutMode.Phone -> L.layoutPhone()
-                    LayoutMode.Desktop -> L.layoutDesktop()
-                },
-                onClick = { sheet = "layout" },
-                trailing = { DownArrow() },
-            )
-            Row2("字号大小", "仅影响会话内容的字号", value = "$fontSize px", onClick = { sheet = "font" }, divider = false, trailing = { DownArrow() })
+    SettingsScaffold(st("通用设置", "General settings"), onBack) {
+        SettingsCard {
+            LabeledField(L.appearance()) { AppearanceCards(appearance) { appearance = it; Pocket.prefs.appearance = it } }
+            SettingsNavRow(L.language(), value = lang.label, onClick = { sheet = "lang" }, divider = false)
+        }
+        SettingsCard {
+            SettingsFontRow(st("字号大小", "Font size"), st("仅影响会话内容的字号", "Only affects conversation content"), fontSize, 10..22) { fontSize = it; Pocket.prefs.fontSize = it }
+            SettingsFontRow(st("代码字号", "Code font size"), st("用于代码块、行内代码与工具输出", "Used for code blocks, inline code, and tool output"), codeFontSize, 10..16) { codeFontSize = it; Pocket.prefs.codeFontSize = it }
+            SettingsFontRow(st("终端字号", "Terminal font size"), st("用于侧栏终端", "Used for the sidebar terminal"), terminalFontSize, 10..20) { terminalFontSize = it; Pocket.prefs.terminalFontSize = it }
         }
         Card {
-            Row2("工作步骤展示", "选择希望看到多少工具调用细节", value = transcript.label, onClick = { sheet = "transcript" }, trailing = { DownArrow() })
-            Row2("工作步骤收起时机", "选择何时自动收起工作步骤", value = collapse.label, onClick = { sheet = "collapse" }, divider = false, trailing = { DownArrow() })
+            Row2(st("权限", "Permissions"), st("选择新会话的默认权限模式", "Default permission mode for new conversations"), value = permissionLabel(perm, permissionDirectory?.find(perm)), onClick = { sheet = "perm" }, trailing = { DownArrow() })
+            Row2(st("显示代码工作视图", "Show code work views"), st("显示轨迹、本轮代码差异及完整 Agent 预设", "Show trajectory, turn code changes, and the full Agent preset picker"), divider = false, trailing = {
+                Switch(codeWork, { codeWork = it; Pocket.prefs.showCodeWorkView = it })
+            })
         }
         Card {
-            Row2("繁忙时的发送行为", "智能体运行时发送按钮的行为", value = busy.label, onClick = { sheet = "busy" }, trailing = { DownArrow() })
-            Row2("性能与用量", "选择性能与用量信息展示的详细程度", value = perf.label, onClick = { sheet = "perf" }, divider = false, trailing = { DownArrow() })
+            Row2(st("工作步骤展示", "Work step detail"), st("选择希望看到多少工具调用细节", "Choose how much tool-call detail to show"), value = transcriptText(transcript), onClick = { sheet = "transcript" }, trailing = { DownArrow() })
+            Row2(st("工作步骤收起时机", "Collapse work steps"), st("选择何时自动收起工作步骤", "Choose when work steps collapse automatically"), value = collapseText(collapse), onClick = { sheet = "collapse" }, divider = false, trailing = { DownArrow() })
         }
-        Text("当前版本：${BuildConfig.VERSION_NAME}", fontSize = 12.sp, color = T.Caption, textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth().padding(16.dp))
+        Card {
+            Row2(st("繁忙时的发送行为", "Send while busy"), st("智能体运行时发送按钮的行为", "Send button behavior while the Agent is running"), value = if (busy == BusySend.Queue) L.queueSend() else L.steerSend(), onClick = { sheet = "busy" }, trailing = { DownArrow() })
+            Row2(st("性能与用量", "Performance and usage"), st("选择用量信息展示的详细程度", "Choose usage detail level"), value = if (perf == PerformanceUsage.Compact) st("简洁", "Compact") else st("详细", "Detailed"), onClick = { sheet = "perf" }, divider = false, trailing = { DownArrow() })
+        }
+        Text(st("移动端显示", "Mobile display"), fontSize = 13.sp, color = T.Text3, modifier = Modifier.padding(start = 22.dp, top = 12.dp))
+        Card {
+            Row2(L.layout(), st("宽屏（≥${WideLayoutMinDp}dp）时侧栏常显", "Keep the sidebar visible on screens ≥${WideLayoutMinDp}dp"), value = when (layout) {
+                LayoutMode.Auto -> L.layoutAuto(); LayoutMode.Phone -> L.layoutPhone(); LayoutMode.Desktop -> L.layoutDesktop()
+            }, onClick = { sheet = "layout" }, trailing = { DownArrow() })
+            Row2(st("代码自动换行", "Wrap code"), st("适用于会话代码与文件代码预览，不改变文件内容", "Wrap conversation code and file previews without changing file contents"), divider = false, trailing = {
+                Switch(codeWrap, { codeWrap = it; Pocket.prefs.codeWordWrap = it })
+            })
+        }
+        Text(st("显示偏好仅保存在本设备，不改变主机桌面端外观。", "Display preferences apply only to this device, not the Host desktop."), fontSize = 12.sp, color = T.Caption, modifier = Modifier.padding(22.dp))
     }
     when (sheet) {
         "perm" -> PermissionPickerSheet(
@@ -1471,21 +1424,16 @@ fun GeneralSettingsScreen(onBack: () -> Unit) {
             onPick = { value ->
                 if (value == "danger-full-access") sheet = "permRisk"
                 else if (Pocket.permissionCatalog.value?.allowsDefault(value) == true) {
-                    perm = value
-                    Pocket.prefs.defaultPermission = value
-                    sheet = null
+                    perm = value; Pocket.prefs.defaultPermission = value; sheet = null
                 }
             },
         )
         "permRisk" -> PermissionRiskSheet(
             preset = "danger-full-access", onDismiss = { sheet = null }, forDefaults = true,
-            enabled = permissionOnline && !permissionLoading &&
-                permissionDirectory?.allowsDefault("danger-full-access") == true,
+            enabled = permissionOnline && !permissionLoading && permissionDirectory?.allowsDefault("danger-full-access") == true,
             onConfirm = {
                 if (Pocket.permissionCatalog.value?.allowsDefault("danger-full-access") == true) {
-                    perm = "danger-full-access"
-                    Pocket.prefs.defaultPermission = perm
-                    sheet = null
+                    perm = "danger-full-access"; Pocket.prefs.defaultPermission = perm; sheet = null
                 }
             },
         )
@@ -1493,46 +1441,28 @@ fun GeneralSettingsScreen(onBack: () -> Unit) {
             SheetTitle(L.language())
             AppLanguage.entries.forEach { o -> OptionRow(o.label, selected = lang == o) { lang = o; Pocket.prefs.language = o; sheet = null } }
         }
-        "appearance" -> PocketSheet({ sheet = null }) {
-            SheetTitle(L.appearance())
-            OptionRow(L.light(), selected = appearance == Appearance.Light) { appearance = Appearance.Light; Pocket.prefs.appearance = appearance; sheet = null }
-            OptionRow(L.dark(), selected = appearance == Appearance.Dark) { appearance = Appearance.Dark; Pocket.prefs.appearance = appearance; sheet = null }
-            OptionRow(L.followSystem(), selected = appearance == Appearance.System) { appearance = Appearance.System; Pocket.prefs.appearance = appearance; sheet = null }
-        }
         "layout" -> PocketSheet({ sheet = null }) {
             SheetTitle(L.layout())
-            OptionRow(L.layoutAuto(), "跟随屏幕宽度", selected = layout == LayoutMode.Auto) {
-                layout = LayoutMode.Auto; Pocket.prefs.layoutMode = layout; sheet = null
-            }
-            OptionRow(L.layoutPhone(), "始终抽屉侧栏", selected = layout == LayoutMode.Phone) {
-                layout = LayoutMode.Phone; Pocket.prefs.layoutMode = layout; sheet = null
-            }
-            OptionRow(L.layoutDesktop(), "始终双栏侧栏", selected = layout == LayoutMode.Desktop) {
-                layout = LayoutMode.Desktop; Pocket.prefs.layoutMode = layout; sheet = null
-            }
-        }
-        "font" -> PocketSheet({ sheet = null }) {
-            SheetTitle("字号大小")
-            listOf(12, 14, 16, 18, 20).forEach { n ->
-                OptionRow("$n px", selected = fontSize == n) { fontSize = n; Pocket.prefs.fontSize = n; sheet = null }
-            }
+            OptionRow(L.layoutAuto(), st("跟随屏幕宽度", "Follow screen width"), selected = layout == LayoutMode.Auto) { layout = LayoutMode.Auto; Pocket.prefs.layoutMode = layout; sheet = null }
+            OptionRow(L.layoutPhone(), st("始终抽屉侧栏", "Always use a drawer"), selected = layout == LayoutMode.Phone) { layout = LayoutMode.Phone; Pocket.prefs.layoutMode = layout; sheet = null }
+            OptionRow(L.layoutDesktop(), st("始终双栏侧栏", "Always use two panes"), selected = layout == LayoutMode.Desktop) { layout = LayoutMode.Desktop; Pocket.prefs.layoutMode = layout; sheet = null }
         }
         "transcript" -> PocketSheet({ sheet = null }) {
-            SheetTitle("工作步骤展示")
-            TranscriptView.entries.forEach { o -> OptionRow(o.label, selected = transcript == o) { transcript = o; Pocket.prefs.transcriptView = o; sheet = null } }
+            SheetTitle(st("工作步骤展示", "Work step detail"))
+            TranscriptView.entries.forEach { o -> OptionRow(transcriptText(o), selected = transcript == o) { transcript = o; Pocket.prefs.transcriptView = o; sheet = null } }
         }
         "collapse" -> PocketSheet({ sheet = null }) {
-            SheetTitle("工作步骤收起时机")
-            CollapseTiming.entries.forEach { o -> OptionRow(o.label, selected = collapse == o) { collapse = o; Pocket.prefs.collapseTiming = o; sheet = null } }
+            SheetTitle(st("工作步骤收起时机", "Collapse work steps"))
+            CollapseTiming.entries.forEach { o -> OptionRow(collapseText(o), selected = collapse == o) { collapse = o; Pocket.prefs.collapseTiming = o; sheet = null } }
         }
         "busy" -> PocketSheet({ sheet = null }) {
-            SheetTitle("繁忙时的发送行为")
-            OptionRow(L.queueSend(), "本轮结束后再发送", selected = busy == BusySend.Queue) { busy = BusySend.Queue; Pocket.prefs.busySend = busy; sheet = null }
-            OptionRow(L.steerSend(), "插入当前轮次，引导智能体", selected = busy == BusySend.Steer) { busy = BusySend.Steer; Pocket.prefs.busySend = busy; sheet = null }
+            SheetTitle(st("繁忙时的发送行为", "Send while busy"))
+            OptionRow(L.queueSend(), st("本轮结束后再发送", "Send after the current turn"), selected = busy == BusySend.Queue) { busy = BusySend.Queue; Pocket.prefs.busySend = busy; sheet = null }
+            OptionRow(L.steerSend(), st("插入当前轮次，引导智能体", "Guide the Agent during the current turn"), selected = busy == BusySend.Steer) { busy = BusySend.Steer; Pocket.prefs.busySend = busy; sheet = null }
         }
         "perf" -> PocketSheet({ sheet = null }) {
-            SheetTitle("性能与用量")
-            PerformanceUsage.entries.forEach { o -> OptionRow(o.label, selected = perf == o) { perf = o; Pocket.prefs.performanceUsage = o; sheet = null } }
+            SheetTitle(st("性能与用量", "Performance and usage"))
+            PerformanceUsage.entries.forEach { o -> OptionRow(if (o == PerformanceUsage.Compact) st("简洁", "Compact") else st("详细", "Detailed"), selected = perf == o) { perf = o; Pocket.prefs.performanceUsage = o; sheet = null } }
         }
     }
 }

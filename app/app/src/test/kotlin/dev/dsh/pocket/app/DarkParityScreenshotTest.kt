@@ -39,7 +39,7 @@ class DarkParityScreenshotTest {
         Pocket.profiles.value = listOf(p, Profile("p2", "书房 NAS", host = "192.168.1.20", port = 7690))
         Pocket.active.value = "p1"
         Pocket.status.value = mapOf("p1" to Dot.Online, "p2" to Dot.Offline)
-        Pocket.ops.value = setOf("models.providers", "plugins.list", "schedule.catalog", "credentials.list")
+        Pocket.ops.value = setOf("models.providers", "plugins.list", "schedule.catalog")
     }
 
     @Test fun dark_connections() = show("05-connections-dark") {
@@ -63,6 +63,6 @@ class DarkParityScreenshotTest {
     }
 
     @Test fun dark_settings() = show("08-settings-dark") {
-        SettingsScreen({}, {}, {}, {}, {}, {}, {})
+        SettingsScreen({}, {}, {}, {}, {}, {})
     }
 }

@@ -5,6 +5,21 @@ import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 
 class AnsiTest {
+    @Test fun terminalDefaultColorsFollowThemeWithoutOverwritingAnsiColors() {
+        val lightInk = androidx.compose.ui.graphics.Color.Black
+        val lightBackground = androidx.compose.ui.graphics.Color.White
+        assertEquals(lightInk, TermCell().fgColor(lightInk))
+        assertEquals(lightBackground, TermCell().bgColor(lightBackground))
+        assertEquals(TokyoNight.Ansi[1], TermCell(fg = 1).fgColor(lightInk))
+    }
+
+    @Test fun terminalImeKeepsBackspaceAndNormalizesEnter() {
+        assertEquals("\u007f", terminalCommittedInput(""))
+        assertEquals("", terminalCommittedInput("\u200B"))
+        assertEquals("pwd\r", terminalCommittedInput("\u200Bpwd\n"))
+        assertEquals("中文", terminalCommittedInput("\u200B中文"))
+    }
+
     @Test fun sgrColorsAndReset() {
         val t = AnsiTerminal(20, 3)
         t.write("\u001B[32mhi\u001B[0m!")

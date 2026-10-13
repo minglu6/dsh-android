@@ -7,6 +7,8 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.receiveAsFlow
+import kotlinx.coroutines.flow.take
+import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceTimeBy
@@ -45,6 +47,10 @@ class PocketClientTest {
 
         fun reply(request: JsonObject, result: JsonElement) {
             frames.trySend(jsonOf("id" to request["id"], "ok" to true, "result" to result).toString()).getOrThrow()
+        }
+
+        fun push(frame: JsonObject) {
+            frames.trySend(frame.toString()).getOrThrow()
         }
 
         fun reject(request: JsonObject, code: String, message: String) {
@@ -99,6 +105,26 @@ class PocketClientTest {
         runCurrent()
         assertEquals(expected, next.await())
         assertEquals(0, pendingCount(client))
+    }
+
+    @Test fun jobOutputBeforeSubscribeReplyIsRetainedAndCollectorCancellationUnfollows() = runTest {
+        withClient { client, transport ->
+            transport.onSend = {
+                val request = transport.requests.last()
+                when (request["op"].str()) {
+                    "jobs.follow" -> {
+                        transport.push(jsonOf("ev" to "job", "subId" to "j1", "frame" to jsonOf("type" to "opened", "from" to 4)))
+                        transport.reply(request, jsonOf("subId" to "j1"))
+                    }
+                    "unfollow" -> transport.reply(request, jsonOf("stopped" to true))
+                }
+            }
+            val frames = async { client.followJob("s1", "bash-1").take(1).toList() }
+            runCurrent()
+            assertEquals("opened", frames.await().single()["type"].str())
+            assertEquals("j1", transport.requests.last()["args"]["subId"].str())
+            assertEquals("unfollow", transport.requests.last()["op"].str())
+        }
     }
 
     @Test fun ownDefaultDeadlineIsRequestErrorAndLateReplyCannotCompleteNextRequest() = runTest {

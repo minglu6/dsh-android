@@ -11,6 +11,9 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.listSaver
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.snapshots.SnapshotStateMap
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -24,9 +27,14 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.disabled
+import androidx.compose.ui.semantics.stateDescription
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.TextRange
+import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import android.graphics.BitmapFactory
@@ -39,6 +47,8 @@ import dev.dsh.pocket.protocol.PromptFile
 import dev.dsh.pocket.protocol.PromptImage
 import dev.dsh.pocket.protocol.ToolStatus
 import dev.dsh.pocket.protocol.UserQuestion
+import dev.dsh.pocket.protocol.get
+import dev.dsh.pocket.protocol.str
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.JsonPrimitive
@@ -57,7 +67,7 @@ data class PendingAttach(
 
 enum class Sheet {
     None, Model, Permission, PermissionRisk, Preset, Plus, More, Panel, Team, Workspace, Goal, Feedback,
-    Files, Jobs, Terminal, Todo, Commands, Mentions, FeedbackCategory, FilePreview,
+    Files, Jobs, Terminal, Browser, SessionInspector, Todo, Commands, Mentions, FeedbackCategory, FilePreview,
 }
 
 /** Themed handshake hint — warn tint matching approval cards. */
@@ -103,21 +113,33 @@ fun ChatRoot(onMenu: () -> Unit, showMenuButton: Boolean = true) {
     val permissionLoading by Pocket.permissionCatalogLoading.collectAsState()
     val permissionError by Pocket.permissionCatalogError.collectAsState()
     val permissionChanging by Pocket.permissionChanging.collectAsState()
-    var sheet by remember(active, chat?.sessionId) { mutableStateOf(Sheet.None) }
+    var sheet by remember(active) { mutableStateOf(Sheet.None) }
+    var previousSession by remember(active) { mutableStateOf(chat?.sessionId) }
+    var sidebarDraft by remember(active) { mutableStateOf<TextFieldValue?>(null) }
     var tool by remember { mutableStateOf<Item.Tool?>(null) }
     var riskPermission by remember(active, chat?.sessionId) { mutableStateOf<String?>(null) }
     var permissionPickerAttempt by remember { mutableIntStateOf(0) }
     var modelDirect by remember { mutableStateOf(false) }
     // New-chat drafts (applied when the session gets created).
-    var draftPreset by remember { mutableStateOf("standard") }
+    var draftPreset by remember(active) { mutableStateOf("") }
+    val presetRoster by Pocket.presetRoster.collectAsState()
+    LaunchedEffect(presetRoster, active) {
+        if (draftPreset.isEmpty()) draftPreset = presetRoster.firstOrNull { it["isDefault"].toString() == "true" }?.get("id").str().orEmpty()
+    }
     var draftPerm by remember(active, chat?.sessionId) { mutableStateOf(Pocket.prefs.defaultPermission) }
-    var draftModel by remember { mutableStateOf<ModelChoice?>(null) }
+    var draftModel by remember(active, chat?.sessionId) { mutableStateOf<ModelChoice?>(null) }
     var draftCwd by remember { mutableStateOf<String?>(null) }
     var pendingImages by remember { mutableStateOf<List<PromptImage>>(emptyList()) }
     var pendingFiles by remember { mutableStateOf<List<PendingAttach>>(emptyList()) }
     var feedbackTarget by remember { mutableStateOf<String?>(null) }
+    var feedbackRating by remember { mutableStateOf("negative") }
+    var hiddenQuestion by remember(active, chat?.sessionId) { mutableStateOf<String?>(null) }
+    var composerDraft by rememberSaveable(active, chat?.sessionId, stateSaver = TextFieldValue.Saver) { mutableStateOf(TextFieldValue("")) }
     var previewPath by remember { mutableStateOf<String?>(null) }
     val questions by Pocket.userQuestions.collectAsState()
+    val questionDrafts = rememberSaveable(active, chat?.sessionId, saver = questionDraftSaver) {
+        mutableMapOf<String, SnapshotStateMap<String, QuestionDraft>>()
+    }
     val feedbackMap by Pocket.feedback.collectAsState()
     val ctx = androidx.compose.ui.platform.LocalContext.current
     val scope = androidx.compose.runtime.rememberCoroutineScope()
@@ -179,6 +201,38 @@ fun ChatRoot(onMenu: () -> Unit, showMenuButton: Boolean = true) {
     }
 
     val sid = chat?.sessionId
+    LaunchedEffect(sid) {
+        if (sid != previousSession) {
+            if (previousSession == null && sidebarDraft != null) {
+                composerDraft = sidebarDraft!!
+            } else {
+                sheet = Sheet.None
+            }
+            sidebarDraft = null
+            previousSession = sid
+        }
+    }
+    val sessionPanel = sheet == Sheet.Files || sheet == Sheet.Terminal || sheet == Sheet.SessionInspector
+    LaunchedEffect(active, sheet) {
+        if (sessionPanel && Pocket.chat.value == null) {
+            sidebarDraft = composerDraft
+            try {
+                Pocket.prepareSidebarSession(
+                    cwd = draftCwd ?: sessions.firstNotNullOfOrNull { it.cwd } ?: Pocket.workspaces.value.firstOrNull()?.path,
+                    preset = draftPreset.takeIf { it.isNotBlank() },
+                    pendingPermission = draftPerm.takeIf { "permissions.set" in ops && permissionDirectory?.find(it) != null },
+                    pendingModel = draftModel,
+                )
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                sidebarDraft = null
+                throw e
+            } catch (e: Exception) {
+                sidebarDraft = null
+                sheet = Sheet.None
+                Pocket.errors.tryEmit(e.message ?: e.toString())
+            }
+        }
+    }
     val defaultModel = catalog?.let { c -> c.find(c.defaultProvider, c.defaultModel) }
         ?.let { ModelChoice(it.provider, it.id, it.name, catalog?.defaultEffort ?: it.defaultEffort) }
     val curModel = (if (sid != null) models[sid] else draftModel) ?: defaultModel
@@ -186,8 +240,8 @@ fun ChatRoot(onMenu: () -> Unit, showMenuButton: Boolean = true) {
     val currentPermissionLabel = permissionLabel(curPerm, permissionDirectory?.find(curPerm))
     val summary = sessions.firstOrNull { it.sessionId == sid }
     val dot = status[active]
-    val workspaces = sessions.mapNotNull { it.cwd }.distinct()
-    val showPanel = "files.list" in ops || ("terminal.create" in ops && "terminal.follow" in ops)
+    val workspaceCatalog by Pocket.workspaces.collectAsState()
+    val workspaces = workspaceCatalog.map { it.path }
     val modelMenu: @Composable () -> Unit = {
         if (sheet == Sheet.Model) {
             ModelPicker(
@@ -246,20 +300,21 @@ fun ChatRoot(onMenu: () -> Unit, showMenuButton: Boolean = true) {
             summary?.title ?: chat?.title, sid != null,
             onMenu = if (showMenuButton) onMenu else null,
             onMore = { sheet = Sheet.More },
-            onPanel = if (showPanel) ({ sheet = Sheet.Panel }) else null,
-            onTeam = { sheet = Sheet.Team }, onPreset = { sheet = Sheet.Preset }, preset = "standard", onNew = { Pocket.closeChat() },
+            onPanel = { sheet = Sheet.Panel },
+            onTeam = { sheet = Sheet.Team }, onPreset = { sheet = Sheet.Preset }, preset = chat?.agentPreset.orEmpty(), onNew = { Pocket.closeChat() },
         )
         CompatibilityBanner(compatibility)
         if (chat == null) {
             Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) { Hero() }
             Row(Modifier.padding(horizontal = 16.dp, vertical = 6.dp), horizontalArrangement = Arrangement.spacedBy(14.dp)) {
-                Chip(D.folderOpen, (draftCwd ?: workspaces.firstOrNull())?.substringAfterLast('/') ?: "默认工作区") { sheet = Sheet.Workspace }
+                Chip(D.folderOpen, (draftCwd ?: workspaces.firstOrNull())?.substringAfterLast('/') ?: "选择工作区") { sheet = Sheet.Workspace }
                 Chip(D.agentPreset, presetLabel(draftPreset)) { sheet = Sheet.Preset }
             }
             Composer(
                 "描述你想要构建的内容, / 调用指令, @ 文件或对话", false, curPerm, curModel,
                 enabled = dot == Dot.Online && (curPerm.isEmpty() ||
                     (!permissionLoading && permissionDirectory?.find(curPerm) != null)),
+                draft = composerDraft, onDraftChange = { composerDraft = it },
                 pendingImages = pendingImages, pendingFiles = pendingFiles,
                 permissionName = currentPermissionLabel,
                 onPlus = { sheet = Sheet.Plus }, onPerm = { sheet = Sheet.Permission }, onModel = { modelDirect = false; sheet = Sheet.Model },
@@ -282,7 +337,7 @@ fun ChatRoot(onMenu: () -> Unit, showMenuButton: Boolean = true) {
                 onSlash = { sheet = Sheet.Commands },
                 onMention = { sheet = Sheet.Mentions },
                 onSend = { text ->
-                    Pocket.newSession(text, draftPreset, curPerm.takeIf { it.isNotEmpty() }, draftModel, draftCwd ?: workspaces.firstOrNull())
+                    Pocket.newSession(text, draftPreset.takeIf { it.isNotBlank() }, curPerm.takeIf { it.isNotEmpty() }, draftModel, draftCwd ?: workspaces.firstOrNull())
                     pendingImages = emptyList(); pendingFiles = emptyList()
                 },
                 onStop = {},
@@ -291,15 +346,10 @@ fun ChatRoot(onMenu: () -> Unit, showMenuButton: Boolean = true) {
         } else {
             val st = chat!!
             var tab by remember(st.sessionId) { mutableIntStateOf(0) }
+            LaunchedEffect(Pocket.prefs.showCodeWorkView) { if (!Pocket.prefs.showCodeWorkView) tab = 0 }
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                 Box(Modifier.weight(1f)) { Tabs(tab) { tab = it } }
-                if ("jobs.list" in ops) {
-                    TextButton(onClick = { sheet = Sheet.Jobs }, modifier = Modifier.padding(end = 8.dp)) {
-                        Icon(D.clock, null, modifier = Modifier.size(16.dp), tint = T.Text2)
-                        Spacer(Modifier.width(6.dp))
-                        Text("后台任务", color = T.Text2, fontSize = 12.sp)
-                    }
-                }
+                JobsAction(active, st.sessionId, dot == Dot.Online && "jobs.list" in ops) { sheet = Sheet.Jobs }
             }
             Box(Modifier.weight(1f).fillMaxWidth()) {
                 if (tab == 0) Transcript(
@@ -309,18 +359,24 @@ fun ChatRoot(onMenu: () -> Unit, showMenuButton: Boolean = true) {
                     onFork = { seq -> Pocket.forkSession(seq) },
                     feedback = feedbackMap,
                     onLike = { id ->
-                        val cur = feedbackMap[id]
-                        if (cur?.rating == "positive") Pocket.setMessageFeedback(id, null)
-                        else Pocket.setMessageFeedback(id, "positive")
+                        if (feedbackMap[id]?.rating == "positive") Pocket.setMessageFeedback(id, null)
+                        else { feedbackTarget = id; feedbackRating = "positive"; sheet = Sheet.FeedbackCategory }
                     },
                     onDislike = { id ->
-                        feedbackTarget = id
-                        sheet = Sheet.FeedbackCategory
+                        if (feedbackMap[id]?.rating == "negative") Pocket.setMessageFeedback(id, null)
+                        else { feedbackTarget = id; feedbackRating = "negative"; sheet = Sheet.FeedbackCategory }
                     },
                 ) else TrajectoryView(st)
             }
-            questions.firstOrNull { it.sessionId == null || it.sessionId == st.sessionId }?.let { UserQuestionCard(it) }
-            approvals.firstOrNull { it.sessionId == null || it.sessionId == st.sessionId }?.let { ApprovalCard(it) }
+            val question = questions.firstOrNull { it.sessionId == null || it.sessionId == st.sessionId }
+            val approval = approvals.firstOrNull { it.sessionId == null || it.sessionId == st.sessionId }
+            val questionVisible = question != null && question.questions.isNotEmpty() && hiddenQuestion != question.questionId
+            if (questionVisible) UserQuestionCard(question!!, questionDrafts.getOrPut(question.questionId) { mutableStateMapOf() },
+                onDismiss = { hiddenQuestion = question.questionId })
+            else if (approval != null) ApprovalCard(approval)
+            if (question != null && !questionVisible) TextButton({ hiddenQuestion = null }, Modifier.fillMaxWidth()) {
+                Text("问题等待回答 · 重新打开")
+            }
             if (st.todos.isNotEmpty()) {
                 Row(
                     Modifier.fillMaxWidth().clickable { sheet = Sheet.Todo }.padding(horizontal = 20.dp, vertical = 10.dp),
@@ -332,8 +388,11 @@ fun ChatRoot(onMenu: () -> Unit, showMenuButton: Boolean = true) {
                     Icon(D.chevronRight, null, tint = T.Text3, modifier = Modifier.padding(start = 8.dp).size(16.dp))
                 }
             }
+            GoalBar(st) { sheet = Sheet.Goal }
+            if (!questionVisible && approval == null) {
             Composer(
                 "发消息或创建任务, / 调用指令, @ 文件或对话", st.running, curPerm, curModel, enabled = dot == Dot.Online,
+                draft = composerDraft, onDraftChange = { composerDraft = it },
                 planMode = st.planMode,
                 pendingImages = pendingImages, pendingFiles = pendingFiles,
                 permissionName = currentPermissionLabel,
@@ -369,11 +428,23 @@ fun ChatRoot(onMenu: () -> Unit, showMenuButton: Boolean = true) {
                 onStop = { Pocket.cancel() },
             )
             ComposerStats(st.composerMetrics)
+            }
         }
     }
 
     tool?.let { ToolSheet(it) { tool = null } }
-    when (sheet) {
+    if (sessionPanel && sid == null) {
+        val title = when (sheet) {
+            Sheet.Files -> if (Pocket.prefs.language == AppLanguage.En) "Workspace files" else "工作区文件"
+            Sheet.Terminal -> if (Pocket.prefs.language == AppLanguage.En) "Terminal" else "终端"
+            else -> if (Pocket.prefs.language == AppLanguage.En) "Session data inspector" else "会话数据诊断"
+        }
+        RightPanelFrame(title, onDismiss = { sheet = Sheet.None }, onBack = { sheet = Sheet.Panel }) {
+            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                CircularProgressIndicator(color = T.Accent)
+            }
+        }
+    } else when (sheet) {
         Sheet.Model -> Unit // The composer owns the anchored menu.
         Sheet.Permission -> key(permissionPickerAttempt) {
             PermissionPickerSheet(
@@ -396,7 +467,7 @@ fun ChatRoot(onMenu: () -> Unit, showMenuButton: Boolean = true) {
                     permissionDirectory?.find(value) != null,
             )
         }
-        Sheet.Preset -> PresetSheet(if (sid == null) draftPreset else "standard", editable = sid == null, onDismiss = { sheet = Sheet.None }) { draftPreset = it }
+        Sheet.Preset -> PresetSheet(if (sid == null) draftPreset else chat?.agentPreset.orEmpty(), editable = sid == null, onDismiss = { sheet = Sheet.None }) { draftPreset = it }
         Sheet.Plus -> PlusSheet(
             onDismiss = { sheet = Sheet.None },
             onPerm = { sheet = Sheet.Permission },
@@ -410,20 +481,21 @@ fun ChatRoot(onMenu: () -> Unit, showMenuButton: Boolean = true) {
         )
         Sheet.More -> MoreSheet(chat, onDismiss = { sheet = Sheet.None }, onFeedback = { sheet = Sheet.Feedback }, onExport = { doExport() })
         Sheet.Panel -> PanelSheet(
-            hasSession = sid != null,
             onDismiss = { sheet = Sheet.None },
             onFiles = { sheet = Sheet.Files },
             onTerminal = { sheet = Sheet.Terminal },
+            onBrowser = { sheet = Sheet.Browser },
+            onInspector = { sheet = Sheet.SessionInspector },
         )
         Sheet.Team -> TeamSheet(onDismiss = { sheet = Sheet.None })
-        Sheet.Workspace -> WorkspaceSheet(workspaces, draftCwd ?: workspaces.firstOrNull(), onDismiss = { sheet = Sheet.None }) { draftCwd = it }
+        Sheet.Workspace -> WorkspaceSheet(draftCwd ?: workspaces.firstOrNull(), onDismiss = { sheet = Sheet.None }) { draftCwd = it }
         Sheet.Goal -> GoalSheet(onDismiss = { sheet = Sheet.None })
         Sheet.Feedback -> FeedbackSheet(onDismiss = { sheet = Sheet.None })
         Sheet.FeedbackCategory -> FeedbackCategorySheet(
             onDismiss = { sheet = Sheet.None; feedbackTarget = null },
-            onSubmit = { cat, note ->
-                feedbackTarget?.let { Pocket.setMessageFeedback(it, "negative", cat, note) }
-                sheet = Sheet.None; feedbackTarget = null
+            onSubmit = { cat, note, complete ->
+                val target = feedbackTarget
+                if (target == null) complete(false) else Pocket.setMessageFeedback(target, feedbackRating, cat, note, complete)
             },
         )
         Sheet.Commands -> CommandPopupSheet(
@@ -436,11 +508,19 @@ fun ChatRoot(onMenu: () -> Unit, showMenuButton: Boolean = true) {
             onPerm = { sheet = Sheet.Permission },
             onModel = { modelDirect = true; sheet = Sheet.Model },
             onExport = { doExport() },
+            initialQuery = composerTrigger(composerDraft.text, composerDraft.selection.end)?.query.orEmpty(),
         )
-        Sheet.Mentions -> MentionPopupSheet(onDismiss = { sheet = Sheet.None })
+        Sheet.Mentions -> MentionPopupSheet(onDismiss = { sheet = Sheet.None }, initialQuery = composerTrigger(composerDraft.text, composerDraft.selection.end)?.query.orEmpty())
         Sheet.Files -> sid?.let { FilesSheet(it, onDismiss = { sheet = Sheet.None }, onBack = { sheet = Sheet.Panel }) }
         Sheet.Jobs -> sid?.let { JobsSheet(it, onDismiss = { sheet = Sheet.None }) } ?: run { sheet = Sheet.None }
         Sheet.Terminal -> sid?.let { TerminalSheet(it, onDismiss = { sheet = Sheet.None }, onBack = { sheet = Sheet.Panel }) }
+        Sheet.Browser -> BrowserSheet(
+            sessionKey = "${active.orEmpty()}:${sid.orEmpty()}",
+            onDismiss = { sheet = Sheet.None }, onBack = { sheet = Sheet.Panel },
+        )
+        Sheet.SessionInspector -> sid?.let {
+            SessionInspectorSheet(it, onDismiss = { sheet = Sheet.None }, onBack = { sheet = Sheet.Panel })
+        }
         Sheet.Todo -> TodoSheet(chat?.todos.orEmpty(), onDismiss = { sheet = Sheet.None })
         Sheet.FilePreview -> {
             val p = previewPath
@@ -470,16 +550,16 @@ private fun TopBar(title: String?, inChat: Boolean, onMenu: (() -> Unit)?, onMor
                 GrayLink(D.agentPreset, presetLabel(preset), onPreset)
             }
         }
-        IconButton(onMore, Modifier.size(40.dp)) { Icon(D.ellipsis, "更多", tint = T.Ink) }
-        if (!inChat) IconButton(onNew, Modifier.size(40.dp)) { Icon(D.newChat, "新会话", tint = T.Ink) }
-        if (onPanel != null) IconButton(onPanel, Modifier.size(40.dp)) { Icon(D.panelRight, "右侧面板", tint = T.Text2, modifier = Modifier.size(15.dp)) }
+        IconButton(onMore, Modifier.size(48.dp)) { Icon(D.ellipsis, "更多", tint = T.Ink) }
+        if (!inChat) IconButton(onNew, Modifier.size(48.dp)) { Icon(D.newChat, "新会话", tint = T.Ink) }
+        if (onPanel != null) IconButton(onPanel, Modifier.size(48.dp)) { Icon(D.panelRight, "右侧面板", tint = T.Text2, modifier = Modifier.size(15.dp)) }
     }
     HorizontalDivider(color = T.Fill)
 }
 
 @Composable
 private fun GrayLink(icon: androidx.compose.ui.graphics.vector.ImageVector, text: String, onClick: () -> Unit) {
-    Box(Modifier.size(32.dp).clip(T.R8).clickable(onClick = onClick), contentAlignment = Alignment.Center) {
+    Box(Modifier.size(48.dp).clip(T.R8).clickable(onClick = onClick), contentAlignment = Alignment.Center) {
         Icon(icon, text, tint = T.Text3, modifier = Modifier.size(18.dp))
     }
 }
@@ -498,7 +578,7 @@ fun StatusDot(dot: Dot?, modifier: Modifier = Modifier) {
 @Composable
 private fun Tabs(sel: Int, onSel: (Int) -> Unit) {
     Row(Modifier.fillMaxWidth().padding(horizontal = 18.dp)) {
-        listOf("对话", "轨迹").forEachIndexed { i, t ->
+        (if (Pocket.prefs.showCodeWorkView) listOf("对话", "轨迹") else listOf("对话")).forEachIndexed { i, t ->
             Column(Modifier.padding(end = 26.dp).clickable { onSel(i) }, horizontalAlignment = Alignment.CenterHorizontally) {
                 Text(t, fontSize = 15.sp, color = if (i == sel) T.Accent else T.Text2, modifier = Modifier.padding(vertical = 10.dp))
                 Box(Modifier.height(2.dp).width(28.dp).background(if (i == sel) T.Accent else Color.Transparent))
@@ -541,7 +621,7 @@ fun EmptyState(icon: androidx.compose.ui.graphics.vector.ImageVector, title: Str
 }
 
 @Composable
-private fun Transcript(
+internal fun Transcript(
     st: ChatState,
     onTool: (Item.Tool) -> Unit,
     canFork: Boolean = false,
@@ -551,16 +631,21 @@ private fun Transcript(
     onDislike: (String) -> Unit = {},
 ) {
     val list = rememberLazyListState()
+    var followBottom by remember(st.sessionId) { mutableStateOf(true) }
+    val scrollScope = rememberCoroutineScope()
     // Prefs are SharedPreferences-backed; read each composition for mode switches.
     val livePolicy = presentationPolicyFor(Pocket.prefs.transcriptView, Pocket.prefs.collapseTiming)
-    val rows = remember(st.items, st.running, livePolicy) {
-        foldChatItems(st.items, livePolicy, st.running)
+    val rows = remember(st.items, st.turns, st.running, livePolicy) {
+        foldChatItems(st.items, livePolicy, st.running, turnRecords = st.turns)
     }
+    val closingAnswers = remember(rows) { rows.filterIsInstance<ChatRow.Answer>().mapNotNull { row -> row.item.turn?.let { it to row.key } }.toMap() }
     val n = rows.size
     val lastLen = (st.items.lastOrNull() as? Item.Text)?.text?.length ?: 0
     // Desktop: branch only on the last message of a completed turn.
     val branchKey = rows.lastOrNull { it is ChatRow.User || it is ChatRow.Answer }?.key
-    LaunchedEffect(n, lastLen, st.running) { if (n > 0 && !st.loadingOlder) list.animateScrollToItem((n - 1).coerceAtLeast(0)) }
+    LaunchedEffect(n, lastLen, st.running) {
+        if (followBottom && n > 0 && !st.loadingOlder) list.animateScrollToItem(n)
+    }
     // Scroll-to-top loads older history (no extra chrome — same LazyColumn).
     var historyArmed by remember(st.sessionId) { mutableStateOf(false) }
     LaunchedEffect(list.firstVisibleItemIndex, list.firstVisibleItemScrollOffset) {
@@ -574,13 +659,16 @@ private fun Transcript(
             Pocket.loadOlderHistory()
         }
     }
+    LaunchedEffect(list.isScrollInProgress) {
+        if (!list.isScrollInProgress) followBottom = !list.canScrollForward
+    }
     if (st.loaded && st.items.isEmpty() && !st.running) { EmptyState(D.chat, "开始对话", "发送第一条消息"); return }
     if (!st.loaded) { Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator(color = T.Accent, strokeWidth = 2.dp, modifier = Modifier.size(24.dp)) }; return }
+    Box(Modifier.fillMaxSize()) {
     LazyColumn(state = list, modifier = Modifier.fillMaxSize(), contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         items(rows, key = { it.key }) { row ->
             when (row) {
                 is ChatRow.User -> {
-                    val branchHere = canFork && row.key == branchKey
                     Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.End) {
                         if (row.item.imageRefs.isNotEmpty()) {
                             row.item.imageRefs.forEach { ref ->
@@ -604,9 +692,9 @@ private fun Transcript(
                             text = row.item.text,
                             timeMs = row.item.at,
                             clock = MessageClock.Start,
-                            branchEnabled = branchHere,
-                            branchUnavailable = canFork && !branchHere,
-                            onBranch = if (canFork) ({ onFork(row.item.seq) }) else null,
+                            branchEnabled = false,
+                            branchUnavailable = false,
+                            onBranch = null,
                         )
                     }
                 }
@@ -628,6 +716,12 @@ private fun Transcript(
                             onLike = mid?.let { { onLike(it) } },
                             onDislike = mid?.let { { onDislike(it) } },
                         )
+                        val turn = row.item.turn
+                        if (!row.item.live && turn != null && closingAnswers[turn] == row.key) {
+                            val boundary = st.turns.firstOrNull { it.turn == turn }
+                            val startSeq = boundary?.startSeq
+                            TurnUsageStats(turn, st.steps, startSeq != null && startSeq >= st.firstSeq && boundary?.endSeq != null)
+                        }
                     }
                 }
                 is ChatRow.Notice -> SelectableOutput {
@@ -637,10 +731,18 @@ private fun Transcript(
                 is ChatRow.Reasoning -> ReasoningRow(row.item)
                 is ChatRow.Process -> ProcessGroupRow(row, onTool)
                 is ChatRow.Deliverable -> DeliverableCard(row.item)
-                is ChatRow.Changes -> ChangesCard(row.item)
+                is ChatRow.Changes -> if (Pocket.prefs.showCodeWorkView) ChangesCard(row.item)
             }
         }
-        if (st.running) item(key = "status") { RunningLine(st.runStartedAt) }
+        if (st.running && st.items.none { it is Item.Reasoning && it.live }) {
+            item(key = "status") { RunningLine(st.runStartedAt) }
+        }
+        item(key = "bottom") { Spacer(Modifier.height(1.dp)) }
+    }
+        if (list.canScrollForward) FilledTonalIconButton(
+            onClick = { followBottom = true; scrollScope.launch { list.animateScrollToItem(list.layoutInfo.totalItemsCount - 1) } },
+            modifier = Modifier.align(Alignment.BottomEnd).padding(12.dp).size(48.dp),
+        ) { Icon(D.chevronDown, "回到底部") }
     }
 }
 
@@ -677,7 +779,7 @@ private fun MessageActions(
     Row(
         Modifier
             .padding(top = 4.dp)
-            .height(28.dp)
+            .height(48.dp)
             .fillMaxWidth(),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = if (clock == MessageClock.Start) Arrangement.End else Arrangement.Start,
@@ -685,11 +787,11 @@ private fun MessageActions(
         if (clock == MessageClock.Start && timeMs != null) {
             Text(
                 formatMessageClock(timeMs),
-                fontSize = 12.sp,
-                color = T.Caption,
+                fontSize = 13.sp,
+                color = T.Text3,
                 maxLines = 1,
                 softWrap = false,
-                modifier = Modifier.padding(end = 12.dp),
+                modifier = Modifier.padding(end = 20.dp).testTag("messageClock"),
             )
         }
         Row(
@@ -699,7 +801,7 @@ private fun MessageActions(
             ActionIconButton(
                 icon = if (copied) D.check else D.copy,
                 label = if (copied) L.copied() else L.copy(),
-                tint = T.Caption,
+                tint = T.Text3,
                 iconSize = iconDp,
                 enabled = !copied,
                 testTag = "messageCopy",
@@ -713,8 +815,8 @@ private fun MessageActions(
                 ActionIconButton(
                     icon = if (rating == "positive") D.likeFill else D.like,
                     label = likeLabel,
-                    tint = if (rating == "positive") T.Accent else T.Caption,
-                    iconSize = iconDp,
+                    tint = T.Text3,
+                    iconSize = 15.dp,
                     testTag = "messageLike",
                     onClick = onLike,
                 )
@@ -722,12 +824,11 @@ private fun MessageActions(
                 ActionIconButton(
                     icon = if (rating == "negative") D.dislikeFill else D.dislike,
                     label = dislikeLabel,
-                    tint = if (rating == "negative") T.Err else T.Caption,
-                    iconSize = iconDp,
+                    tint = T.Text3,
+                    iconSize = 15.dp,
                     testTag = "messageDislike",
-                ) {
-                    if (rating == "negative") Pocket.setMessageFeedback(messageId!!, null) else onDislike()
-                }
+                    onClick = onDislike,
+                )
             }
             if (onBranch != null) {
                 val tip = if (branchUnavailable) L.branchUnavailable() else L.branch()
@@ -735,7 +836,7 @@ private fun MessageActions(
                     icon = D.branch,
                     label = tip,
                     ariaLabel = L.branch(),
-                    tint = T.Caption,
+                    tint = T.Text3,
                     iconSize = iconDp,
                     enabled = branchEnabled,
                     alpha = if (branchUnavailable) 0.4f else 1f,
@@ -748,16 +849,16 @@ private fun MessageActions(
             Text(
                 formatMessageClock(timeMs),
                 fontSize = 12.sp,
-                color = T.Caption,
+                color = T.Text3,
                 maxLines = 1,
                 softWrap = false,
-                modifier = Modifier.padding(start = 8.dp),
+                modifier = Modifier.padding(start = 16.dp).testTag("messageClock"),
             )
         }
     }
 }
 
-/** 28dp hit target matching desktop `.action`; tooltip = long-press / contentDescription. */
+/** Keep Android's 48dp touch target while retaining the official icon sizes. */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun ActionIconButton(
@@ -780,10 +881,14 @@ private fun ActionIconButton(
     ) {
         Box(
             modifier
-                .size(28.dp)
+                .size(48.dp)
                 .clip(T.R8)
-                .then(if (enabled) Modifier.clickable(onClick = onClick) else Modifier)
-                .semantics { contentDescription = ariaLabel }
+                .then(if (enabled) Modifier.clickable(role = Role.Button, onClick = onClick) else Modifier)
+                .semantics {
+                    contentDescription = ariaLabel
+                    if (!enabled) disabled()
+                    if (ariaLabel != label) stateDescription = label
+                }
                 .then(if (testTag != null) Modifier.testTag(testTag) else Modifier),
             contentAlignment = Alignment.Center,
         ) {
@@ -793,59 +898,53 @@ private fun ActionIconButton(
 }
 
 @Composable
-private fun ProcessGroupRow(proc: ChatRow.Process, onTool: (Item.Tool) -> Unit) {
-    var open by remember(proc.key, proc.defaultOpen) { mutableStateOf(proc.defaultOpen) }
+internal fun ProcessGroupRow(proc: ChatRow.Process, onTool: (Item.Tool) -> Unit) {
+    var expanded by remember(proc.key, proc.defaultOpen) { mutableStateOf(proc.defaultOpen) }
+    val open = !proc.canCollapse || expanded
+    val hasContent = proc.members.isNotEmpty()
+    val livePreview = remember(proc.members) {
+        (proc.members.lastOrNull { it is Item.Reasoning && it.live } as? Item.Reasoning)
+            ?.let { reasoningPreview(it.text, running = true) }?.takeIf { it.isNotBlank() }
+    }
     Column(Modifier.fillMaxWidth()) {
         Row(
-            Modifier
-                .fillMaxWidth()
-                .clickable { open = !open }
-                .padding(bottom = 8.dp),
+            Modifier.fillMaxWidth()
+                .then(if (proc.canCollapse && hasContent) Modifier.clickable(role = Role.Button) { expanded = !expanded } else Modifier)
+                .heightIn(min = 48.dp)
+                .semantics { if (hasContent) stateDescription = if (open) "已展开" else "已收起" }
+                .testTag("processHeader:${proc.key}"),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            val label = when {
-                !proc.closed -> proc.title
-                proc.durationMs != null && proc.tools.isNotEmpty() ->
-                    "已完成，用时 ${seconds(proc.durationMs)}秒"
-                else -> proc.title
+            if (!proc.turnSummary) {
+                Icon(
+                    if (open) D.chevronDown else D.sparkle, null, tint = T.Text3,
+                    modifier = Modifier.size(16.dp).then(if (open) Modifier.rotate(180f) else Modifier),
+                )
+                Spacer(Modifier.width(6.dp))
             }
-            Text(label, fontSize = 14.sp, color = T.Text3, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
-            Text(if (open) " ⌄" else " ›", fontSize = 14.sp, color = T.Text3)
-        }
-        if (open) {
-            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                proc.reasoning.forEach { ReasoningRow(it, forceOpen = true) }
-                proc.tools.forEach { ToolCard(it) { onTool(it) } }
+            Text(proc.title, fontSize = 14.sp, color = T.Text3, maxLines = 1,
+                overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
+            if (!open && livePreview != null) {
+                Box(Modifier.padding(horizontal = 8.dp).size(2.dp).background(T.Caption, CircleShape))
+                Text(livePreview, fontSize = 13.sp, color = T.Text3, maxLines = 1,
+                    overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+            }
+            if (proc.turnSummary && proc.canCollapse && hasContent) {
+                Spacer(Modifier.width(4.dp))
+                Icon(D.chevronDown, null, tint = T.Text3,
+                    modifier = Modifier.size(14.dp).rotate(if (open) 180f else 0f))
             }
         }
-        HorizontalDivider(color = T.Border, thickness = 0.5.dp)
-    }
-}
-
-@Composable
-private fun ReasoningRow(r: Item.Reasoning, forceOpen: Boolean = false) {
-    val verbose = Pocket.prefs.transcriptView == TranscriptView.Verbose
-    var open by remember(r.key, verbose, forceOpen) { mutableStateOf(forceOpen || verbose) }
-    Row(Modifier.height(IntrinsicSize.Min)) {
-        Box(Modifier.width(2.dp).fillMaxHeight().background(T.Fill))
-        Column(Modifier.padding(start = 12.dp)) {
-            // Fold chrome stays clickable; body is independently selectable.
-            Text(
-                if (r.live) "深度求索中…"
-                else "已思考${r.durationMs?.let { " ${seconds(it)} 秒" } ?: ""} ${if (open) "⌄" else "›"}",
-                fontSize = 14.sp, color = T.Text3,
-                modifier = Modifier.clickable { open = !open },
-            )
-            if (open || r.live) {
-                SelectableOutput {
-                    Text(
-                        r.text.breakAnywhere(),
-                        fontSize = Pocket.prefs.fontSize.sp,
-                        lineHeight = (Pocket.prefs.fontSize + 8).sp,
-                        color = T.Text3,
-                        softWrap = true,
-                        modifier = Modifier.padding(top = 6.dp).fillMaxWidth(),
-                    )
+        // The completed-turn divider belongs below its title, not below the expanded process.
+        if (proc.turnSummary) HorizontalDivider(color = T.Border, thickness = 0.5.dp)
+        if (open && hasContent) {
+            Column(Modifier.padding(top = if (proc.turnSummary) 8.dp else 0.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                val grouped = proc.turnSummary && Pocket.prefs.transcriptView != TranscriptView.Verbose
+                val steps = remember(proc.steps) { processDisplaySteps(proc.steps) }
+                if (grouped && steps.isNotEmpty()) {
+                    steps.forEach { step -> key(step.key) { ProcessStepRow(step, onTool) } }
+                } else {
+                    proc.members.forEach { member -> key(member.key) { ProcessMember(member, onTool) } }
                 }
             }
         }
@@ -853,22 +952,118 @@ private fun ReasoningRow(r: Item.Reasoning, forceOpen: Boolean = false) {
 }
 
 @Composable
-private fun ToolCard(t: Item.Tool, onClick: () -> Unit) {
-    val warn = t.status == ToolStatus.AwaitingApproval
-    val showArg = Pocket.prefs.transcriptView != TranscriptView.Compact
-    Row(Modifier.fillMaxWidth().clip(T.R12).border(1.dp, if (warn) T.WarnBorder else T.Border, T.R12).clickable(onClick = onClick).padding(horizontal = 14.dp, vertical = 12.dp),
-        verticalAlignment = Alignment.CenterVertically) {
-        when (t.status) {
-            ToolStatus.Ok -> Text("✓", color = T.Ok, fontSize = 16.sp)
-            ToolStatus.Error -> Text("✕", color = T.Err, fontSize = 15.sp)
-            ToolStatus.AwaitingApproval -> Text("!", color = T.WarnText, fontSize = 16.sp, fontWeight = FontWeight.Bold)
-            ToolStatus.Running -> CircularProgressIndicator(Modifier.size(14.dp), color = T.Accent, strokeWidth = 1.5.dp)
+private fun ProcessStepRow(step: ProcessStep, onTool: (Item.Tool) -> Unit) {
+    val tools = remember(step.members) { step.members.filterIsInstance<Item.Tool>() }
+    if (tools.isEmpty()) {
+        step.members.forEach { member -> key(member.key) { ProcessMember(member, onTool) } }
+        return
+    }
+    var open by remember(step.key) { mutableStateOf(true) }
+    val title = remember(tools) { processTitle(rankedActivityKinds(tools)) }
+    Row(
+        Modifier.fillMaxWidth().heightIn(min = 48.dp)
+            .clickable(role = Role.Button) { open = !open }
+            .semantics { stateDescription = if (open) "已展开" else "已收起" }
+            .testTag("processSteps:${step.key}"),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(if (open) D.chevronDown else D.sparkle, null, tint = T.Text3,
+            modifier = Modifier.size(16.dp).then(if (open) Modifier.rotate(180f) else Modifier))
+        Spacer(Modifier.width(6.dp))
+        Text(title, fontSize = 14.sp, color = T.Text3, maxLines = 1, overflow = TextOverflow.Ellipsis)
+    }
+    if (open) step.members.forEach { member -> key(member.key) { ProcessMember(member, onTool) } }
+}
+
+@Composable
+private fun ProcessMember(item: Item, onTool: (Item.Tool) -> Unit) {
+    when (item) {
+        is Item.Reasoning -> ReasoningRow(item)
+        is Item.Tool -> ToolCard(item) { onTool(item) }
+        else -> Unit
+    }
+}
+
+private val reasoningParagraphBreak = Regex("\\r?\\n(?:[\\t ]*\\r?\\n)+")
+
+internal fun reasoningPreview(text: String, running: Boolean): String {
+    if (!running) return text.substringBefore('\n').replace("**", "")
+    var summary = ""
+    var start = 0
+    for (separator in reasoningParagraphBreak.findAll(text)) {
+        val newline = text.indexOf('\n', start)
+        if (newline >= start && newline <= separator.range.first + separator.value.indexOf('\n')) {
+            text.substring(start, newline).trim().takeIf { it.isNotEmpty() }?.let { summary = it }
         }
-        Spacer(Modifier.width(10.dp))
-        Text(t.name, fontSize = 15.sp, color = T.Ink); Spacer(Modifier.width(10.dp))
-        if (showArg) Text(primaryArg(t.name, t.arguments).orEmpty(), style = T.Mono.copy(color = T.Text3), maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
-        else Spacer(Modifier.weight(1f))
-        Icon(D.chevronRight, null, tint = T.Caption, modifier = Modifier.size(18.dp))
+        start = separator.range.last + 1
+    }
+    val newline = text.indexOf('\n', start)
+    if (newline >= start) text.substring(start, newline).trim().takeIf { it.isNotEmpty() }?.let { summary = it }
+    return summary.replace("**", "")
+}
+
+@Composable
+internal fun ReasoningRow(r: Item.Reasoning) {
+    var open by remember(r.key) { mutableStateOf(false) }
+    val preview = remember(r.text, r.live) { reasoningPreview(r.text, r.live) }
+    val showPreview = !open && preview.isNotEmpty() &&
+        (r.live || presentationPolicyFor(Pocket.prefs.transcriptView).settledReasoningPreview)
+    val en = Pocket.prefs.language == AppLanguage.En
+    Column(Modifier.fillMaxWidth()) {
+        Row(
+            Modifier.fillMaxWidth().heightIn(min = 48.dp)
+                .clickable(role = Role.Button) { open = !open }
+                .semantics { stateDescription = if (open) "已展开" else "已收起" }
+                .testTag("reasoningHeader:${r.key}"),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(if (open) D.chevronDown else D.think, null, tint = T.Text3,
+                modifier = Modifier.size(16.dp).then(if (open) Modifier.rotate(180f) else Modifier))
+            Spacer(Modifier.width(6.dp))
+            Text(if (r.live) { if (en) "Analyzing request" else "正在分析请求" } else { if (en) "Thinking" else "思考" },
+                fontSize = 13.sp, color = T.Text3)
+            if (showPreview) {
+                Box(Modifier.padding(horizontal = 8.dp).size(2.dp).background(T.Caption, CircleShape))
+                Text(preview, fontSize = 13.sp, color = T.Text3, maxLines = 1,
+                    overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+            }
+        }
+        if (open) {
+            Box(Modifier.padding(start = 22.dp, top = 4.dp, bottom = 4.dp).testTag("reasoningBody:${r.key}")) {
+                MarkdownView(r.text, streaming = r.live, bodyColor = T.Text2)
+            }
+        }
+    }
+}
+
+@Composable
+private fun ToolCard(t: Item.Tool, onClick: () -> Unit) {
+    val en = Pocket.prefs.language == AppLanguage.En
+    val summary = remember(t, en) { toolProcessSummary(t, en) }
+    val warn = t.status == ToolStatus.AwaitingApproval
+    val tint = when (t.status) {
+        ToolStatus.Error -> T.Err
+        ToolStatus.AwaitingApproval -> T.WarnText
+        else -> T.Text3
+    }
+    Row(
+        Modifier.fillMaxWidth().heightIn(min = 48.dp).clip(T.R8)
+            .then(if (warn) Modifier.background(T.WarnTint) else Modifier)
+            .clickable(role = Role.Button, onClick = onClick)
+            .testTag("processTool:${t.key}"),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        if (t.status == ToolStatus.Running) CircularProgressIndicator(Modifier.size(16.dp), color = T.Text3, strokeWidth = 1.5.dp)
+        else Icon(if (t.status == ToolStatus.Error || warn) D.warning else toolProcessIcon(summary.icon),
+            null, tint = tint, modifier = Modifier.size(16.dp))
+        Spacer(Modifier.width(6.dp))
+        Text(summary.title, fontSize = 13.sp, color = tint, maxLines = 1,
+            overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
+        if (!summary.summary.isNullOrBlank()) {
+            Box(Modifier.padding(horizontal = 8.dp).size(2.dp).background(T.Caption, CircleShape))
+            Text(summary.summary, fontSize = 13.sp, color = tint, maxLines = 1,
+                overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+        }
     }
 }
 
@@ -878,18 +1073,27 @@ private fun RunningLine(since: Long?) {
     LaunchedEffect(Unit) { while (true) { delay(1000); now = System.currentTimeMillis() } }
     val dots = rememberInfiniteTransition(label = "dots").animateFloat(0f, 3f, infiniteRepeatable(tween(1200, easing = LinearEasing)), label = "d")
     val secs = since?.let { (now - it) / 1000 } ?: 0
-    Text("深度求索中，用时 ${secs}s " + "·".repeat(dots.value.toInt() + 1), fontSize = 14.sp, color = T.Text3)
+    val label = if (Pocket.prefs.language == AppLanguage.En) "Analyzing request · ${secs}s" else "正在分析请求 · ${secs}s"
+    Text(label + " " + "·".repeat(dots.value.toInt() + 1), fontSize = 14.sp, color = T.Text3)
 }
 
 @Composable
-private fun ApprovalCard(a: Approval) {
-    Column(Modifier.padding(horizontal = 14.dp, vertical = 6.dp).fillMaxWidth().clip(T.R16).border(1.dp, T.WarnBorder, T.R16)) {
+internal fun ApprovalCard(a: Approval, onAnswer: (String, String, (Boolean) -> Unit) -> Unit = { id, outcome, done -> Pocket.answer(id, outcome, done) }) {
+    var busy by remember(a.approvalId) { mutableStateOf(false) }
+    fun answer(outcome: String) {
+        if (busy) return
+        busy = true
+        onAnswer(a.approvalId, outcome) { success -> if (!success) busy = false }
+    }
+    Column(Modifier.padding(horizontal = 14.dp, vertical = 6.dp).fillMaxWidth().heightIn(max = 420.dp)
+        .clip(T.R16).border(1.dp, T.WarnBorder, T.R16).verticalScroll(rememberScrollState())) {
         Row(Modifier.fillMaxWidth().background(T.WarnTint).padding(horizontal = 18.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
             Box(Modifier.size(7.dp).clip(CircleShape).background(T.WarnBorder)); Spacer(Modifier.width(8.dp))
             Text("等待审批", fontSize = 14.sp, color = T.WarnText)
         }
         Column(Modifier.padding(18.dp)) {
             SelectableOutput {
+                Column {
                 Text("工具 ${a.toolName} 请求越权执行", fontSize = 16.sp, color = T.Ink)
                 (approvalCommand(a) ?: a.reason)?.let {
                     Spacer(Modifier.height(8.dp))
@@ -897,18 +1101,18 @@ private fun ApprovalCard(a: Approval) {
                         it.breakAnywhere(),
                         style = T.Mono.copy(color = T.Text3, fontSize = 14.sp, lineHeight = 21.sp),
                         softWrap = true,
-                        maxLines = 8,
-                        overflow = TextOverflow.Ellipsis,
                         modifier = Modifier.fillMaxWidth(),
                     )
+                }
+                    a.reason?.takeIf { it != approvalCommand(a) }?.let { Text(it, color = T.WarnText, fontSize = 13.sp) }
                 }
             }
             Spacer(Modifier.height(16.dp))
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                OutlinedButton({ Pocket.answer(a.approvalId, "rejected") }, Modifier.weight(1f).height(52.dp), shape = T.R12, border = BorderStroke(1.dp, T.Border),
+                OutlinedButton({ answer("rejected") }, Modifier.weight(1f).height(52.dp), enabled = !busy, shape = T.R12, border = BorderStroke(1.dp, T.Border),
                     colors = ButtonDefaults.outlinedButtonColors(contentColor = T.Ink)) { Text("拒绝", fontSize = 16.sp) }
-                Button({ Pocket.answer(a.approvalId, "allowed-once") }, Modifier.weight(1f).height(52.dp), shape = T.R12,
-                    colors = PrimaryColors()) { Text("允许一次", fontSize = 16.sp) }
+                Button({ answer("allowed-once") }, Modifier.weight(1f).height(52.dp), enabled = !busy, shape = T.R12,
+                    colors = PrimaryColors()) { Text(if (busy) "提交中…" else "允许一次", fontSize = 16.sp) }
             }
         }
     }
@@ -917,14 +1121,21 @@ private fun ApprovalCard(a: Approval) {
 @Composable
 private fun ImageBubble(sessionId: String, ref: ImageRef) {
     var bitmap by remember(ref.attachmentId) { mutableStateOf<ImageBitmap?>(null) }
+    var imageBytes by remember(ref.attachmentId) { mutableStateOf<ByteArray?>(null) }
+    var preview by remember(ref.attachmentId) { mutableStateOf(false) }
     var failed by remember(ref.attachmentId) { mutableStateOf(false) }
     var loading by remember(ref.attachmentId) { mutableStateOf(true) }
     var attempt by remember(ref.attachmentId) { mutableIntStateOf(0) }
     LaunchedEffect(ref.attachmentId, attempt) {
         loading = true; failed = false; bitmap = null
         val bytes = Pocket.loadAttachmentBytes(sessionId, ref.attachmentId)
+        imageBytes = bytes
         if (bytes == null) { failed = true; loading = false; return@LaunchedEffect }
-        val bmp = BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
+        var sample = 1
+        while (maxOf(bounds.outWidth, bounds.outHeight) / sample > 660) sample *= 2
+        val bmp = BitmapFactory.decodeByteArray(bytes, 0, bytes.size, BitmapFactory.Options().apply { inSampleSize = sample })
         if (bmp == null) { failed = true; loading = false; return@LaunchedEffect }
         bitmap = bmp.asImageBitmap(); loading = false
     }
@@ -938,11 +1149,13 @@ private fun ImageBubble(sessionId: String, ref: ImageRef) {
                 modifier = Modifier.clickable { attempt++ },
             )
             bitmap != null -> {
-                Image(bitmap!!, L.image(), Modifier.widthIn(max = 220.dp).heightIn(max = 220.dp), contentScale = ContentScale.Fit)
-                Text(L.viewOriginal(), fontSize = 12.sp, color = T.Accent, modifier = Modifier.padding(top = 4.dp))
+                Image(bitmap!!, L.viewOriginal(), Modifier.widthIn(max = 220.dp).heightIn(max = 220.dp)
+                    .clickable { preview = true }, contentScale = ContentScale.Fit)
+                TextButton({ preview = true }) { Text(L.viewOriginal(), fontSize = 12.sp, color = T.Accent) }
             }
         }
     }
+    if (preview) imageBytes?.let { FullScreenImagePreview(it) { preview = false } }
 }
 
 @Composable
@@ -994,99 +1207,118 @@ private fun ChangesCard(item: Item.Changes) {
     }
 }
 
-@Composable
-private fun UserQuestionCard(q: UserQuestion) {
-    var index by remember(q.questionId) { mutableIntStateOf(0) }
-    val item = q.questions.getOrElse(index) { q.questions.first() }
-    val isPlan = item.intentKind == "plan-review"
-    var selected by remember(q.questionId, item.id) { mutableStateOf(setOf<String>()) }
-    var custom by remember(q.questionId, item.id) { mutableStateOf("") }
-    var err by remember { mutableStateOf<String?>(null) }
-    fun submit(skip: Boolean = false) {
-        if (!skip && selected.isEmpty() && custom.isBlank()) {
-            err = L.selectOrCustom(); return
+internal data class QuestionDraft(val selected: Set<String> = emptySet(), val custom: String = "") {
+    val answered: Boolean get() = selected.isNotEmpty() || custom.isNotBlank()
+}
+
+private val questionDraftSaver = listSaver<MutableMap<String, SnapshotStateMap<String, QuestionDraft>>, ArrayList<String>>(
+    save = { requests -> requests.flatMap { (requestId, answers) ->
+        answers.map { (id, draft) -> ArrayList(listOf(requestId, id, draft.custom) + draft.selected) }
+    } },
+    restore = { records ->
+        mutableMapOf<String, SnapshotStateMap<String, QuestionDraft>>().apply {
+            records.forEach { fields -> getOrPut(fields[0]) { mutableStateMapOf() }[fields[1]] = QuestionDraft(fields.drop(3).toSet(), fields[2]) }
         }
-        val answers = q.questions.mapIndexed { i, qi ->
-            buildJsonObject {
-                put("id", qi.id)
-                if (i == index) {
-                    putJsonArray("selected") { selected.forEach { add(JsonPrimitive(it)) } }
-                    if (custom.isNotBlank()) put("custom", custom)
-                } else {
-                    putJsonArray("selected") {}
-                }
-            }
-        }
-        Pocket.answerUserQuestion(q.callId ?: q.questionId, answers)
+    },
+)
+
+internal fun questionAnswers(q: UserQuestion, drafts: Map<String, QuestionDraft>) = q.questions.map { item ->
+    val draft = drafts[item.id] ?: QuestionDraft()
+    buildJsonObject {
+        put("id", item.id)
+        putJsonArray("selected") { draft.selected.forEach { add(JsonPrimitive(it)) } }
+        if (draft.custom.isNotBlank()) put("custom", draft.custom.trim())
     }
-    Column(Modifier.padding(horizontal = 14.dp, vertical = 6.dp).fillMaxWidth().clip(T.R16).border(1.dp, T.WarnBorder, T.R16)) {
-        Row(Modifier.fillMaxWidth().background(T.WarnTint).padding(horizontal = 18.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
-            Box(Modifier.size(7.dp).clip(CircleShape).background(T.WarnBorder)); Spacer(Modifier.width(8.dp))
-            Text(if (isPlan) L.planReview() else (item.header ?: "问题 ${index + 1}/${q.questions.size}"), fontSize = 14.sp, color = T.WarnText)
+}
+
+@Composable
+internal fun UserQuestionCard(
+    q: UserQuestion,
+    drafts: MutableMap<String, QuestionDraft>,
+    onDismiss: () -> Unit,
+    onAnswer: (String, List<kotlinx.serialization.json.JsonObject>, (Boolean) -> Unit) -> Unit = { id, answers, done -> Pocket.answerUserQuestion(id, answers, done) },
+) {
+    if (q.questions.isEmpty()) return
+    var index by rememberSaveable(q.questionId) { mutableIntStateOf(0) }
+    var busy by remember(q.questionId) { mutableStateOf(false) }
+    var err by remember(q.questionId) { mutableStateOf<String?>(null) }
+    val item = q.questions[index.coerceIn(q.questions.indices)]
+    val draft = drafts[item.id] ?: QuestionDraft()
+    val isPlan = q.questions.size == 1 && item.intentKind == "plan-review" &&
+        !item.multiSelect && item.options.size <= 2 && item.options.any { it.label == item.approveLabel }
+    fun submit() {
+        if (busy) return
+        busy = true; err = null
+        onAnswer(q.callId ?: q.questionId, questionAnswers(q, drafts)) { success ->
+            if (!success) { busy = false; err = "提交失败，答案已保留，请重试" }
         }
-        Column(Modifier.padding(18.dp)) {
+    }
+    Column(Modifier.padding(horizontal = 14.dp, vertical = 6.dp).fillMaxWidth().heightIn(max = 420.dp)
+        .clip(T.R16).border(1.dp, T.Border, T.R16).verticalScroll(rememberScrollState())) {
+        Row(Modifier.fillMaxWidth().padding(start = 18.dp, end = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+            Text(if (isPlan) L.planReview() else "${item.header ?: "问题"} · ${index + 1}/${q.questions.size}",
+                fontSize = 14.sp, color = T.Text2, modifier = Modifier.weight(1f))
+            TextButton(onClick = onDismiss, enabled = !busy) { Text("收起") }
+        }
+        Column(Modifier.padding(horizontal = 18.dp, vertical = 8.dp)) {
             SelectableOutput {
-                Text(item.question, fontSize = 16.sp, color = T.Ink)
-                item.detail?.takeIf { it.isNotBlank() }?.let {
-                    Spacer(Modifier.height(8.dp))
-                    Text(it, fontSize = 13.sp, color = T.Text3)
+                Column {
+                    Text(item.question, fontSize = 16.sp, color = T.Ink)
+                    item.detail?.takeIf { it.isNotBlank() }?.let {
+                        Spacer(Modifier.height(8.dp))
+                        MarkdownView(it)
+                    }
                 }
             }
-            Spacer(Modifier.height(12.dp))
-            item.options.forEach { opt ->
-                val rec = opt.label.contains("推荐") || opt.label.contains("recommended", ignoreCase = true)
-                val display = opt.label.replace(Regex("""\s*[（(](?:推荐|recommended)[)）]\s*$""", RegexOption.IGNORE_CASE), "")
-                val on = opt.label in selected
-                Row(
-                    Modifier.fillMaxWidth().clip(T.R8).border(1.dp, if (on) T.Accent else T.Border, T.R8)
-                        .clickable {
-                            selected = if (item.multiSelect) {
-                                if (on) selected - opt.label else selected + opt.label
-                            } else setOf(opt.label)
+            if (!isPlan) {
+                Spacer(Modifier.height(12.dp))
+                item.options.forEach { opt ->
+                    val selected = opt.label in draft.selected
+                    Row(Modifier.fillMaxWidth().heightIn(min = 48.dp).clip(T.R8)
+                        .border(1.dp, if (selected) T.Accent else T.Border, T.R8)
+                        .clickable(enabled = !busy) {
+                            drafts[item.id] = draft.copy(selected = if (item.multiSelect) {
+                                if (selected) draft.selected - opt.label else draft.selected + opt.label
+                            } else setOf(opt.label))
                             err = null
-                        }.padding(12.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Text(display, fontSize = 15.sp, color = T.Ink, modifier = Modifier.weight(1f))
-                    if (rec) Text(L.recommended(), fontSize = 11.sp, color = T.Accent)
+                        }.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Column(Modifier.weight(1f)) {
+                            Text(opt.label, fontSize = 15.sp, color = T.Ink)
+                            opt.description?.let { Text(it, fontSize = 12.sp, color = T.Text3) }
+                        }
+                        if (selected) Icon(D.check, "已选择", tint = T.Accent, modifier = Modifier.size(18.dp))
+                    }
+                    Spacer(Modifier.height(6.dp))
                 }
-                Spacer(Modifier.height(6.dp))
+                OutlinedTextField(draft.custom, { drafts[item.id] = draft.copy(custom = it); err = null },
+                    enabled = !busy, placeholder = { Text(L.typeYourAnswer()) }, shape = T.R12,
+                    modifier = Modifier.fillMaxWidth(), maxLines = 4)
             }
-            OutlinedTextField(
-                custom, { custom = it; err = null },
-                placeholder = { Text(L.typeYourAnswer()) },
-                shape = T.R12,
-                modifier = Modifier.fillMaxWidth(),
-            )
-            err?.let { Spacer(Modifier.height(6.dp)); Text(it, fontSize = 12.sp, color = T.Err) }
-            Spacer(Modifier.height(14.dp))
+            err?.let { Text(it, fontSize = 12.sp, color = T.Err, modifier = Modifier.padding(top = 6.dp)) }
+            if (busy) Text("正在提交…", color = T.Text3, modifier = Modifier.padding(vertical = 8.dp))
+            else if (q.state == "continued") Text("智能体已继续工作，仍可补充答案", fontSize = 12.sp, color = T.Text3)
+            Spacer(Modifier.height(10.dp))
             if (isPlan) {
-                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                    OutlinedButton({
-                        val decline = item.options.firstOrNull { it.label != item.approveLabel }?.label
-                        selected = decline?.let { setOf(it) }.orEmpty(); submit()
-                    }, Modifier.weight(1f).height(48.dp), shape = T.R12, border = BorderStroke(1.dp, T.Border),
-                        colors = ButtonDefaults.outlinedButtonColors(contentColor = T.Ink)) { Text(L.declinePlan()) }
-                    Button({
-                        item.approveLabel?.let { selected = setOf(it) }; submit()
-                    }, Modifier.weight(1f).height(48.dp), shape = T.R12, colors = PrimaryColors()) { Text(L.approvePlan()) }
-                }
-                TextButton({ submit(skip = false); /* discuss = custom */ }, Modifier.fillMaxWidth()) {
-                    Text(L.requestChanges(), color = T.Text3)
+                Button({
+                    drafts[item.id] = QuestionDraft(setOf(item.approveLabel!!)); submit()
+                }, Modifier.fillMaxWidth().heightIn(min = 48.dp), enabled = !busy, shape = T.R12, colors = PrimaryColors()) { Text(L.approvePlan()) }
+                OutlinedButton(onDismiss, Modifier.fillMaxWidth().heightIn(min = 48.dp), enabled = !busy, shape = T.R12) {
+                    Text("继续讨论")
                 }
             } else {
-                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                    OutlinedButton({ submit(skip = true) }, Modifier.weight(1f).height(48.dp), shape = T.R12,
-                        border = BorderStroke(1.dp, T.Border), colors = ButtonDefaults.outlinedButtonColors(contentColor = T.Ink)) {
-                        Text(L.skip())
-                    }
-                    if (index < q.questions.lastIndex) {
-                        Button({
-                            if (selected.isEmpty() && custom.isBlank()) { err = L.completeQuestionFirst(); return@Button }
-                            index++
-                        }, Modifier.weight(1f).height(48.dp), shape = T.R12, colors = PrimaryColors()) { Text(L.nextQuestion()) }
-                    } else {
-                        Button({ submit() }, Modifier.weight(1f).height(48.dp), shape = T.R12, colors = PrimaryColors()) { Text(L.nextQuestion()) }
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    if (index > 0) TextButton({ index--; err = null }, enabled = !busy) { Text("上一题") }
+                    TextButton({
+                        drafts[item.id] = QuestionDraft()
+                        if (index < q.questions.lastIndex) index++ else submit()
+                    }, enabled = !busy) { Text(L.skip()) }
+                    Spacer(Modifier.weight(1f))
+                    Button({
+                        if (!draft.answered) { err = L.completeQuestionFirst() }
+                        else if (index < q.questions.lastIndex) { index++; err = null }
+                        else submit()
+                    }, enabled = !busy, shape = T.R12, colors = PrimaryColors()) {
+                        Text(if (index < q.questions.lastIndex) L.nextQuestion() else "提交答案")
                     }
                 }
             }
@@ -1101,6 +1333,8 @@ private fun Composer(
     perm: String,
     model: ModelChoice?,
     enabled: Boolean,
+    draft: TextFieldValue,
+    onDraftChange: (TextFieldValue) -> Unit,
     planMode: Boolean = false,
     permissionName: String = permissionLabel(perm),
     pendingImages: List<PromptImage> = emptyList(),
@@ -1121,25 +1355,15 @@ private fun Composer(
     onSend: (String) -> Unit,
     onStop: () -> Unit,
 ) {
-    var text by remember { mutableStateOf("") }
+    val text = draft.text
+    val latestDraft by rememberUpdatedState(draft)
+    val latestChange by rememberUpdatedState(onDraftChange)
     LaunchedEffect(Unit) {
         Pocket.composerInsert.collect { token ->
             // Empty → consume slash trigger; leading `/` → claim/replace draft; else @-mention insert.
-            text = when {
-                token.isEmpty() -> if (text == "/" || text.trim() == "/") "" else text
-                token.startsWith("/") -> token
-                else -> {
-                    val base = text.trimEnd()
-                    when {
-                        base.isEmpty() || base == "@" || base.endsWith("@") -> {
-                            val bare = token.removePrefix("@")
-                            if (base.endsWith("@") || base == "@") base.removeSuffix("@") + "@$bare "
-                            else "@$bare "
-                        }
-                        else -> "$base ${if (token.startsWith("@")) token else "@$token"} "
-                    }
-                }
-            }
+            val current = latestDraft
+            val next = replaceComposerToken(current.text, current.selection.end, token)
+            latestChange(TextFieldValue(next.first, TextRange(next.second)))
         }
     }
     val hasPending = pendingImages.isNotEmpty() || pendingFiles.isNotEmpty()
@@ -1167,14 +1391,20 @@ private fun Composer(
             }
             Spacer(Modifier.height(8.dp))
         }
+        if (planMode) TextButton(onExitPlan, Modifier.heightIn(min = 48.dp).testTag("planChip")) {
+            Icon(D.plan, L.planModeOn(), tint = T.Accent, modifier = Modifier.size(16.dp))
+            Text(L.planChip(), color = T.Accent, modifier = Modifier.padding(start = 6.dp))
+            Text("退出", color = T.Text3, fontSize = 12.sp, modifier = Modifier.padding(start = 6.dp))
+        }
         Box {
             if (text.isEmpty()) Text(placeholder, fontSize = 16.sp, color = T.Caption, maxLines = 2, overflow = TextOverflow.Ellipsis)
             BasicTextField(
-                text,
-                {
-                    text = it
-                    if (it == "/") onSlash()
-                    if (it == "@" || it.endsWith(" @") || (it.startsWith("@") && !it.contains(' '))) onMention()
+                draft,
+                { next ->
+                    onDraftChange(next)
+                    val trigger = composerTrigger(next.text, next.selection.end)
+                    if (trigger?.kind == '/') onSlash()
+                    if (trigger?.kind == '@') onMention()
                 },
                 textStyle = MaterialTheme.typography.bodyLarge.copy(color = T.Ink),
                 cursorBrush = SolidColor(T.Accent),
@@ -1183,31 +1413,14 @@ private fun Composer(
         }
         Spacer(Modifier.height(12.dp))
         Row(verticalAlignment = Alignment.CenterVertically) {
-            Box(Modifier.size(32.dp).clip(CircleShape).background(T.Fill).clickable(onClick = onPlus), contentAlignment = Alignment.Center) { Icon(D.plus, L.sectionAdd(), tint = T.Ink, modifier = Modifier.size(18.dp)) }
+            Box(Modifier.size(48.dp).clip(CircleShape).background(T.Fill).clickable(onClick = onPlus), contentAlignment = Alignment.Center) { Icon(D.plus, L.sectionAdd(), tint = T.Ink, modifier = Modifier.size(18.dp)) }
             Spacer(Modifier.width(8.dp))
             Row(Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically) {
-                if (planMode) {
-                    // Desktop PlanChip: visible while plan mode is on; tap exits via `/plan off`.
-                    Row(
-                        Modifier
-                            .clip(T.R8)
-                            .background(T.Fill2)
-                            .clickable(onClick = onExitPlan)
-                            .padding(horizontal = 8.dp, vertical = 6.dp)
-                            .testTag("planChip"),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Icon(D.plan, L.planModeOn(), tint = T.Accent, modifier = Modifier.size(16.dp))
-                        Spacer(Modifier.width(4.dp))
-                        Text(L.planChip(), fontSize = 14.sp, color = T.Accent, maxLines = 1)
-                    }
-                    Spacer(Modifier.width(6.dp))
-                }
                 val danger = perm == "danger-full-access"
                 // Keep the current mode accessible without taking width from the model name.
                 if (perm.isNotEmpty()) IconButton(
                     onClick = onPerm,
-                    modifier = Modifier.size(40.dp).testTag("composerPermission")
+                    modifier = Modifier.size(48.dp).testTag("composerPermission")
                         .semantics { contentDescription = permissionName },
                 ) {
                     val icon = D.permission(perm)
@@ -1219,7 +1432,7 @@ private fun Composer(
                 }
                 Box(Modifier.weight(1f), contentAlignment = Alignment.CenterEnd) {
                     Row(
-                        Modifier.clip(T.R8).clickable(onClick = onModel).testTag("composerModel")
+                        Modifier.heightIn(min = 48.dp).clip(T.R8).clickable(onClick = onModel).testTag("composerModel")
                             .semantics { contentDescription = listOfNotNull(model?.name ?: "选择模型", modelEffort).joinToString(" · ") }
                             .padding(horizontal = 6.dp, vertical = 6.dp),
                         verticalAlignment = Alignment.CenterVertically,
@@ -1233,11 +1446,11 @@ private fun Composer(
                 }
             }
             Spacer(Modifier.width(8.dp))
-            val canSend = enabled && (text.isNotBlank() || (hasPending && filesReady && pendingFiles.none { it.status != AttachStatus.Ready } && (pendingImages.isNotEmpty() || pendingFiles.isNotEmpty())))
+            val canSend = enabled && filesReady && (text.isNotBlank() || hasPending)
             val primaryFill = T.Accent.copy(alpha = if (canSend || running) 1f else 0.4f)
             if (running && text.isBlank() && !hasPending) {
                 Box(
-                    Modifier.size(34.dp).clip(CircleShape).background(primaryFill).clickable(onClick = onStop)
+                    Modifier.size(48.dp).clip(CircleShape).background(primaryFill).clickable(onClick = onStop)
                         .semantics { contentDescription = "终止" },
                     contentAlignment = Alignment.Center,
                 ) {
@@ -1246,10 +1459,10 @@ private fun Composer(
             } else {
                 Box(
                     Modifier
-                        .size(34.dp)
+                        .size(48.dp)
                         .clip(CircleShape)
                         .background(primaryFill)
-                        .clickable(enabled = canSend) { onSend(text.trim()); text = "" }
+                        .clickable(enabled = canSend) { onSend(text.trim()); onDraftChange(TextFieldValue("")) }
                         .semantics { contentDescription = sendLabel }
                         .testTag("composerSend"),
                     contentAlignment = Alignment.Center,

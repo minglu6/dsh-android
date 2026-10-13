@@ -13,6 +13,8 @@ import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.performClick
+import dev.dsh.pocket.protocol.SessionSummary
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Before
@@ -40,11 +42,16 @@ class DrawerSidebarParityTest {
         Pocket.prefs.sessionGroupBy = SessionGroupBy.Workspace
         Pocket.prefs.sessionOrderBy = SessionOrderBy.Updated
         Pocket.prefs.archivedFilter = ArchivedFilter.Default
-        Pocket.ops.value = setOf("plugins.list", "schedule.catalog", "sessions.search", "workspace.state")
+        Pocket.ops.value = setOf("plugins.list", "schedule.catalog", "sessions.search", "workspace.state", "workspace.create")
         Pocket.profiles.value = listOf(Profile("p1", "Mac mini", host = "100.106.128.87", port = 7690))
         Pocket.active.value = "p1"
         Pocket.status.value = mapOf("p1" to Dot.Online)
         Pocket.sessions.value = emptyList()
+        Pocket.workspaces.value = emptyList()
+        Pocket.prefs.setCollapsedWorkspaces("p1", emptySet())
+        Pocket.prefs.setManualSessionOrder("p1", emptyList())
+        Pocket.archivedIds.value = emptySet()
+        Pocket.pinnedIds.value = emptySet()
         Pocket.chat.value = null
     }
 
@@ -178,5 +185,39 @@ class DrawerSidebarParityTest {
         assertEquals(SessionGroupBy.Flat, Pocket.prefs.sessionGroupBy)
         assertEquals(SessionOrderBy.Manual, Pocket.prefs.sessionOrderBy)
         assertEquals(ArchivedFilter.Only, Pocket.prefs.archivedFilter)
+    }
+
+    @Test fun archivedTapRequestsRestoreWithoutOpening() {
+        Pocket.prefs.sessionGroupBy = SessionGroupBy.Flat
+        Pocket.prefs.archivedFilter = ArchivedFilter.Show
+        Pocket.archivedIds.value = setOf("archive")
+        Pocket.sessions.value = listOf(SessionSummary("archive", "Archived example", "/tmp/a", false, false, 1, null))
+        var picked: String? = null
+        rule.setContent { PocketTheme { SessionDrawer({ picked = it }, {}, {}, {}) } }
+        rule.onNodeWithText("Archived example").performClick()
+        rule.onNodeWithText("已归档会话需先恢复才能打开。").assertIsDisplayed()
+        assertEquals(null, picked)
+    }
+
+    @Test fun forkLineageDoesNotHideOrdinarySession() {
+        Pocket.prefs.sessionGroupBy = SessionGroupBy.Flat
+        Pocket.sessions.value = listOf(
+            SessionSummary("fork", "Visible fork", "/tmp/a", false, false, 2, "parent"),
+            SessionSummary("child", "Hidden child", "/tmp/a", false, false, 1, "parent", origin = "subagent"),
+        )
+        rule.setContent { PocketTheme { SessionDrawer({}, {}, {}, {}) } }
+        rule.onNodeWithText("Visible fork").assertIsDisplayed()
+        rule.onNodeWithText("Hidden child").assertDoesNotExist()
+    }
+
+    @Test fun navigationPreferencesAreHostIsolated() {
+        Pocket.prefs.setCollapsedWorkspaces("one", setOf("workspace:/a/project"))
+        Pocket.prefs.setCollapsedWorkspaces("two", setOf("workspace:/b/project"))
+        Pocket.prefs.setManualSessionOrder("one", listOf("z", "a", "archived"))
+        Pocket.prefs.setManualSessionOrder("two", listOf("x"))
+        assertEquals(setOf("workspace:/a/project"), Pocket.prefs.collapsedWorkspaces("one"))
+        assertEquals(setOf("workspace:/b/project"), Pocket.prefs.collapsedWorkspaces("two"))
+        assertEquals(listOf("z", "a", "archived"), Pocket.prefs.manualSessionOrder("one"))
+        assertEquals(listOf("x"), Pocket.prefs.manualSessionOrder("two"))
     }
 }

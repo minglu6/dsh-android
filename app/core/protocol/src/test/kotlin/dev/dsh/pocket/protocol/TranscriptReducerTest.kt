@@ -6,6 +6,9 @@ class TranscriptReducerTest {
     private fun j(s: String) = PocketJson.parseToJsonElement(s)
     private fun ev(seq: Int, type: String, data: String) = j("""{"type":"event","event":{"type":"$type","seq":$seq,"time":${1000 + seq},"data":$data}}""")
 
+    private fun timedEvent(seq: Int, type: String, time: Long, data: String) =
+        """{"type":"event","event":{"type":"$type","seq":$seq,"time":$time,"data":$data}}"""
+
     @Test fun foldsSnapshotAndEvents() {
         val r = TranscriptReducer()
         r.apply(j("""{"type":"snapshot","cursor":2,"hasMore":false,"header":{},"projections":{"values":{"title":"问候","tokenUsage":{"uncachedInputTokens":40,"cacheReadTokens":960,"outputTokens":10}}},
@@ -199,6 +202,104 @@ class TranscriptReducerTest {
         assertEquals(listOf("hi"), r.items().map { (it as Item.User).text })
         r.apply(j("""{"type":"snapshot","cursor":1,"records":[{"type":"event","event":{"type":"user/message","seq":1,"time":1,"data":{"content":[{"type":"text","text":"hi"}],"source":{"kind":"user"}}}}],"projections":{}}"""))
         assertEquals(1, r.items().size)
+    }
+
+    @Test fun turnBoundariesUseHostIdentityAcrossResumeAndMultipleSteps() {
+        val r = TranscriptReducer()
+        val start = timedEvent(20, "turn/start", 1000, """{"turn":9}""")
+        r.apply(j("""{"type":"snapshot","cursor":20,"records":[$start],"projections":{}}"""))
+        r.apply(ev(21, "step/start", """{"turn":9,"step":1}"""))
+        r.apply(ev(22, "assistant/message", """{"turn":9,"step":1,"message":{"content":[
+            {"type":"reasoning","text":"first"},{"type":"tool-call","id":"a","name":"read","arguments":"{}"},
+            {"type":"reasoning","text":"after call"}]}}"""))
+        r.apply(ev(23, "step/start", """{"turn":9,"step":2}"""))
+        r.apply(ev(24, "assistant/message", """{"turn":9,"step":2,"message":{"content":[{"type":"text","text":"done"}]}}"""))
+        val end = timedEvent(25, "turn/end", 7500, """{"turn":9,"reason":{"kind":"completed"}}""")
+        r.apply(j("""{"type":"resume","cursor":25,"records":[$start,$end],"projections":{}}"""))
+        val turn = r.turnRecords().single()
+        assertEquals(9, turn.turn)
+        assertEquals(6500L, turn.durationMs)
+        assertEquals(listOf(9, 9), r.stepRecords().map { it.turn })
+        assertEquals(listOf(9, 9), r.items().filterIsInstance<Item.Reasoning>().map { it.turn })
+        assertEquals(listOf(1, 1), r.items().filterIsInstance<Item.Reasoning>().map { it.step })
+        assertEquals(9, r.items().filterIsInstance<Item.Text>().single().turn)
+        assertEquals(2, r.items().filterIsInstance<Item.Text>().single().step)
+        assertEquals(listOf("Reasoning", "Tool", "Reasoning", "Text"), r.items().map { it::class.simpleName })
+    }
+
+    @Test fun boundaryOnlyPrependCompletesDurationWithoutReplacingLiveOwnership() {
+        val r = TranscriptReducer()
+        val oldMessage = timedEvent(30, "assistant/message", 7000,
+            """{"turn":9,"step":2,"message":{"content":[{"type":"text","text":"old"}]}}""")
+        val oldEnd = timedEvent(31, "turn/end", 7500, """{"turn":9,"reason":{"kind":"completed"}}""")
+        val newStart = timedEvent(32, "turn/start", 8000, """{"turn":10}""")
+        r.apply(j("""{"type":"snapshot","cursor":32,"hasMore":true,
+            "records":[$oldMessage,$oldEnd,$newStart],"projections":{},
+            "assistantStream":{"activeAttempt":{"attemptId":"live","turn":10,"step":1,
+            "stream":[{"type":"reasoning-chunks","index":0,"time0":9000,"texts":["live"],"dt":[0]}]}}}"""))
+        assertNull(r.turnRecords().first { it.turn == 9 }.durationMs)
+        val page = j("""[${timedEvent(29, "turn/start", 1000, """{"turn":9}""")}]""")
+        assertTrue(r.prepend(page, false))
+        assertEquals(6500L, r.turnRecords().first { it.turn == 9 }.durationMs)
+        assertEquals(10, r.items().filterIsInstance<Item.Reasoning>().single().turn)
+        assertTrue(r.running)
+        assertEquals(32L, r.cursor)
+        assertEquals(29L, r.firstSeq)
+        assertFalse(r.prepend(page, false))
+        r.apply(j(timedEvent(33, "assistant/message", 14_000,
+            """{"turn":10,"step":1,"message":{"content":[{"type":"text","text":"new"}]}}""")))
+        r.apply(j(timedEvent(34, "turn/end", 15_000, """{"turn":10,"reason":{"kind":"completed"}}""")))
+        assertEquals(listOf(6500L, 7000L), r.turnRecords().map { it.durationMs })
+        assertEquals(listOf(9, 10), r.items().filterIsInstance<Item.Text>().map { it.turn })
+    }
+
+    @Test fun tailSnapshotPreservesKnownBoundaryOnlyForPresentTurns() {
+        val r = TranscriptReducer()
+        r.apply(j(timedEvent(1, "turn/start", 1000, """{"turn":1}""")))
+        val end = timedEvent(3, "turn/end", 7500, """{"turn":1,"reason":{"kind":"completed"}}""")
+        r.apply(j("""{"type":"snapshot","cursor":3,"records":[$end],"projections":{}}"""))
+        assertEquals(6500L, r.turnRecords().single().durationMs)
+        val other = timedEvent(4, "turn/start", 10_000, """{"turn":2}""")
+        r.apply(j("""{"type":"snapshot","cursor":4,"records":[$other],"projections":{}}"""))
+        assertEquals(listOf(2), r.turnRecords().map { it.turn })
+        assertNull(r.turnRecords().single().durationMs)
+    }
+
+    @Test fun missingEndAndIdleNeverCreateACompletionClock() {
+        val r = TranscriptReducer()
+        r.apply(j(timedEvent(1, "turn/start", 1000, """{"turn":3}""")))
+        r.markIdle()
+        assertFalse(r.turnRecords().single().closed)
+        assertNull(r.turnRecords().single().durationMs)
+        // A later unrelated end cannot borrow turn 3's start.
+        r.apply(j(timedEvent(2, "turn/end", 7500, """{"turn":4,"reason":{"kind":"completed"}}""")))
+        assertTrue(r.turnRecords().last().closed)
+        assertNull(r.turnRecords().last().durationMs)
+    }
+
+    @Test fun streamBaselineAndCommitRetainHostStepCoordinates() {
+        val r = TranscriptReducer()
+        r.apply(j("""{"type":"snapshot","cursor":5,"records":[],"projections":{},
+            "assistantStream":{"activeAttempt":{"attemptId":"a","turn":12,"step":3,
+            "stream":[{"type":"text-chunks","index":0,"time0":9000,"texts":["live"],"dt":[0]}]}}}"""))
+        assertTrue(r.running)
+        assertEquals(12, r.items().filterIsInstance<Item.Text>().single().turn)
+        assertEquals(3, r.items().filterIsInstance<Item.Text>().single().step)
+        r.apply(ev(6, "assistant/message", """{"message":{"content":[{"type":"text","text":"settled"}]}}"""))
+        assertEquals(12, r.items().filterIsInstance<Item.Text>().single().turn)
+        assertEquals(3, r.items().filterIsInstance<Item.Text>().single().step)
+        assertNull(r.turnRecords().single().startedAt)
+    }
+
+    @Test fun replacementSnapshotCannotImportAnEndBeyondItsCursor() {
+        val r = TranscriptReducer()
+        val start = timedEvent(1, "turn/start", 1000, """{"turn":1}""")
+        r.apply(j(start))
+        r.apply(j(timedEvent(3, "turn/end", 7500, """{"turn":1,"reason":{"kind":"completed"}}""")))
+        r.apply(j("""{"type":"snapshot","cursor":1,"records":[$start],"projections":{}}"""))
+        assertTrue(r.running)
+        assertFalse(r.turnRecords().single().closed)
+        assertNull(r.turnRecords().single().durationMs)
     }
 
     @Test fun pairingLink() {

@@ -2,324 +2,452 @@ package dev.dsh.pocket.app
 
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.graphics.Color as AndroidColor
 import android.graphics.pdf.PdfRenderer
 import android.os.ParcelFileDescriptor
+import android.webkit.WebResourceRequest
+import android.webkit.WebResourceResponse
+import android.webkit.WebSettings
+import android.webkit.WebView
+import android.webkit.WebViewClient
 import android.util.Base64
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.horizontalScroll
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.heightIn
-import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.Text
-import androidx.compose.runtime.Composable
-import androidx.compose.runtime.DisposableEffect
-import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableIntStateOf
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
-import androidx.compose.runtime.setValue
-import androidx.compose.runtime.staticCompositionLocalOf
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.AnnotatedString
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.viewinterop.AndroidView
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import dev.dsh.pocket.protocol.bool
 import dev.dsh.pocket.protocol.get
 import dev.dsh.pocket.protocol.long
 import dev.dsh.pocket.protocol.str
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.launch
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.withContext
 import java.io.File
 
-/** Open a workspace file path in the document preview sheet (chat / trajectory / files). */
+/** Shared real workspace-file entry for chat, deliverables and the files panel. */
 val LocalOpenFilePreview = staticCompositionLocalOf<((String) -> Unit)?> { null }
+private fun previewText(zh: String, en: String) = if (Pocket.prefs.language == AppLanguage.En) en else zh
 
 enum class PreviewKind { Text, Image, Pdf, Unsupported }
 
-fun previewKindFor(path: String): PreviewKind {
-    val ext = path.substringAfterLast('.', missingDelimiterValue = "").lowercase()
-    return when (ext) {
-        "png", "jpg", "jpeg", "gif", "webp", "bmp", "ico" -> PreviewKind.Image
-        "pdf" -> PreviewKind.Pdf
-        "svg" -> PreviewKind.Text // SVG source is readable; bitmap path stays Image for rasters
-        else -> PreviewKind.Text
-    }
+fun previewKindFor(path: String): PreviewKind = when (path.substringAfterLast('.', "").lowercase()) {
+    "png", "jpg", "jpeg", "gif", "webp", "bmp", "ico", "avif", "heic", "heif" -> PreviewKind.Image
+    "pdf" -> PreviewKind.Pdf
+    "doc", "docx", "xls", "xlsx", "xlsm", "xlsb", "ppt", "pptx", "odt", "ods", "odp", "pages", "numbers", "key",
+    "zip", "gz", "tar", "7z", "rar", "exe", "so", "dylib", "mp4", "mov", "mp3", "wav", "woff", "ttf" -> PreviewKind.Unsupported
+    else -> PreviewKind.Text
 }
 
-/**
- * Document preview sheet: `files.read` (text pages) or `files.readBytes` (image / PDF).
- * Copy action uses common locale `copy` / `copied`.
- */
 @Composable
 fun FilePreviewSheet(sessionId: String, path: String, onDismiss: () -> Unit, onBack: (() -> Unit)? = null) {
     val kind = remember(path) { previewKindFor(path) }
-    var loading by remember(path) { mutableStateOf(true) }
-    var error by remember(path) { mutableStateOf<String?>(null) }
-    var text by remember(path) { mutableStateOf<String?>(null) }
-    var bytes by remember(path) { mutableStateOf<ByteArray?>(null) }
-    var copied by remember { mutableStateOf(false) }
+    var generation by remember(sessionId, path) { mutableIntStateOf(0) }
+    var loading by remember(sessionId, path) { mutableStateOf(true) }
+    var error by remember(sessionId, path) { mutableStateOf<String?>(null) }
+    var text by remember(sessionId, path) { mutableStateOf<String?>(null) }
+    var bytes by remember(sessionId, path) { mutableStateOf<ByteArray?>(null) }
+    var refreshed by remember(sessionId, path) { mutableStateOf<String?>(null) }
+    var copied by remember(sessionId, path) { mutableStateOf(false) }
+    var wrap by remember(path) { mutableStateOf(Pocket.prefs.codeWordWrap) }
+    var source by remember(path) { mutableStateOf(false) }
+    var fullImage by remember(path) { mutableStateOf(false) }
     val clip = LocalClipboardManager.current
-    val scope = rememberCoroutineScope()
+    val extension = path.substringAfterLast('.', "").lowercase()
+    val richText = extension in setOf("md", "markdown", "html", "htm", "csv", "tsv")
 
-    fun reload() {
+    LaunchedEffect(sessionId, path, generation) {
         loading = true
         error = null
-        text = null
-        bytes = null
-        scope.launch {
-            runCatching {
-                when (kind) {
-                    PreviewKind.Image, PreviewKind.Pdf -> {
-                        val r = Pocket.readFileBytes(sessionId, path)
-                            ?: error("no client")
-                        val b64 = r["data"].str() ?: error("empty")
-                        bytes = Base64.decode(b64, Base64.DEFAULT)
+        copied = false
+        try {
+            when (kind) {
+                PreviewKind.Image, PreviewKind.Pdf -> {
+                    val result = Pocket.readFileBytes(sessionId, path) ?: error("Disconnected")
+                    check(result["eof"].bool() != false) { previewText("文件未读取完整，无法预览", "Incomplete file response; cannot preview") }
+                    val next = withContext(Dispatchers.Default) {
+                        Base64.decode(result["data"].str() ?: error("Empty file response"), Base64.DEFAULT)
                     }
-                    PreviewKind.Text, PreviewKind.Unsupported -> {
-                        text = readAllText(sessionId, path)
-                    }
+                    refreshed = bytes?.let { if (it.contentEquals(next)) previewText("文件未变更", "File unchanged") else previewText("已加载文件的新版本", "Loaded updated file") }
+                    bytes = next
                 }
-            }.onFailure {
-                error = it.message ?: L.docErrorUnavailable(it.toString())
+                PreviewKind.Text -> {
+                    val next = readAllText(sessionId, path)
+                    refreshed = text?.let { if (it == next) previewText("文件未变更", "File unchanged") else previewText("已加载文件的新版本", "Loaded updated file") }
+                    text = next
+                }
+                PreviewKind.Unsupported -> Unit
             }
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (failure: Exception) {
+            error = failure.message ?: L.docErrorUnavailable(failure.toString())
+        } finally {
             loading = false
         }
     }
 
-    LaunchedEffect(sessionId, path) { reload() }
-
+    if (fullImage && bytes != null) FullScreenImagePreview(bytes!!) { fullImage = false }
     RightPanelFrame(
         title = path.substringAfterLast('/').substringAfterLast('\\').ifBlank { path },
         onDismiss = onDismiss,
         onBack = onBack,
+        actions = {
+            IconButton(onClick = { generation++ }, enabled = !loading) {
+                Icon(D.refresh, previewText("刷新文件", "Refresh file"), tint = T.Text2, modifier = Modifier.size(18.dp))
+            }
+        },
     ) {
-        Column(Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(vertical = 12.dp)) {
-        Row(
-            Modifier.fillMaxWidth().padding(horizontal = 22.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Text(path, style = T.Mono.copy(color = T.Text3, fontSize = 12.sp), maxLines = 2,
-                overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
-            if (text != null) {
-                Text(
-                    if (copied) L.copied() else L.copy(),
-                    fontSize = 14.sp,
-                    color = T.Accent,
-                    modifier = Modifier
-                        .clip(T.R8)
-                        .clickable {
-                            clip.setText(AnnotatedString(text!!))
-                            copied = true
-                        }
-                        .padding(horizontal = 10.dp, vertical = 8.dp),
-                )
+        Text(path, style = T.Mono.copy(color = T.Text3, fontSize = 12.sp), maxLines = 2,
+            overflow = TextOverflow.Ellipsis, modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp))
+        if (text != null && !loading) {
+            Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), verticalAlignment = Alignment.CenterVertically) {
+                TextButton(onClick = { clip.setText(AnnotatedString(text!!)); copied = true }) { Text(if (copied) L.copied() else L.copy()) }
+                if (richText) TextButton(onClick = { source = !source }) { Text(if (source) previewText("预览", "Preview") else previewText("源码", "Source")) }
+                if (!richText || source) TextButton(onClick = { wrap = !wrap }) { Text(if (wrap) previewText("不换行", "No wrap") else previewText("自动换行", "Wrap")) }
             }
         }
-        Spacer(Modifier.height(8.dp))
+        refreshed?.let { Text(it, color = T.Text3, fontSize = 12.sp, modifier = Modifier.padding(horizontal = 16.dp)) }
         when {
-            loading -> Row(
-                Modifier.fillMaxWidth().padding(32.dp),
-                horizontalArrangement = Arrangement.Center,
-            ) {
-                CircularProgressIndicator(Modifier.size(28.dp), color = T.Accent, strokeWidth = 2.dp)
-                Spacer(Modifier.width(12.dp))
-                Text(L.docLoading(), fontSize = 14.sp, color = T.Text2)
+            loading -> Box(Modifier.fillMaxWidth().weight(1f), contentAlignment = Alignment.Center) {
+                CircularProgressIndicator(color = T.Accent, modifier = Modifier.size(28.dp))
             }
-            error != null -> Column(Modifier.padding(horizontal = 22.dp, vertical = 12.dp)) {
-                Text(error!!, fontSize = 14.sp, color = T.Err, lineHeight = 20.sp)
-                Spacer(Modifier.height(12.dp))
-                Text(
-                    L.docRetry(),
-                    fontSize = 14.sp,
-                    color = T.Accent,
-                    modifier = Modifier
-                        .clip(T.R8)
-                        .border(0.5.dp, T.Border, T.R8)
-                        .clickable { reload() }
-                        .padding(horizontal = 14.dp, vertical = 8.dp),
-                )
+            error != null -> Column(Modifier.fillMaxWidth().weight(1f).verticalScroll(rememberScrollState()).padding(16.dp)) {
+                SelectableOutput { Text(error!!, color = T.Err) }
+                TextButton(onClick = { generation++ }) { Text(L.docRetry()) }
             }
-            kind == PreviewKind.Image && bytes != null -> ImagePreviewBody(bytes!!)
-            kind == PreviewKind.Pdf && bytes != null -> PdfPreviewBody(bytes!!)
+            kind == PreviewKind.Image && bytes != null -> Column(Modifier.weight(1f)) {
+                TextButton(onClick = { fullImage = true }) { Text(L.viewOriginal()) }
+                ImagePreviewBody(bytes!!, Modifier.fillMaxWidth().weight(1f))
+            }
+            kind == PreviewKind.Pdf && bytes != null -> PdfPreviewBody(bytes!!, Modifier.fillMaxWidth().weight(1f))
             text != null -> {
-                Box(
-                    Modifier
-                        .padding(horizontal = 16.dp)
-                        .fillMaxWidth()
-                        .clip(T.R12)
-                        .background(T.CodeBlock)
-                        .border(0.5.dp, T.Border, T.R12)
-                        .horizontalScroll(rememberScrollState())
-                        .padding(12.dp),
-                ) {
-                    Text(text!!, style = T.Mono.copy(lineHeight = 20.sp), color = T.Ink)
+                val value = text!!
+                when {
+                    !source && extension in setOf("csv", "tsv") ->
+                        DelimitedPreview(value, if (extension == "tsv") '\t' else ',', Modifier.weight(1f))
+                    !source && extension in setOf("html", "htm") ->
+                        StaticHtmlPreview(value, Modifier.fillMaxWidth().weight(1f))
+                    else -> Column(Modifier.fillMaxWidth().weight(1f).verticalScroll(rememberScrollState()).padding(16.dp)) {
+                        if (!source && extension in setOf("md", "markdown")) MarkdownView(value)
+                        else SelectableOutput {
+                            Text(value, style = T.Mono.copy(fontSize = Pocket.prefs.codeFontSize.sp, lineHeight = (Pocket.prefs.codeFontSize * 1.5).sp), color = T.Ink,
+                                softWrap = wrap, modifier = if (wrap) Modifier.fillMaxWidth() else Modifier.horizontalScroll(rememberScrollState()))
+                        }
+                    }
                 }
             }
-            else -> Text(
-                L.docUnsupported(),
-                fontSize = 14.sp,
-                color = T.Text2,
-                modifier = Modifier.padding(22.dp),
-            )
+            else -> Text(L.docUnsupported(), color = T.Text2, modifier = Modifier.padding(16.dp))
         }
-        }
+    }
+}
+
+/** Only embedded subresources may bypass interception; CSP further restricts their content types. */
+internal fun allowStaticHtmlResource(isMainFrame: Boolean, scheme: String?): Boolean =
+    !isMainFrame && scheme.equals("data", ignoreCase = true)
+
+/** Same static-only policy as official basic-document.ts; no JavaScript bridge or navigable browser. */
+@Composable
+private fun StaticHtmlPreview(text: String, modifier: Modifier) {
+    val html = remember(text) {
+        """<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'none'; style-src 'unsafe-inline'; img-src data:; font-src data:; media-src data:; connect-src 'none'; frame-src 'none'; form-action 'none'; base-uri 'none'">""" + text
+    }
+    Column(modifier) {
+        Text(previewText("安全静态预览：不执行脚本、不加载外部资源。", "Safe static preview: scripts and external resources are disabled."),
+            color = T.Text3, fontSize = 12.sp, modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp))
+        AndroidView(
+            factory = { context ->
+                WebView(context).apply {
+                    settings.javaScriptEnabled = false
+                    settings.domStorageEnabled = false
+                    settings.allowFileAccess = false
+                    settings.allowContentAccess = false
+                    settings.blockNetworkLoads = true
+                    settings.mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
+                    settings.setSupportMultipleWindows(false)
+                    settings.javaScriptCanOpenWindowsAutomatically = false
+                    settings.setSupportZoom(true)
+                    settings.builtInZoomControls = true
+                    settings.displayZoomControls = false
+                    settings.useWideViewPort = true
+                    settings.loadWithOverviewMode = true
+                    webViewClient = object : WebViewClient() {
+                        override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest) = true
+                        override fun shouldInterceptRequest(view: WebView, request: WebResourceRequest): WebResourceResponse? =
+                            if (allowStaticHtmlResource(request.isForMainFrame, request.url.scheme)) null
+                            else WebResourceResponse("text/plain", "UTF-8", java.io.ByteArrayInputStream(ByteArray(0)))
+                    }
+                }
+            },
+            update = { view ->
+                if (view.tag != html) {
+                    view.tag = html
+                    view.loadDataWithBaseURL("https://dsh-preview.invalid/", html, "text/html", "UTF-8", null)
+                }
+            },
+            onRelease = { view -> view.stopLoading(); view.destroy() },
+            modifier = Modifier.fillMaxWidth().weight(1f),
+        )
     }
 }
 
 private suspend fun readAllText(sessionId: String, path: String): String = withContext(Dispatchers.IO) {
     val out = StringBuilder()
     var offset = 1
-    var guard = 0
-    while (guard++ < 500) {
-        val r = Pocket.readFile(sessionId, path, offset = offset, limit = 200)
-            ?: error("no client")
-        val chunk = r["text"].str().orEmpty()
-        val lines = r["lines"].long()?.toInt() ?: 0
-        val eof = r["eof"].bool() ?: true
-        if (chunk.isNotEmpty()) {
-            if (out.isNotEmpty()) out.append('\n')
+    var version: String? = null
+    while (true) {
+        val result = Pocket.readFile(sessionId, path, offset = offset, limit = 200) ?: error("Disconnected")
+        val pageVersion = result["version"].str()
+        if (offset == 1) version = pageVersion
+        else check(pageVersion == version) { previewText("文件在读取过程中发生变更，请刷新。", "The file changed while reading; refresh to reload.") }
+        val chunk = result["text"].str().orEmpty()
+        val lines = result["lines"].long()?.toInt() ?: 0
+        if ('\u0000' in chunk) error(previewText("二进制文件不支持文本预览", "Binary files cannot be previewed as text"))
+        if (out.length + chunk.length > 4_000_000) error(previewText("文件过大，无法安全预览全文", "File too large to safely preview in full"))
+        if (lines > 0) {
+            if (offset > 1) out.append('\n')
             out.append(chunk)
         }
-        if (eof || lines == 0) break
+        if (result["eof"].bool() != false) break
+        check(lines > 0) { "File response did not advance" }
         offset += lines
     }
     out.toString()
 }
 
-@Composable
-private fun ImagePreviewBody(bytes: ByteArray) {
-    val bitmap = remember(bytes) {
-        runCatching { BitmapFactory.decodeByteArray(bytes, 0, bytes.size) }.getOrNull()
+/** RFC 4180 quoted cells, escaped quotes and embedded newlines; no lossy line splitting. */
+internal fun parseDelimitedPreview(text: String, delimiter: Char): List<List<String>> {
+    val rows = mutableListOf<List<String>>()
+    var row = mutableListOf<String>()
+    val cell = StringBuilder()
+    var quoted = false
+    var index = 0
+    var cells = 0
+    fun finishCell() {
+        require(++cells <= 100_000 && row.size < 128) { "Table too large for grid preview; use Source / 表格过大，请切换源码查看" }
+        row.add(cell.toString())
+        cell.setLength(0)
     }
-    Box(
-        Modifier
-            .padding(horizontal = 16.dp)
-            .fillMaxWidth()
-            .clip(T.R12)
-            .background(T.DocumentPreviewBg)
-            .padding(12.dp),
-        contentAlignment = Alignment.Center,
-    ) {
-        if (bitmap == null) {
-            Text(L.imagePreviewFailed(), fontSize = 14.sp, color = T.Text2)
-        } else {
-            Image(
-                bitmap.asImageBitmap(),
-                contentDescription = L.image(),
-                modifier = Modifier.fillMaxWidth().heightIn(max = 480.dp),
-                contentScale = ContentScale.Fit,
-            )
+    while (index < text.length) {
+        val ch = text[index]
+        when {
+            ch == '"' && quoted && text.getOrNull(index + 1) == '"' -> { cell.append('"'); index++ }
+            ch == '"' && (quoted || cell.isEmpty()) -> quoted = !quoted
+            ch == delimiter && !quoted -> finishCell()
+            (ch == '\n' || ch == '\r') && !quoted -> {
+                finishCell(); rows.add(row); row = mutableListOf()
+                if (ch == '\r' && text.getOrNull(index + 1) == '\n') index++
+            }
+            else -> cell.append(ch)
+        }
+        index++
+    }
+    require(!quoted) { "Unclosed quoted table cell" }
+    if (cell.isNotEmpty() || row.isNotEmpty() || (text.isNotEmpty() && text.last() != '\n' && text.last() != '\r')) {
+        finishCell()
+        rows.add(row)
+    }
+    return rows
+}
+
+@Composable
+private fun DelimitedPreview(text: String, delimiter: Char, modifier: Modifier) {
+    val result = remember(text, delimiter) { runCatching { parseDelimitedPreview(text, delimiter) } }
+    val rows = result.getOrNull()
+    if (rows == null) {
+        Text(result.exceptionOrNull()?.message.orEmpty(), color = T.Err, modifier = modifier.padding(16.dp))
+        return
+    }
+    val columns = remember(rows) { rows.maxOfOrNull { it.size } ?: 0 }
+    Box(modifier.horizontalScroll(rememberScrollState())) {
+        LazyColumn(Modifier.width((columns.coerceAtLeast(1) * 160).dp)) {
+            itemsIndexed(rows) { index, row ->
+                Row(Modifier.fillMaxWidth().background(if (index == 0) T.Fill2 else T.Surface)) {
+                    repeat(columns) { column ->
+                        SelectableOutput(Modifier.width(160.dp).padding(8.dp)) {
+                            Text(row.getOrNull(column).orEmpty(), color = T.Ink, fontSize = Pocket.prefs.codeFontSize.sp)
+                        }
+                    }
+                }
+                HorizontalDivider(color = T.Border)
+            }
+        }
+    }
+}
+
+private fun decodePreviewBitmap(bytes: ByteArray, maxPixels: Long): Bitmap? {
+    val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+    BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
+    var sample = 1
+    while (bounds.outWidth.toLong() / sample * (bounds.outHeight / sample) > maxPixels ||
+        bounds.outWidth / sample > 8192 || bounds.outHeight / sample > 8192) sample *= 2
+    return BitmapFactory.decodeByteArray(bytes, 0, bytes.size, BitmapFactory.Options().apply { inSampleSize = sample })
+}
+
+@Composable
+private fun ImagePreviewBody(bytes: ByteArray, modifier: Modifier = Modifier, original: Boolean = false) {
+    var loading by remember(bytes, original) { mutableStateOf(true) }
+    val bitmap by produceState<Bitmap?>(null, bytes, original) {
+        try { value = withContext(Dispatchers.Default) { decodePreviewBitmap(bytes, if (original) 16_000_000L else 4_000_000L) } }
+        catch (cancelled: CancellationException) { throw cancelled }
+        catch (_: Exception) { value = null }
+        finally { loading = false }
+    }
+    Box(modifier.background(T.DocumentPreviewBg), contentAlignment = Alignment.Center) {
+        when {
+            loading -> CircularProgressIndicator(color = T.Accent, modifier = Modifier.size(24.dp))
+            bitmap != null -> Image(bitmap!!.asImageBitmap(), L.image(), Modifier.fillMaxSize(), contentScale = ContentScale.Fit)
+            else -> Text(L.imagePreviewFailed(), color = T.Text2)
+        }
+    }
+}
+
+internal fun clampImageTranslation(translation: Offset, scale: Float, viewport: IntSize): Offset {
+    if (scale <= 1f || viewport.width <= 0 || viewport.height <= 0) return Offset.Zero
+    val overflow = (scale - 1f).coerceAtLeast(0f) / 2f
+    val maxX = viewport.width * overflow
+    val maxY = viewport.height * overflow
+    return Offset(translation.x.coerceIn(-maxX, maxX), translation.y.coerceIn(-maxY, maxY))
+}
+
+@Composable
+fun FullScreenImagePreview(bytes: ByteArray, onDismiss: () -> Unit) {
+    var scale by remember(bytes) { mutableFloatStateOf(1f) }
+    var translation by remember(bytes) { mutableStateOf(Offset.Zero) }
+    var viewport by remember(bytes) { mutableStateOf(IntSize.Zero) }
+    fun zoomTo(nextScale: Float) {
+        scale = nextScale.coerceIn(1f, 8f)
+        translation = clampImageTranslation(translation, scale, viewport)
+    }
+    Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
+        Surface(Modifier.fillMaxSize(), color = T.Surface) {
+            Column(Modifier.systemBarsPadding()) {
+                Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), verticalAlignment = Alignment.CenterVertically) {
+                    TextButton(onClick = { scale = 1f; translation = Offset.Zero }) { Text(previewText("重置", "Reset")) }
+                    TextButton(onClick = { zoomTo(scale / 1.5f) },
+                        modifier = Modifier.semantics { contentDescription = previewText("缩小图片", "Zoom out") }) { Text("−", fontSize = 24.sp) }
+                    TextButton(onClick = { zoomTo(scale * 1.5f) },
+                        modifier = Modifier.semantics { contentDescription = previewText("放大图片", "Zoom in") }) { Text("+", fontSize = 24.sp) }
+                    TextButton(onClick = onDismiss) { Text(previewText("关闭", "Close")) }
+                }
+                Box(Modifier.fillMaxWidth().weight(1f).clipToBounds().onSizeChanged {
+                    viewport = it
+                    translation = clampImageTranslation(translation, scale, it)
+                }.pointerInput(bytes) {
+                    detectTransformGestures { _, pan, zoom, _ ->
+                        scale = (scale * zoom).coerceIn(1f, 8f)
+                        translation = clampImageTranslation(translation + pan, scale, size)
+                    }
+                }) {
+                    ImagePreviewBody(bytes, Modifier.fillMaxSize().graphicsLayer {
+                        scaleX = scale; scaleY = scale; translationX = translation.x; translationY = translation.y
+                    }, original = true)
+                }
+            }
+        }
+    }
+}
+
+/** Renderer owns only the PDF descriptor. Visible lazy rows own their bounded-size bitmaps. */
+internal class PreviewPdf(val file: File) : AutoCloseable {
+    private val descriptor = ParcelFileDescriptor.open(file, ParcelFileDescriptor.MODE_READ_ONLY)
+    private val renderer = try { PdfRenderer(descriptor) } catch (failure: Throwable) { descriptor.close(); throw failure }
+    private var closed = false
+    val pageCount = renderer.pageCount
+    @Synchronized fun render(index: Int): Bitmap {
+        check(!closed)
+        return renderer.openPage(index).use { page ->
+            val scale = minOf(1440f / page.width, 2048f / page.height, 2f)
+            Bitmap.createBitmap((page.width * scale).toInt().coerceAtLeast(1), (page.height * scale).toInt().coerceAtLeast(1), Bitmap.Config.ARGB_8888).also {
+                it.eraseColor(AndroidColor.WHITE)
+                page.render(it, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
+            }
+        }
+    }
+    @Synchronized override fun close() { if (!closed) { closed = true; try { renderer.close() } finally { file.delete() } } }
+}
+
+/** Own the descriptor until cancellation and finish cleanup off the UI thread even after disposal. */
+internal suspend fun holdPreviewPdf(bytes: ByteArray, cacheDir: File, onOpened: (PreviewPdf) -> Unit) {
+    var opened: PreviewPdf? = null
+    try {
+        withContext(Dispatchers.IO) {
+            val file = File.createTempFile("preview-", ".pdf", cacheDir)
+            try { file.writeBytes(bytes); opened = PreviewPdf(file) }
+            catch (failure: Throwable) { file.delete(); throw failure }
+        }
+        onOpened(checkNotNull(opened))
+        awaitCancellation()
+    } finally {
+        withContext(NonCancellable + Dispatchers.IO) { opened?.close() }
+    }
+}
+
+@Composable
+private fun PdfPreviewBody(bytes: ByteArray, modifier: Modifier) {
+    val context = LocalContext.current
+    var document by remember(bytes) { mutableStateOf<PreviewPdf?>(null) }
+    var error by remember(bytes) { mutableStateOf<String?>(null) }
+    LaunchedEffect(bytes) {
+        try { holdPreviewPdf(bytes, context.cacheDir) { document = it } }
+        catch (cancelled: CancellationException) { throw cancelled }
+        catch (failure: Exception) { error = L.pdfFailed(failure.message.orEmpty()) }
+    }
+    val pdf = document
+    when {
+        error != null -> Text(error!!, color = T.Err, modifier = modifier.padding(16.dp))
+        pdf == null -> Box(modifier, contentAlignment = Alignment.Center) { Text(L.pdfRendering(), color = T.Text2) }
+        else -> LazyColumn(modifier.background(T.DocumentPreviewBg), contentPadding = PaddingValues(12.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            items(pdf.pageCount, key = { it }) { index -> PdfPage(pdf, index) }
         }
     }
 }
 
 @Composable
-private fun PdfPreviewBody(bytes: ByteArray) {
-    val ctx = LocalContext.current
-    var pageCount by remember { mutableIntStateOf(0) }
-    var pages by remember { mutableStateOf<List<Bitmap>>(emptyList()) }
-    var err by remember { mutableStateOf<String?>(null) }
-    var cacheFile by remember { mutableStateOf<File?>(null) }
-
-    DisposableEffect(bytes) {
-        val f = File(ctx.cacheDir, "preview-${System.nanoTime()}.pdf")
-        cacheFile = f
-        onDispose {
-            pages.forEach { it.recycle() }
-            pages = emptyList()
-            f.delete()
-        }
+private fun PdfPage(document: PreviewPdf, index: Int) {
+    var bitmap by remember(document, index) { mutableStateOf<Bitmap?>(null) }
+    var error by remember(document, index) { mutableStateOf<String?>(null) }
+    LaunchedEffect(document, index) {
+        try { bitmap = withContext(Dispatchers.IO) { document.render(index) } }
+        catch (cancelled: CancellationException) { throw cancelled }
+        catch (failure: Exception) { error = L.pdfFailed(failure.message.orEmpty()) }
     }
-
-    LaunchedEffect(bytes) {
-        err = null
-        pages = emptyList()
-        pageCount = 0
-        runCatching {
-            withContext(Dispatchers.IO) {
-                val f = cacheFile ?: error("no cache")
-                f.writeBytes(bytes)
-                ParcelFileDescriptor.open(f, ParcelFileDescriptor.MODE_READ_ONLY).use { pfd ->
-                    PdfRenderer(pfd).use { renderer ->
-                        pageCount = renderer.pageCount
-                        val rendered = ArrayList<Bitmap>(minOf(renderer.pageCount, 8))
-                        val limit = minOf(renderer.pageCount, 8)
-                        for (i in 0 until limit) {
-                            renderer.openPage(i).use { page ->
-                                val scale = 2
-                                val bmp = Bitmap.createBitmap(
-                                    page.width * scale,
-                                    page.height * scale,
-                                    Bitmap.Config.ARGB_8888,
-                                )
-                                page.render(bmp, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
-                                rendered += bmp
-                            }
-                        }
-                        pages = rendered
-                    }
-                }
-            }
-        }.onFailure {
-            err = L.pdfFailed(it.message ?: it.toString())
-        }
-    }
-
-    Column(
-        Modifier
-            .padding(horizontal = 16.dp)
-            .fillMaxWidth()
-            .clip(T.R12)
-            .background(T.DocumentPreviewBg)
-            .padding(12.dp),
-    ) {
+    Column(Modifier.fillMaxWidth()) {
+        Text("${L.pdfPage(index + 1)} / ${document.pageCount}", color = T.Text3, fontSize = 12.sp)
+        val page = bitmap
         when {
-            err != null -> Text(err!!, fontSize = 14.sp, color = T.Err)
-            pages.isEmpty() -> Text(L.pdfRendering(), fontSize = 13.sp, color = T.Text2)
-            else -> {
-                pages.forEachIndexed { i, bmp ->
-                    Text(L.pdfPage(i + 1), fontSize = 12.sp, color = T.Text3, modifier = Modifier.padding(bottom = 6.dp))
-                    Image(
-                        bmp.asImageBitmap(),
-                        contentDescription = L.pdfPage(i + 1),
-                        modifier = Modifier.fillMaxWidth().padding(bottom = 12.dp),
-                        contentScale = ContentScale.FillWidth,
-                    )
-                }
-                if (pageCount > pages.size) {
-                    Text(
-                        L.docLoadMore(),
-                        fontSize = 12.sp,
-                        color = T.Caption,
-                        modifier = Modifier.padding(top = 4.dp),
-                    )
-                }
-            }
+            page != null -> Image(page.asImageBitmap(), L.pdfPage(index + 1), Modifier.fillMaxWidth(), contentScale = ContentScale.FillWidth)
+            error != null -> Text(error!!, color = T.Err)
+            else -> Box(Modifier.fillMaxWidth().height(320.dp), contentAlignment = Alignment.Center) { CircularProgressIndicator(color = T.Accent) }
         }
     }
 }

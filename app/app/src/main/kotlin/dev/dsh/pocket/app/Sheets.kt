@@ -2,6 +2,7 @@ package dev.dsh.pocket.app
 
 import androidx.compose.foundation.*
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
@@ -29,6 +30,12 @@ import dev.dsh.pocket.protocol.arr
 import dev.dsh.pocket.protocol.get
 import dev.dsh.pocket.protocol.str
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.async
+import kotlinx.coroutines.flow.collect
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -135,22 +142,41 @@ private fun CodeBox(s: String, maxLines: Int = 20) {
     }
 }
 
+
+
 @Composable
 fun PresetSheet(cur: String, editable: Boolean, onDismiss: () -> Unit, onPick: (String) -> Unit) {
-    val avail = Pocket.presets.collectAsState().value.ifEmpty { PRESET_LABEL.keys.toList() }
+    val roster by Pocket.presetRoster.collectAsState()
+    val avail = roster.filter { Pocket.prefs.showCodeWorkView || it["id"].str() !in setOf("minimal", "ptc") || it["id"].str() == cur }
     PocketSheet(onDismiss) {
         SheetTitle("Agent 预设")
         if (!editable) Text("预设在创建会话时确定", fontSize = 13.sp, color = T.Text3, modifier = Modifier.padding(horizontal = 22.dp))
-        avail.forEach { id -> val l = PRESET_LABEL[id]; OptionRow(l?.first ?: id, l?.second, selected = cur == id, enabled = editable) { onPick(id); onDismiss() } }
+        if (avail.isEmpty()) Text("主机未提供预设目录", color = T.Text3, modifier = Modifier.padding(22.dp))
+        avail.forEach { preset ->
+            val id = preset["id"].str() ?: return@forEach
+            OptionRow(presetName(preset), presetDescription(preset), selected = cur == id, enabled = editable) { onPick(id); onDismiss() }
+        }
     }
 }
 
 @Composable
-fun WorkspaceSheet(list: List<String>, cur: String?, onDismiss: () -> Unit, onPick: (String) -> Unit) {
+fun WorkspaceSheet(cur: String?, onDismiss: () -> Unit, onPick: (String) -> Unit) {
+    val workspaces by Pocket.workspaces.collectAsState()
+    val ops by Pocket.ops.collectAsState()
+    var adding by remember { mutableStateOf(false) }
+    if (adding) {
+        WorkspaceDirectorySheet(onCreated = { onPick(it.path); onDismiss() }, onDismiss = { adding = false })
+        return
+    }
     PocketSheet(onDismiss) {
-        SheetTitle("工作区")
-        if (list.isEmpty()) Text("使用桌面端默认工作区", fontSize = 14.sp, color = T.Text3, modifier = Modifier.padding(22.dp))
-        list.forEach { w -> OptionRow(w.substringAfterLast('/'), w, D.folderOpen, selected = w == cur) { onPick(w); onDismiss() } }
+        SheetTitle("选择工作区")
+        workspaces.forEach { workspace ->
+            OptionRow(workspace.title ?: workspace.path.substringAfterLast('/'), workspace.path, D.folderOpen, selected = workspace.path == cur) {
+                onPick(workspace.path); onDismiss()
+            }
+        }
+        if (workspaces.isEmpty()) Text("尚未添加工作区", color = T.Text3, modifier = Modifier.padding(22.dp))
+        if ("workspace.create" in ops) OptionRow("选择文件夹…", icon = D.folderOpen) { adding = true }
     }
 }
 
@@ -166,33 +192,13 @@ fun PlusSheet(
     onCompact: () -> Unit,
     onExport: () -> Unit,
 ) {
-    val cmds = "commands.execute" in Pocket.ops.value
-    val export = "session.export" in Pocket.ops.value
-    val inChat = Pocket.chat.collectAsState().value != null
-    fun pick(then: () -> Unit) {
-        // Clear a leftover `/` if the slash sheet was dismissed without picking.
-        Pocket.consumeComposerSlash()
-        then()
-    }
-    PocketSheet(onDismiss) {
-        SectionLabel(L.sectionAdd())
-        OptionRow(L.file(), icon = D.paperclip, code = "file", enabled = inChat) { pick { onFile(); onDismiss() } }
-        OptionRow("目标", icon = D.goal, code = "goal", trailing = "设置或查看长期任务目标", enabled = cmds && inChat) { pick { onGoal() } }
-        OptionRow("计划", icon = D.plan, code = "plan", trailing = "进入或退出计划模式", enabled = cmds && inChat) { pick { onPlan(); onDismiss() } }
-        OptionRow("反馈", icon = D.paperPlane, code = "feedback", trailing = "发送关于当前会话的反馈", enabled = cmds && inChat) { pick { onFeedback() } }
-        SectionLabel(L.sectionCommands())
-        OptionRow("压缩", icon = D.compact, code = "compact", trailing = "压缩以上对话内容", enabled = cmds && inChat) { pick { onCompact(); onDismiss() } }
-        OptionRow("权限", icon = D.permission("danger-full-access"), code = "permission", trailing = "切换权限预设") { pick { onPerm() } }
-        OptionRow("模型", icon = D.data, code = "model", trailing = "选择本会话使用的模型") { pick { onModel() } }
-        OptionRow("下载日志", icon = D.download, code = "export", trailing = "将当前会话导出为 ZIP", enabled = export && inChat) { pick { onExport(); onDismiss() } }
-    }
+    CommandPopupSheet(onDismiss, onFile, onGoal, onPlan, onFeedback, onCompact, onPerm, onModel, onExport)
 }
 
 @Composable
 fun MoreSheet(chat: ChatState?, onDismiss: () -> Unit, onFeedback: () -> Unit, onExport: () -> Unit) {
     var renaming by remember { mutableStateOf(false) }
     val export = "session.export" in Pocket.ops.value
-    val cmds = "commands.execute" in Pocket.ops.value
     val inChat = chat != null
     PocketSheet(onDismiss) {
         if (renaming && chat != null) {
@@ -206,17 +212,22 @@ fun MoreSheet(chat: ChatState?, onDismiss: () -> Unit, onFeedback: () -> Unit, o
         // Session-only extras (mobile keeps rename here; desktop puts it on the sidebar row menu).
         if (chat != null) {
             OptionRow("重命名", icon = D.edit) { renaming = true }
-            SectionLabel("会话统计")
-            val u = chat.usage
-            Row(Modifier.padding(horizontal = 22.dp, vertical = 4.dp).fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                Stat("轮次", "${u.turns}"); Stat("步数", "${u.steps}"); Stat("输入", kfmt(u.inputTokens)); Stat("输出", kfmt(u.outputTokens)); Stat("缓存命中", u.cacheHitPercent?.let { "$it%" } ?: "—")
+            val metrics = chat.composerMetrics
+            SectionLabel(if (metrics.activityIsWholeSession) "会话统计" else "已加载历史统计")
+            Column(Modifier.padding(horizontal = 22.dp, vertical = 4.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                metrics.activity?.let { Text("${it.turns} 轮 · ${it.steps} 步", color = T.Text2, fontSize = 13.sp) }
+                metrics.tokens?.let {
+                    Text("输入 ${kfmt(it.billedInputTokens)} · 输出 ${kfmt(it.outputTokens)}", color = T.Text2, fontSize = 13.sp)
+                    it.cacheHitPercent?.let { percent -> Text("缓存命中 $percent%", color = T.Text3, fontSize = 12.sp) }
+                }
+                if (metrics.activity == null && metrics.tokens == null) Text("主机未提供统计数据", color = T.Text3, fontSize = 13.sp)
             }
             Spacer(Modifier.height(8.dp))
         }
         // Official dsh Session Header ⋯ (dsh-session-log-export HeaderAction): download always listed;
         // feedback when that path is available. Need a session → disable (never hide into an empty sheet).
         OptionRow("下载 Session 日志", icon = D.download, enabled = export && inChat) { onExport(); onDismiss() }
-        if (cmds) OptionRow("反馈", icon = D.paperPlane, enabled = inChat) { onFeedback() }
+        if ("sessionFeedback.record" in Pocket.ops.value) OptionRow("反馈", icon = D.paperPlane, enabled = inChat) { onFeedback() }
         val fork = "sessions.fork" in Pocket.ops.value
         if (fork && chat != null) {
             OptionRow(
@@ -233,39 +244,105 @@ fun MoreSheet(chat: ChatState?, onDismiss: () -> Unit, onFeedback: () -> Unit, o
 }
 
 @Composable
-fun GoalSheet(onDismiss: () -> Unit) {
-    var text by remember { mutableStateOf("") }
-    PocketSheet(onDismiss) {
-        SheetTitle("目标")
-        OutlinedTextField(text, { text = it }, placeholder = { Text("设置或查看长期任务目标") }, shape = T.R12,
-            modifier = Modifier.padding(horizontal = 22.dp).fillMaxWidth(), minLines = 3)
-        Spacer(Modifier.height(10.dp))
-        OptionRow("查看当前目标", icon = D.goal) { Pocket.executeCommand("/goal"); onDismiss() }
-        OptionRow("清除目标", icon = D.trash) { Pocket.executeCommand("/goal clear"); onDismiss() }
-        Button({
-            val t = text.trim(); if (t.isNotEmpty()) Pocket.executeCommand("/goal $t"); onDismiss()
-        }, Modifier.padding(22.dp).fillMaxWidth().height(50.dp), enabled = text.isNotBlank(), shape = T.R12, colors = PrimaryColors()) {
-            Text("设置目标")
+fun GoalBar(chat: ChatState, onEdit: () -> Unit) {
+    val goal = chat.goal ?: return
+    if (goal["phase"].str() == "complete") return
+    val activation by Pocket.goalActivation.collectAsState()
+    LaunchedEffect(chat.sessionId, goal["revision"], chat.running) {
+        try { Pocket.getGoal(chat.sessionId) }
+        catch (e: CancellationException) { throw e }
+        catch (e: Exception) { Pocket.errors.tryEmit(e.message ?: "目标状态读取失败") }
+    }
+    Row(Modifier.fillMaxWidth().heightIn(min = 48.dp).clickable(onClick = onEdit).padding(horizontal = 20.dp),
+        verticalAlignment = Alignment.CenterVertically) {
+        Icon(D.goal, null, tint = T.Text3, modifier = Modifier.size(16.dp))
+        Column(Modifier.weight(1f).padding(horizontal = 8.dp)) {
+            Text(goalPhaseLabel(goal["phase"].str(), activation), color = T.Text3, fontSize = 12.sp)
+            Text(goal["objective"].str().orEmpty(), color = T.Text2, fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
+        Icon(D.chevronRight, "编辑目标", tint = T.Text3, modifier = Modifier.size(16.dp))
+    }
+}
+
+private fun goalPhaseLabel(phase: String?, activation: String?): String = when (phase) {
+    "active" -> if (activation == "disarmed") "已暂停的目标" else "进行中的目标"
+    "paused" -> "已暂停的目标"
+    "blocked" -> "受阻的目标"
+    "complete" -> "已完成的目标"
+    else -> "目标状态未知"
+}
+
+@Composable
+fun GoalSheet(onDismiss: () -> Unit) {
+    val chat by Pocket.chat.collectAsState()
+    val activation by Pocket.goalActivation.collectAsState()
+    val goal = chat?.goal
+    var text by remember(goal?.get("id")) { mutableStateOf(goal?.get("objective").str().orEmpty()) }
+    var busy by remember { mutableStateOf(false) }
+    var error by remember { mutableStateOf<String?>(null) }
+    val scope = rememberCoroutineScope()
+    fun mutate(action: String) {
+        val st = chat ?: return
+        val current = goal ?: return
+        if (busy) return
+        val ref = buildJsonObject {
+            current["id"]?.let { put("id", it) }
+            current["revision"]?.let { put("revision", it) }
+        }
+        busy = true; error = null
+        scope.launch {
+            try {
+                Pocket.mutateGoal(st.sessionId, action, ref, if (action == "edit") text.trim() else null)
+                onDismiss()
+            } catch (e: CancellationException) { throw e }
+            catch (e: Exception) { error = e.message ?: "目标修改失败" }
+            finally { busy = false }
+        }
+    }
+    PocketSheet({ if (!busy) onDismiss() }) {
+        SheetTitle("目标")
+        goal?.let {
+            SectionLabel(goalPhaseLabel(it["phase"].str(), activation))
+            it["blockedReason"]["message"].str()?.let { reason -> Text(reason, color = T.WarnText, modifier = Modifier.padding(horizontal = 22.dp)) }
+        }
+        OutlinedTextField(text, { text = it }, enabled = !busy, placeholder = { Text("长期任务目标") }, shape = T.R12,
+            modifier = Modifier.padding(horizontal = 22.dp).fillMaxWidth(), minLines = 3)
+        error?.let { Text(it, color = T.Err, modifier = Modifier.padding(22.dp)) }
+        if (goal != null) {
+            val phase = goal["phase"].str()
+            if (phase == "active" && activation == "armed") OptionRow("暂停目标", enabled = !busy) { mutate("pause") }
+            if (phase == "paused" || (phase == "active" && activation == "disarmed")) OptionRow("恢复目标", enabled = !busy) { mutate("resume") }
+            OptionRow("清除目标", icon = D.trash, enabled = !busy) { mutate("clear") }
+        }
+        Button({
+            if (goal != null) mutate("edit")
+            else {
+                val id = chat?.sessionId ?: return@Button
+                busy = true; error = null
+                scope.launch {
+                    try {
+                        val command = Pocket.commandCatalog(id).firstOrNull { builtinCommandName(it["definitionId"].str()) == "goal" }
+                            ?: throw IllegalStateException("主机没有提供目标指令")
+                        Pocket.executeCommand("/${command["name"].str()} ${text.trim()}") { success ->
+                            busy = false
+                            if (success) onDismiss() else error = "目标创建失败，内容已保留"
+                        }
+                    } catch (e: CancellationException) { throw e }
+                    catch (e: Exception) { busy = false; error = e.message }
+                }
+            }
+        }, Modifier.padding(22.dp).fillMaxWidth().heightIn(min = 48.dp), enabled = !busy && text.isNotBlank() && chat != null,
+            shape = T.R12, colors = PrimaryColors()) { Text(if (busy) "提交中…" else if (goal == null) "设置目标" else "保存目标") }
     }
 }
 
 @Composable
 fun FeedbackSheet(onDismiss: () -> Unit) {
-    var text by remember { mutableStateOf("") }
-    PocketSheet(onDismiss) {
-        SheetTitle("反馈")
-        OutlinedTextField(text, { text = it }, placeholder = { Text("发送关于当前会话的反馈") }, shape = T.R12,
-            modifier = Modifier.padding(horizontal = 22.dp).fillMaxWidth(), minLines = 4)
-        Button({
-            val t = text.trim(); if (t.isNotEmpty()) Pocket.executeCommand("/feedback $t"); onDismiss()
-        }, Modifier.padding(22.dp).fillMaxWidth().height(50.dp), enabled = text.isNotBlank(), shape = T.R12, colors = PrimaryColors()) {
-            Text("发送")
-        }
+    FeedbackCategorySheet(onDismiss) { category, note, complete ->
+        Pocket.recordSessionFeedback(category, note, complete)
     }
 }
 
-@Composable private fun Stat(k: String, v: String) = Column { Text(v, fontSize = 17.sp, fontWeight = FontWeight.Medium); Text(k, fontSize = 12.sp, color = T.Text3) }
 
 
 /** Desktop TodoPanel — locale `todo.title` / status / progress. */
@@ -286,6 +363,7 @@ fun TodoSheet(todos: List<dev.dsh.pocket.protocol.TodoItem>, onDismiss: () -> Un
             if (pending > 0) add("$pending 待处理")
         }.joinToString(" · ")
         SelectableOutput {
+            Column {
             Text(progress, fontSize = 13.sp, color = T.Text3, modifier = Modifier.padding(horizontal = 22.dp, vertical = 4.dp))
             todos.forEach { item ->
                 Row(
@@ -309,6 +387,7 @@ fun TodoSheet(todos: List<dev.dsh.pocket.protocol.TodoItem>, onDismiss: () -> Un
                     }
                 }
             }
+            }
         }
     }
 }
@@ -316,33 +395,98 @@ fun TodoSheet(todos: List<dev.dsh.pocket.protocol.TodoItem>, onDismiss: () -> Un
 
 @Composable
 fun JobsSheet(sessionId: String, onDismiss: () -> Unit) {
-    var jobs by remember { mutableStateOf<List<Triple<String, String, String>>>(emptyList()) }
+    var jobs by remember(sessionId) { mutableStateOf<List<JsonObject>>(emptyList()) }
     var err by remember { mutableStateOf<String?>(null) }
-    val scope = rememberCoroutineScope()
-    fun refresh() {
-        scope.launch {
-            runCatching {
-                val r = Pocket.listJobs(sessionId)
-                jobs = r["jobs"].arr().orEmpty().mapNotNull { j ->
-                    val id = j["id"].str() ?: j["jobId"].str() ?: return@mapNotNull null
-                    val status = j["status"].str() ?: j["state"].str() ?: ""
-                    val label = j["label"].str() ?: j["command"].str() ?: j["name"].str() ?: id
-                    Triple(id, label, status)
-                }
-                err = null
-            }.onFailure { err = it.message }
-        }
+    var loading by remember { mutableStateOf(true) }
+    var attempt by remember { mutableIntStateOf(0) }
+    var selected by remember { mutableStateOf<JsonObject?>(null) }
+    var stopping by remember { mutableStateOf<JsonObject?>(null) }
+    var busy by remember { mutableStateOf(false) }
+    LaunchedEffect(sessionId, attempt) {
+        loading = true; err = null
+        try { jobs = Pocket.listJobs(sessionId)["jobs"].arr().orEmpty().filterIsInstance<JsonObject>() }
+        catch (e: CancellationException) { throw e }
+        catch (e: Exception) { err = e.message ?: "任务加载失败" }
+        finally { loading = false }
     }
-    LaunchedEffect(sessionId) { refresh() }
+    val detail = selected
+    val output = remember(detail?.get("id")) { mutableStateListOf<String>() }
+    var detailStatus by remember(detail) { mutableStateOf(detail?.get("status").str().orEmpty()) }
+    var detailError by remember(detail) { mutableStateOf<String?>(null) }
+    var followAttempt by remember { mutableIntStateOf(0) }
+    LaunchedEffect(detail, followAttempt) {
+        val job = detail ?: return@LaunchedEffect
+        val id = job["id"].str() ?: job["jobId"].str() ?: return@LaunchedEffect
+        output.clear(); detailError = null
+        fun appendOutput(text: String) {
+            if (text.isEmpty()) return
+            if (output.isEmpty()) output.add("")
+            val lines = text.split('\n')
+            output[output.lastIndex] = output.last() + lines.first()
+            for (index in 1 until lines.size) output.add(lines[index])
+        }
+        try {
+            Pocket.followJob(sessionId, id).collect { frame ->
+                when (frame["type"].str()) {
+                    "opened", "status" -> detailStatus = frame["job"]["status"].str().orEmpty()
+                    "output" -> {
+                        val chunks = frame["chunks"].arr().orEmpty()
+                        if (frame["lossy"].toString() == "true") appendOutput("\n[部分历史输出已过期]\n")
+                        chunks.forEach {
+                            if (it["gapBefore"].toString() == "true") appendOutput("\n[此处输出存在缺失]\n")
+                            appendOutput(it["text"].str().orEmpty())
+                        }
+                    }
+                }
+            }
+        } catch (e: CancellationException) { throw e }
+        catch (e: Exception) { detailError = e.message ?: "输出读取失败" }
+    }
+    androidx.activity.compose.BackHandler(enabled = detail != null) { selected = null }
     PocketSheet(onDismiss) {
-        SheetTitle("后台任务")
-        err?.let { Text(it, color = T.Err, fontSize = 13.sp, modifier = Modifier.padding(22.dp)) }
-        if (jobs.isEmpty() && err == null) Text("0 个后台任务", fontSize = 14.sp, color = T.Text3, modifier = Modifier.padding(22.dp))
-        jobs.forEach { (id, label, status) ->
-            OptionRow(label, status.ifBlank { id }, D.clock, trailing = "终止") {
-                Pocket.killJob(sessionId, id); refresh()
+        if (detail != null) {
+            TextButton({ selected = null }) { Text("返回后台任务") }
+            SheetTitle(detail["label"].str() ?: detail["name"].str() ?: detail["id"].str().orEmpty())
+            SectionLabel(detailStatus)
+            detail["detail"].str()?.let { CodeBox(it) }
+            detailError?.let { Text(it, color = T.Err, modifier = Modifier.padding(22.dp)); TextButton({ followAttempt++ }) { Text("重试") } }
+            if (output.isEmpty() && detailError == null) Text("等待任务输出…", color = T.Text3, modifier = Modifier.padding(22.dp))
+            else SelectableOutput {
+                LazyColumn(Modifier.fillMaxWidth().heightIn(min = 160.dp, max = 420.dp).padding(horizontal = 22.dp)) {
+                    items(output.size) { index ->
+                        Text(output[index], style = T.Mono, color = T.Text2, modifier = Modifier.fillMaxWidth())
+                    }
+                }
+            }
+        } else {
+            SheetTitle("后台任务")
+            TextButton({ attempt++ }, enabled = !loading) { Text("刷新") }
+            if (loading) LinearProgressIndicator(Modifier.fillMaxWidth())
+            err?.let { Text(it, color = T.Err, modifier = Modifier.padding(22.dp)) }
+            if (!loading && jobs.isEmpty() && err == null) Text("0 个后台任务", color = T.Text3, modifier = Modifier.padding(22.dp))
+            jobs.forEach { job ->
+                val id = job["id"].str() ?: job["jobId"].str() ?: return@forEach
+                val status = job["status"].str() ?: job["state"].str().orEmpty()
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                    Box(Modifier.weight(1f)) { OptionRow(job["label"].str() ?: job["command"].str() ?: job["name"].str() ?: id, status, D.clock) { selected = job } }
+                    if (status == "running" || status == "pending") TextButton({ stopping = job }) { Text("终止", color = T.Err) }
+                }
             }
         }
+    }
+    stopping?.let { job ->
+        AlertDialog(onDismissRequest = { if (!busy) stopping = null }, title = { Text("终止后台任务？") },
+            text = { Text(job["label"].str() ?: job["id"].str().orEmpty()) },
+            dismissButton = { TextButton({ stopping = null }, enabled = !busy) { Text("取消") } },
+            confirmButton = { TextButton({
+                if (!busy) {
+                    busy = true
+                    Pocket.killJob(sessionId, job["id"].str() ?: job["jobId"].str().orEmpty()) { success ->
+                        busy = false
+                        if (success) { stopping = null; attempt++ } else err = "终止失败，请重试"
+                    }
+                }
+            }, enabled = !busy) { Text("终止", color = T.Err) } })
     }
 }
 
@@ -375,110 +519,162 @@ fun CommandPopupSheet(
     onPerm: () -> Unit,
     onModel: () -> Unit,
     onExport: () -> Unit,
+    initialQuery: String = "",
 ) {
-    val cmds = "commands.execute" in Pocket.ops.value
-    val export = "session.export" in Pocket.ops.value
-    val inChat = Pocket.chat.collectAsState().value != null
-    fun pick(then: () -> Unit) {
-        Pocket.consumeComposerSlash()
-        then()
+    val chat by Pocket.chat.collectAsState()
+    var query by remember { mutableStateOf(initialQuery) }
+    var commands by remember { mutableStateOf<List<JsonObject>>(emptyList()) }
+    var loading by remember { mutableStateOf(true) }
+    var error by remember { mutableStateOf<String?>(null) }
+    var attempt by remember { mutableIntStateOf(0) }
+    LaunchedEffect(chat?.sessionId, attempt) {
+        loading = true; error = null
+        try {
+            val id = chat?.sessionId
+            commands = if (id == null) emptyList() else Pocket.commandCatalog(id)
+        } catch (e: CancellationException) { throw e }
+        catch (e: Exception) { error = e.message ?: "无法加载指令" }
+        finally { loading = false }
     }
     PocketSheet(onDismiss) {
+        SheetTitle("指令")
+        OutlinedTextField(query, { query = it }, placeholder = { Text("搜索指令") }, singleLine = true,
+            modifier = Modifier.padding(horizontal = 22.dp).fillMaxWidth())
+        if (loading) LinearProgressIndicator(Modifier.fillMaxWidth())
+        error?.let { Text(it, color = T.Err, modifier = Modifier.padding(22.dp)); TextButton({ attempt++ }) { Text("重试") } }
+        if (chat == null) Text("请先打开会话以读取主机指令目录", color = T.Text3, modifier = Modifier.padding(22.dp))
         SectionLabel(L.sectionAdd())
-        OptionRow(L.file(), icon = D.paperclip, code = "file", enabled = inChat) { pick { onFile(); onDismiss() } }
-        OptionRow("目标", icon = D.goal, code = "goal", trailing = "设置或查看长期任务目标", enabled = cmds && inChat) {
-            pick { onGoal() }
+        if ("file".contains(query, true) || L.file().contains(query, true)) OptionRow(L.file(), icon = D.paperclip, code = "file", enabled = chat != null && "attachments.upload" in Pocket.ops.value) {
+            Pocket.consumeComposerSlash(); onFile(); onDismiss()
         }
-        OptionRow("计划", icon = D.plan, code = "plan", trailing = "进入或退出计划模式", enabled = cmds && inChat) {
-            pick { onPlan(); onDismiss() }
-        }
-        OptionRow("反馈", icon = D.paperPlane, code = "feedback", trailing = "发送关于当前会话的反馈", enabled = cmds && inChat) {
-            pick { onFeedback() }
+        if ("model".contains(query, true) || "模型".contains(query)) OptionRow("模型", icon = D.data, code = "model") { Pocket.consumeComposerSlash(); onModel() }
+        if (chat == null && ("permission".contains(query, true) || "权限".contains(query))) OptionRow("权限", icon = D.permission("danger-full-access"), code = "permission") {
+            Pocket.consumeComposerSlash(); onPerm()
         }
         SectionLabel(L.sectionCommands())
-        OptionRow("压缩", icon = D.compact, code = "compact", trailing = "压缩以上对话内容", enabled = cmds && inChat) {
-            pick { onCompact(); onDismiss() }
+        val filtered = commands.filter { it["name"].str().orEmpty().contains(query, true) || it["description"].str().orEmpty().contains(query, true) }
+        if (!loading && error == null && chat != null && filtered.isEmpty()) Text(L.noOptions(), color = T.Text3, modifier = Modifier.padding(22.dp))
+        filtered.forEach { command ->
+            val name = command["name"].str() ?: return@forEach
+            OptionRow("/$name", command["description"].str()) {
+                // Only decorate commands that the Host actually advertised. Others return
+                // the real token to the composer so arguments can be reviewed before send.
+                when (builtinCommandName(command["definitionId"].str())) {
+                    "goal" -> { Pocket.consumeComposerSlash(); onGoal() }
+                    "plan" -> {
+                        Pocket.consumeComposerSlash()
+                        if (name == "plan") onPlan() else Pocket.executeCommand("/$name")
+                        onDismiss()
+                    }
+                    "feedback" -> { Pocket.consumeComposerSlash(); onFeedback() }
+                    "compact" -> {
+                        Pocket.consumeComposerSlash()
+                        if (name == "compact") onCompact() else Pocket.executeCommand("/$name")
+                        onDismiss()
+                    }
+                    "permission" -> { Pocket.consumeComposerSlash(); onPerm() }
+                    "export" -> { Pocket.consumeComposerSlash(); onExport(); onDismiss() }
+                    else -> { Pocket.insertComposer("/$name"); onDismiss() }
+                }
+            }
         }
-        OptionRow("权限", icon = D.permission("danger-full-access"), code = "permission", trailing = "切换权限预设") {
-            pick { onPerm() }
-        }
-        OptionRow("模型", icon = D.data, code = "model", trailing = "选择本会话使用的模型") {
-            pick { onModel() }
-        }
-        OptionRow("下载日志", icon = D.download, code = "export", trailing = "将当前会话导出为 ZIP", enabled = export && inChat) {
-            pick { onExport(); onDismiss() }
-        }
-        if (!cmds && !export) Text(L.noOptions(), fontSize = 14.sp, color = T.Text3, modifier = Modifier.padding(22.dp))
     }
+}
+
+internal fun builtinCommandName(definitionId: String?): String? = when (definitionId) {
+    "@deepseek-ai/dsh-command-goal" -> "goal"
+    "@deepseek-ai/dsh-plan-mode" -> "plan"
+    "@deepseek-ai/dsh-command-feedback" -> "feedback"
+    "@deepseek-ai/dsh-command-compact" -> "compact"
+    "@deepseek-ai/dsh-permission-presets" -> "permission"
+    "@deepseek-ai/dsh-session-log-export" -> "export"
+    else -> null
 }
 
 /** `@` mention popup — files + sessions from Host reference services. */
 @Composable
-fun MentionPopupSheet(onDismiss: () -> Unit) {
-    var query by remember { mutableStateOf("") }
+fun MentionPopupSheet(onDismiss: () -> Unit, initialQuery: String = "") {
+    val chat by Pocket.chat.collectAsState()
+    var query by remember { mutableStateOf(initialQuery) }
     var files by remember { mutableStateOf<List<dev.dsh.pocket.protocol.FileReference>>(emptyList()) }
     var sessions by remember { mutableStateOf<List<dev.dsh.pocket.protocol.SessionReference>>(emptyList()) }
     var loading by remember { mutableStateOf(false) }
-    LaunchedEffect(query) {
-        loading = true
-        Pocket.lookupFileRefs(query) { files = it }
-        Pocket.lookupSessionRefs(query) { sessions = it; loading = false }
+    var error by remember { mutableStateOf<String?>(null) }
+    var attempt by remember { mutableIntStateOf(0) }
+    LaunchedEffect(chat?.sessionId, query, attempt) {
+        loading = true; error = null; files = emptyList(); sessions = emptyList()
+        try {
+            val id = chat?.sessionId ?: throw IllegalStateException("请先打开会话")
+            val results = kotlinx.coroutines.coroutineScope {
+                val fileRequest = async { Pocket.referenceFiles(id, query) }
+                val sessionRequest = async { Pocket.referenceSessions(id, query) }
+                fileRequest.await() to sessionRequest.await()
+            }
+            files = results.first
+            sessions = results.second
+        } catch (e: CancellationException) { throw e }
+        catch (e: Exception) { error = e.message ?: "搜索失败" }
+        finally { loading = false }
     }
     PocketSheet(onDismiss) {
-        SheetTitle("@")
-        OutlinedTextField(
-            query, { query = it },
-            placeholder = { Text(L.searchEllipsis()) },
-            singleLine = true, shape = T.R12,
-            modifier = Modifier.padding(horizontal = 22.dp).fillMaxWidth(),
-        )
-        if (loading) {
-            Text(L.searchingSessions(), fontSize = 13.sp, color = T.Caption, modifier = Modifier.padding(22.dp))
-        }
-        fun pick(token: String) {
-            val t = token.trim()
-            if (t.isNotEmpty()) Pocket.insertComposer(if (t.startsWith("@")) t else "@$t")
-            onDismiss()
-        }
+        SheetTitle("@ 文件或对话")
+        OutlinedTextField(query, { query = it }, placeholder = { Text(L.searchEllipsis()) },
+            singleLine = true, shape = T.R12, modifier = Modifier.padding(horizontal = 22.dp).fillMaxWidth())
+        if (query.contains('/')) TextButton({ query = query.trimEnd('/').substringBeforeLast('/', "").let { if (it.isEmpty()) "" else "$it/" } }) { Text("上一级目录") }
+        if (loading) LinearProgressIndicator(Modifier.fillMaxWidth())
+        error?.let { Text(it, color = T.Err, modifier = Modifier.padding(22.dp)); TextButton({ attempt++ }) { Text("重试") } }
+        fun pick(token: String) { Pocket.insertComposer("@${token.removePrefix("@")}"); onDismiss() }
         SectionLabel(L.filesAndFolders())
-        if (files.isEmpty()) Text(L.noOptions(), fontSize = 13.sp, color = T.Caption, modifier = Modifier.padding(horizontal = 22.dp, vertical = 6.dp))
-        files.take(12).forEach { f ->
-            OptionRow(f.path.substringAfterLast('/'), f.path, D.folderOpen) { pick(f.path) }
+        if (!loading && files.isEmpty() && error == null) Text(L.noOptions(), color = T.Caption, modifier = Modifier.padding(horizontal = 22.dp))
+        files.forEach { f ->
+            val directory = f.kind == "directory" || f.kind == "folder"
+            val token = fileReferenceToken(f.path, directory) ?: return@forEach
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Box(Modifier.weight(1f)) {
+                    OptionRow(f.path.trimEnd('/').substringAfterLast('/'), f.path, if (directory) D.folderOpen else D.document) {
+                        if (directory) query = "${f.path.trimEnd('/')}/" else pick(token)
+                    }
+                }
+                if (directory) TextButton({ pick(token) }) { Text("引用") }
+            }
         }
-        SectionLabel(L.conversations())
-        if (sessions.isEmpty()) Text(L.noOptions(), fontSize = 13.sp, color = T.Caption, modifier = Modifier.padding(horizontal = 22.dp, vertical = 6.dp))
-        sessions.take(12).forEach { s ->
-            OptionRow(s.title ?: s.mention, s.mention, D.chat) { pick(s.mention) }
+        val conversations = sessions.filter { it.kind != "subagent" }
+        val subagents = sessions.filter { it.kind == "subagent" }
+        listOf(L.conversations() to conversations, L.subagents() to subagents).forEach { (title, rows) ->
+            SectionLabel(title)
+            if (!loading && rows.isEmpty() && error == null) Text(L.noOptions(), color = T.Caption, modifier = Modifier.padding(horizontal = 22.dp))
+            rows.forEach { s -> OptionRow(s.title ?: s.mention, s.mention, if (s.kind == "subagent") D.user else D.chat) { pick(s.mention) } }
         }
-        SectionLabel(L.subagents())
-        val subs = sessions.filter { it.kind == "subagent" || it.mention.contains("sub", ignoreCase = true) }
-        if (subs.isEmpty()) Text(L.noOptions(), fontSize = 13.sp, color = T.Caption, modifier = Modifier.padding(horizontal = 22.dp, vertical = 6.dp))
-        else subs.forEach { s -> OptionRow(s.title ?: s.mention, s.mention, D.user) { pick(s.mention) } }
     }
 }
 
 /** Dislike → feedback category + optional note (desktop feedback.dialog). */
 @Composable
-fun FeedbackCategorySheet(onDismiss: () -> Unit, onSubmit: (category: String?, note: String) -> Unit) {
+fun FeedbackCategorySheet(onDismiss: () -> Unit, onSubmit: (category: String?, note: String, complete: (Boolean) -> Unit) -> Unit) {
     var category by remember { mutableStateOf<String?>(null) }
     var note by remember { mutableStateOf("") }
-    PocketSheet(onDismiss) {
+    var busy by remember { mutableStateOf(false) }
+    var error by remember { mutableStateOf(false) }
+    PocketSheet({ if (!busy) onDismiss() }) {
         SheetTitle(L.submitFeedback())
         SectionLabel(L.feedbackCategory())
         L.feedbackCategories().forEach { (id, label) ->
-            OptionRow(label, selected = category == id) { category = id }
+            OptionRow(label, selected = category == id, enabled = !busy) { category = if (category == id) null else id }
         }
         SectionLabel(L.feedbackDetail())
         OutlinedTextField(
             note, { note = it },
+            enabled = !busy,
             placeholder = { Text(L.feedbackHint()) },
             shape = T.R12,
             modifier = Modifier.padding(horizontal = 22.dp).fillMaxWidth(),
             minLines = 3,
         )
+        if (error) Text("提交失败，内容已保留，请重试", color = T.Err, modifier = Modifier.padding(horizontal = 22.dp))
         Button(
-            { onSubmit(category, note.trim()) },
+            { if (!busy) { busy = true; error = false; onSubmit(category, note.trim()) { success -> busy = false; error = !success; if (success) onDismiss() } } },
             Modifier.padding(22.dp).fillMaxWidth().height(50.dp),
+            enabled = !busy,
             shape = T.R12,
             colors = PrimaryColors(),
         ) { Text(L.submitFeedback()) }

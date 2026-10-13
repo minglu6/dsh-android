@@ -14,7 +14,7 @@ import { zipSync, strToU8 } from 'fflate'
 import { permissionOps, presetOps, commandOps, filesOps, jobsOps, exportOps, terminalOps } from './src/extra-ops.js'
 import {
   searchOps, workspaceOps, feedbackOps, fileReferenceOps, sessionReferenceOps,
-  attachmentOps, workspaceChangesOps, uploadOps, userQuestionOps,
+  attachmentOps, workspaceChangesOps, uploadOps, userQuestionOps, directoryOps, goalOps,
 } from './src/parity-ops.js'
 import {
   modelsSettingsOps, pluginsOps, pluginSettingsOps, pluginInventoryOps, scheduleOps, credentialsOps,
@@ -168,7 +168,14 @@ export function apply(ctx, config = {}) {
       }
     })
   })
-  ctx.inject(['agentPresets'], (c) => { c.effect(() => server.registerOps(presetOps(c.agentPresets))) })
+  ctx.inject(['agentPresets'], (c) => {
+    c.effect(() => server.registerOps(presetOps(c.agentPresets)))
+    c.inject(['settingsController'], (settingsCtx) => {
+      settingsCtx.effect(() => server.registerOps({
+        'presets.settings': presetOps(settingsCtx.agentPresets, settingsCtx.settingsController)['presets.settings'],
+      }))
+    })
+  })
   ctx.inject(['commands', 'agents'], (c) => { c.effect(() => server.registerOps(commandOps(c.commands, c.agents))) })
   ctx.inject(['workspaceFiles', 'sessions'], (c) => {
     c.effect(() => server.registerOps(filesOps(c.workspaceFiles, c.sessions, c.get?.('sandboxPolicy'))))
@@ -183,15 +190,44 @@ export function apply(ctx, config = {}) {
   ctx.inject(['workspaceChanges'], (c) => {
     c.effect(() => server.registerOps(workspaceChangesOps(c.workspaceChanges)))
   })
-  // Prefer Host workspaceController when present; registry alone is enough in-process.
-  ctx.inject(['workspaceRegistry'], (c) => {
+  ctx.inject(['workspaceController'], (c) => {
     c.effect(() => {
-      const controller = c.get?.('workspaceController') ?? null
-      server.registerOps(workspaceOps(controller, c.workspaceRegistry))
+      const unregister = server.registerOps(workspaceOps(c.workspaceController))
+      const ac = new AbortController()
+      void (async () => {
+        try {
+          for await (const frame of c.workspaceController.follow(ac.signal)) {
+            if (ac.signal.aborted) break
+            server.broadcastEvent('workspace.changed', { frame })
+          }
+        } catch (error) {
+          if (!ac.signal.aborted) log('workspace follow failed', String(error?.message ?? error))
+        }
+      })()
+      return () => { ac.abort(); unregister() }
     })
   })
+  ctx.inject(['directoryPickerController', 'directoryPicker'], (c) => {
+    c.effect(() => server.registerOps(directoryOps(c.directoryPickerController, c.directoryPicker)))
+  })
+  ctx.inject(['goals', 'agents'], (c) => {
+    c.effect(() => server.registerOps(goalOps(c.goals, c.agents)))
+  })
+  ctx.on('goal/activation-changed', (payload) => server.broadcastEvent('goal.activation', payload))
+  ctx.on('schedule/changed', () => server.broadcastEvent('schedule.changed'))
+  ctx.on('plugin-manager/changed', () => server.broadcastEvent('plugins.changed'))
+  ctx.on('agent-preset/selected', (sessionId) => server.broadcastEvent('presets.changed', { sessionId }))
   ctx.inject(['messageFeedback'], (c) => {
     c.effect(() => server.registerOps(feedbackOps(c.messageFeedback)))
+  })
+  ctx.inject(['sessionFeedback'], (c) => {
+    c.effect(() => server.registerOps({
+      'sessionFeedback.record': async (a) => {
+        const result = await c.sessionFeedback.record(a)
+        if (!result.ok) throw Object.assign(new Error(result.error.code), { code: result.error.code, details: result.error })
+        return result.value
+      },
+    }))
   })
   ctx.inject(['fileReferences', 'agents'], (c) => {
     c.effect(() => server.registerOps(fileReferenceOps(c.fileReferences, c.agents)))
@@ -207,23 +243,24 @@ export function apply(ctx, config = {}) {
       settleOffer: (callId, answer) => server.settleUserQuestion(callId, answer),
     })))
   })
-  // Desktop settings surfaces (models providers / plugins / schedules / credentials).
+  // Desktop settings surfaces (models providers / plugins / schedules).
   // Each inject is optional; ops appear in hello only while the Host service is live.
-  ctx.inject(['llm'], (c) => {
+  ctx.inject(['llm', 'settingsController'], (c) => {
     c.effect(() => {
       const settings = c.get?.('settings') ?? null
-      const settingsController = c.get?.('settingsController') ?? null
+      const settingsController = c.settingsController
       const credentials = c.get?.('credentials') ?? null
-      server.registerOps(modelsSettingsOps({
+      return server.registerOps(modelsSettingsOps({
         llm: c.llm, settings, settingsController, credentials,
       }))
     })
   })
   ctx.inject(['pluginManager'], (c) => {
     c.effect(() => {
-      server.registerOps(pluginsOps(c.pluginManager))
+      const removePlugins = server.registerOps(pluginsOps(c.pluginManager))
       const inventory = c.get?.('pluginInventory') ?? null
-      server.registerOps(pluginInventoryOps(inventory, c.pluginManager))
+      const removeInventory = server.registerOps(pluginInventoryOps(inventory, c.pluginManager))
+      return () => { removePlugins(); removeInventory() }
     })
   })
   ctx.inject(['settingsController'], (c) => {
@@ -233,14 +270,7 @@ export function apply(ctx, config = {}) {
     c.effect(() => server.registerOps(scheduleOps(c.schedule)))
   })
   ctx.inject(['credentials'], (c) => {
-    c.effect(() => {
-      const llm = c.get?.('llm') ?? null
-      const settings = c.get?.('settings') ?? null
-      const settingsController = c.get?.('settingsController') ?? null
-      server.registerOps(credentialsOps({
-        credentials: c.credentials, llm, settings, settingsController,
-      }))
-    })
+    c.effect(() => server.registerOps(credentialsOps({ credentials: c.credentials })))
   })
   ctx.inject(['webServer'], (webCtx) => registerPairRoute(webCtx, manage))
 

@@ -11,7 +11,7 @@ Decision tags used in §9:
 |---|---|
 | **feasible** | Ship on phone with existing or new pocket RPC; adapt to bottom sheets / phone chrome |
 | **needs-plugin** | Host has the data/API; pocket must forward it before UI can finish |
-| **hide** | Requires local desktop chrome (OS picker, embedded browser, native editor). Plugin management, credentials and task management use Host APIs; do not hide them or show stubs. |
+| **hide** | Requires local desktop chrome (OS picker, native editor). Existing desktop plugin, model API-key and task management use Host APIs; the browser uses Android WebView. An API alone must not create a new phone feature. |
 
 Phone constraints (always): desktop `--dsw-alias-*` chrome (light/dark via Appearance), Tokyo Night tokens where terminal/code surfaces need them, Meslo for mono, themed bottom sheets (no system `AlertDialog`), desktop locale strings only, no `FLAG_SECURE`, no secrets in logs, no GMS.
 
@@ -48,9 +48,9 @@ Android: `Markdown.kt` covers the common subset; keep aligning to desktop tokeni
 
 ### 1.3 Thinking blocks
 
-- Live: `chat.deepDiving` / `chat.deepDivingFor`  
-- Done: `message.turnProcess.thoughtForAWhile` + duration (`duration.*`)  
-- Folded into process groups per transcript-view preference (`settings.transcript.*`, `settings.collapse.*`)
+- Reasoning uses the official Think icon and a one-line `思考 · preview` disclosure. Expanding one reasoning row renders its recorded Markdown independently; it does not open all reasoning blocks.
+- Reasoning duration is not a completed-Turn duration. The completed-Turn header uses only Host `turn/start` and `turn/end` timestamps.
+- Original reasoning/tool order and Host step ownership are retained across snapshots, live delivery and history paging.
 
 ### 1.4 Tool-process folding
 
@@ -67,6 +67,13 @@ Labels from `chat` locale, e.g.:
 | `message.turnProcess.worked` | 已完成 | Completed |
 
 Grouping policy keys: `settings.transcript.{compact,standard,detailed,verbose}`, `settings.collapse.{completion,nextInput}`.
+
+Android groups by Host Turn identity rather than user-message boundaries. Completed duration is `max(1000, end.time - start.time)`, floored into seconds/minutes/hours like desktop; missing boundaries show completion without an invented number. Aborted/error turns show stopped/failed without duration. Pure-text and reasoning-only turns still get the completed-Turn header.
+
+Expanding a Turn reveals compact process groups and ordered reasoning/tool rows. Consecutive tool-bearing steps share the tool-process disclosure; the final reasoning-only step remains separate. Tool titles use the official registry and recognized recorded results provide counts/receipts; failed or malformed output is never presented as a successful zero count. Full tool input/output remains available through the detail action.
+
+The reported greeting was replayed from its original journal: `1791882640048 - 1791882633220 = 6828ms`, displayed as 6 seconds. All three reasoning blocks and three calls retain the order `reasoning → wait_agent → reasoning → job_list → list_agents → reasoning`. Evidence: [collapsed](screenshots/real-turn-6s-collapsed.png), [expanded](screenshots/real-turn-6s-expanded.png), [dark process](screenshots/26-message-chrome-expanded-dark.png).
+
 
 ### 1.5 Approvals & permission prompts
 
@@ -113,7 +120,7 @@ Slash menu pick consumes the typed `/` (desktop `slash/input-consume-token`) the
 
 Retry is **display** of Host `llm/retry` chains (`message.retry.*`), not a user button.
 
-**Icon chrome (desktop MessageIconActions / MessageFeedbackActions):** Android uses the same ui-primitives Regular SVG paths as vector drawables (`dsh_copy` / `dsh_check` / `dsh_like` / `dsh_like_fill` / `dsh_dislike` / `dsh_dislike_fill` / `dsh_branch`). Locale strings are **contentDescription + long-press tooltip only** — no visible text buttons. Order: copy → like/dislike (assistant) → branch; user clock `start`, assistant clock `end`; 28dp hit targets, 8dp gap, tertiary caption tint (`T.Caption`). Timestamp `maxLines=1` / `softWrap=false` so it never wraps.
+**Icon chrome (desktop MessageIconActions / MessageFeedbackActions):** Android uses the official ui-primitives Regular SVG paths. User messages show clock → copy, without a branch control. Assistant messages show copy → like/dislike → branch → clock; copy/branch are 17dp and feedback icons 15dp, with tertiary `T.Text3` tint. Feedback selection swaps outline/fill rather than inventing blue/red colors. Touch targets remain 48dp for phones; unavailable branch actions retain their disabled state and reason. Locale strings remain accessibility labels/tooltips, not visible text buttons. Process/reasoning chevrons use vector artwork and rotate on expansion instead of text glyphs.
 
 ### 1.9 Timestamps
 
@@ -175,6 +182,19 @@ Package: `ui-conversation` input bar (+ `ui-commands`, `ui-model-selection`, `ui
 | Stop | `input.stop` 停止生成 | `cancel` |
 | Busy send pref | `settings.enter.*` | phone-local prefs |
 
+### Model picker on Android
+
+`ModelPicker.kt` uses a composer-anchored popup, not a bottom sheet. The root has Model / Effort value rows; each opens its own compact list. Plus and `/model` enter the model list directly. Back/Escape returns from a submenu, outside tap dismisses, and a successful selection closes the popup. Touch rows retain a 44dp minimum; the card is bounded on narrow and landscape screens.
+
+- The trigger and model rows have no decorative model logo. Rows show model names and a trailing check/pending indicator, without repeated descriptions.
+- Providers follow the official stable order (DeepSeek account, official, then Host order), with pinned group headings. Catalogs over four models expose name-only fuzzy search, clear/no-match states, and keyboard arrows/Enter.
+- Reasoning names, availability and default come from the exact Host model. No default effort means an explicit `Default` choice; switching models never carries the old model's effort, and choosing the current model preserves it.
+- Directory loading, partial-provider failures and retry are visible. Pending requests disable repeated selection; a rejected RPC leaves the original selection intact. Current selection follows `modelSelection.next` or the global catalog default, not `lastUsed`; stale replies cannot overwrite a newer projection.
+
+Compose render evidence: [root](screenshots/10-model-picker-root.png), [models](screenshots/10b-model-picker-models.png), [efforts](screenshots/10c-model-picker-efforts.png), [dark landscape](screenshots/10d-model-picker-landscape-dark.png), [composer interaction](screenshots/10e-model-picker-composer.png). These are Robolectric renderings with fixture catalogs, not a connected-phone/production-Host acceptance run.
+
+OnePlus device evidence with the real Host catalog: [model list](screenshots/phone-model-picker-list.png), [reasoning levels](screenshots/phone-model-picker-effort.png). Selecting the already-current model/effort closed the menu without changing the selection.
+
 ---
 
 ## 4. Sidebar (left)
@@ -202,8 +222,8 @@ Empty: `empty.none` 暂无会话 / `empty.noMatches` 无匹配结果.
 ## 5. Right panel
 
 Packages: `ui-sidebar-right` + files / terminal / browser / documentpreview / deliverables.  
-**Desktop guide launchers are only three:** Workspace files, New terminal, Browser (orders 10/20/30).  
-Phone adaptation: a full-height end panel (full width on phones, capped at 480dp on wider windows), shared by the guide, workspace files, document previews and terminal. The guide uses the official compass, 20dp capsule radius, 14dp gaps and title/description hierarchy. Back returns to the guide (or file list from preview); collapse closes the panel. Browser, docking, split and floating windows remain desktop-only. The terminal entry is labeled “终端” because Android reuses the current running Host PTY rather than creating a new shell on every visit.
+**Desktop core guide launchers:** Workspace files, New terminal, Browser (orders 10/20/30); the optional session-inspector contributes 会话数据诊断 (order 60).
+Phone adaptation: a full-height end panel (full width on phones, capped at 480dp on wider windows), shared by the guide, workspace files, document previews, terminal, browser and session diagnostics. The guide uses the official compass, 20dp capsule radius, 14dp gaps and title/description hierarchy. Back returns to the guide (or file list from preview); collapse closes the panel. Entries never require a manual conversation selection: Host-bound tools prepare an addressable blank Session in the current workspace when needed. Browser opens locally. Docking, split and floating windows remain desktop-only. The terminal entry reuses the current running Host PTY rather than creating a new shell on every visit.
 
 Guide artwork is selected from the owning feature's registry, not from generic controls: `filesDefinition().guide[].icon` → `GuideArtworkFiles` (`guide-artwork.tsx`, fill `#FFBC4D`, stroke `#FFCD78`, width `1.97886`); terminal registration → `PluginArtworkTerminal` (`plugin-artwork.tsx`, stroke `#679EFE`, width `3.5`). Both keep the original 36×36 viewBox at 26dp display size and never receive theme tint. The compass is 56dp (`neutral-200` light / `neutral-700` dark); its title glyph is 16dp with `label-tertiary`. Expand/collapse use the mirrored Regular panel glyph at 15dp with `label-secondary`; Android retains larger touch targets.
 
@@ -211,7 +231,8 @@ Guide artwork is selected from the owning feature's registry, not from generic c
 |---|---|---|---|
 | 工作区文件 | `guide.title` 工作区文件 | `files.list` / `files.read` | feasible (done) |
 | 终端 | `title` 终端 / guide `新建终端` | `terminal.*` | feasible (done) |
-| 浏览器 | `guide.title` 浏览器 | client iframe only | **hide** |
+| 浏览器 | `guide.title` 浏览器 | Android WebView | **done** — desktop toolbar, navigation and explicit URL/title restore; no additional explanatory UI |
+| 会话数据诊断 | `tab.title` 会话数据诊断 | Original follow/history records + Android chat projection | **done** — raw/grouped views, filtering, paging and JSON details; no desktop DOM picking |
 | 文档预览 | documentpreview locales | Host file bytes + preview (opened via `openResource`, not a guide capsule) | **done** — `files.read` text paging + `files.readBytes` (base64) for image/PDF; `FilePreviewSheet` |
 | Dock split / float | `dock.*` | desktop layout | **hide** (single adaptive end panel) |
 | Deliverable / changes-review tabs | `deliverables.*` | events / turn payloads | feasible once events parsed |
@@ -220,7 +241,7 @@ Guide artwork is selected from the owning feature's registry, not from generic c
 
 | Surface | Desktop home | Locale | Phone |
 |---|---|---|---|
-| 后台任务 | **Session header** job list action | `job.list.aria` 后台任务 | action beside the chat/trajectory tabs, opening `JobsSheet` |
+| 后台任务 | **Session header** job list action | `job.list.aria` 后台任务 | beside chat/trajectory tabs; hidden for an empty session roster, otherwise shows live (`running` / `stopping`) count or retained total and opens `JobsSheet`; refreshes every 3s only while visible and connected; session/Host changes clear old state and errors show unavailable rather than stale counts |
 | 任务 / 清单 (Todo) | **Conversation dock** `TodoPanel` (+ `todo_write` tool row) | `todo.title` 任务 | progress row above the composer, opening `TodoSheet` |
 
 ---
@@ -230,10 +251,9 @@ Guide artwork is selected from the owning feature's registry, not from generic c
 | Page | Locale | Decision |
 |---|---|---|
 | 通用设置 | `general.nav` 通用设置; language / appearance / font / transcript / collapse / busy-send / performance | feasible (mostly done, phone-local) |
-| 模型 | settings-models | **done** — native Compose + `models.providers` / `models.settingsMutate` / credentials for API keys |
+| 模型 | settings-models | **done** — provider rows with API-key status and one inline editor; collapsed customized settings; native model fields/input types, restore defaults, catalog/custom creation and discovery selection. Revision-fenced writes preserve drafts on failure. No standalone credential page or JSON model editor. |
 | 内置插件 / 插件 | plugin-manager + inventory | **done with native limits** — official groups, bundle/component controls, inspect/install/cancel/uninstall, diagnostics, registry and revision-fenced configuration. Host directory specs work; Android OS directory picker does not. Custom React slots remain Web-only. |
 | 自动化任务 | ui-schedule | **done** — new conversation for creation; searchable catalog, precise rule/title/instruction editing, conflict-safe delete/history. No pause toggle (`inactive` = ended). |
-| 凭证 | credentials describe/set/unset | **done** — list/add/edit/delete; values masked (`configured` only) |
 | Agent 预设 | agent-preset | keep roster info |
 | 打开配置文件 | `openDocument` | **hide** (local desktop editor) |
 | Shell / 终端 limits | settings-shell | native fields over `plugins.settingsDescribe/settingsMutate` |
@@ -241,6 +261,8 @@ Guide artwork is selected from the owning feature's registry, not from generic c
 | 连接 / 审批通知 | phone Connections + notify pref | keep |
 
 Appearance values from `ui-theme` locales. Performance: `settings.performance.{compact,detailed}`.
+
+Model settings use the desktop UI, not the mere existence of Host APIs, as their feature boundary. API keys stay write-only inside provider editors. Opening a card and applying changes refresh its Host snapshot; external configuration changes require reopening the card. Saving settings never changes the current session model.
 
 ---
 
@@ -308,10 +330,10 @@ Appearance values from `ui-theme` locales. Performance: `settings.performance.{c
 | 插件 / 自动化任务 | **done** (drawer under 新会话 + Settings; pinwheel/clock icons from ui-primitives) | was hide |
 | Drawer search / view options / add workspace | **done** (ui-workspace header icons + locales) | was needs-plugin / subset |
 | Files / terminal / jobs / todo sheets | present | — |
-| Browser | hidden | hide |
+| Browser / session diagnostics | present | native WebView / read-only loaded event window |
 | Settings general rows | present | — |
 | Language / appearance prefs | **done** (labels wired via L; en for new surfaces) | was feasible (partial) |
-| Models / plugins / credentials / schedules | **done** (native Compose; ops gated by hello `ops`) | was hide |
+| Models / plugins / schedules | **done** (native Compose; ops gated by hello `ops`) | was hide |
 | Open config file / local-path plugin install | hidden | hide (desktop OS chrome) |
 
 ---
@@ -322,7 +344,7 @@ Appearance values from `ui-theme` locales. Performance: `settings.performance.{c
 
 **Added in this pass (parity-ops):** `sessions.search`, `workspace.state` / `archiveSession` / `unarchiveSession` / `pinSession` / `unpinSession`, `feedback.get` / `feedback.set`, `references.files` / `references.sessions`, `session.attachment`, `attachments.upload`, `userQuestions.answer` (+ push `user-question` / `user-question.closed`).
 
-**Settings ops (this pass):** `models.providers` / `models.providerGet` / `models.settingsMutate` / `models.discover`; `plugins.list` / `plugins.setEnabled` / `plugins.install` / `plugins.inventory`; `schedule.catalog` / `list` / `create` / `update` / `delete` / `history`; `credentials.list` / `describe` / `set` / `unset` / `deleteRecord`. Host injects: `llm`, `settings`/`settingsController`, `credentials`, `pluginManager`, `schedule`.
+**Settings ops:** `models.providers` / `models.providerGet` / `models.settingsMutate` / `models.discover`; `plugins.list` / `plugins.setEnabled` / `plugins.install` / `plugins.inventory`; `schedule.catalog` / `list` / `create` / `update` / `delete` / `history`; `credentials.set` / `unset` only for API keys in model provider settings. Host injects: `llm`, `settings`/`settingsController`, `credentials`, `pluginManager`, `schedule`. There is no standalone credential-management page or enumeration/record-deletion RPC.
 
 **Still limited / unfinished:**
 
@@ -334,7 +356,7 @@ Appearance values from `ui-theme` locales. Performance: `settings.performance.{c
 | Document preview (text / image / PDF) | **done** — tap file path/link in chat or trajectory → `FilePreviewSheet` via `files.read` / `files.readBytes`; copy uses common `copy`/`copied`; PDF via `PdfRenderer` (no GMS) |
 | Wide / foldable layout | **done** — ≥600dp two-pane sidebar (desktop-like) + Layout Auto/Phone/Desktop pref |
 | Drawer tap / safe-area | **done** — session row closes drawer; workspace collapse does not; drawer session menu is `DropdownMenu` (first tap not eaten); sheets/nav use system bar insets |
-| OS workspace picker / browser / open-config / local-path plugin install | **hide** (desktop OS chrome) |
+| OS workspace picker / open-config / local-path plugin install | **hide** (desktop OS chrome) |
 | Schedule pause toggle | desktop has no pause — `inactive` means ended after delivery |
 | Plugin schema ConfigForm editors | desktop `configForms` is client-side over settings namespaces; phone shows enable/detail/parts. Full schema-driven forms stay limited — use `models.settingsMutate` / Host settings when a namespace is known |
 | `settings.openSettingsDocument` | desktop OS editor (**hide**) |

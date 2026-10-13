@@ -101,6 +101,98 @@ internal fun scheduleCronValid(expression: String): Boolean {
     }
 }
 
+internal data class ScheduleCronShape(
+    val kind: String,
+    val step: Int = 1,
+    val hour: Int = 9,
+    val minute: Int = 0,
+    val weekdays: Set<Int> = setOf(1, 2, 3, 4, 5),
+    val days: Set<Int> = setOf(1),
+)
+
+/** Recognize only the official builder's five shapes; Vixie day-field unions stay raw. */
+internal fun scheduleCronShape(expression: String): ScheduleCronShape? {
+    if (!scheduleCronValid(expression)) return null
+    val fields = expression.trim().split(Regex("\\s+"))
+    val bounds = listOf(0..59, 0..23, 1..31, 1..12, 0..7)
+    val values = fields.zip(bounds).map { (field, range) ->
+        field.split(',').flatMap { part ->
+            val base = part.substringBefore('/')
+            val step = part.substringAfter('/', "1").toLong()
+            val start = if (base == "*") range.first else base.substringBefore('-').toInt()
+            val end = if (base == "*") range.last else base.substringAfter('-', base).toInt()
+            (start..end).filter { (it - start).toLong() % step == 0L }
+        }.toSortedSet()
+    }
+    if (values[3] != (1..12).toSet()) return null
+    fun fullStep(index: Int): Int? = (1..bounds[index].last).firstOrNull { step ->
+        values[index] == bounds[index].filter { it % step == 0 }.toSet()
+    }
+    val minute = values[0].singleOrNull()
+    val hour = values[1].singleOrNull()
+    if (fields[4] == "*") {
+        if (fields[2] == "*") {
+            val minuteStep = fullStep(0)
+            if (minuteStep != null && values[1] == (0..23).toSet()) return ScheduleCronShape("minutely", step = minuteStep)
+            val hourStep = fullStep(1)
+            if (minute != null && hourStep != null) return ScheduleCronShape("hourly", step = hourStep, minute = minute)
+            if (minute != null && hour != null) return ScheduleCronShape("daily", hour = hour, minute = minute)
+            return null
+        }
+        if (minute != null && hour != null) return ScheduleCronShape("monthly", hour = hour, minute = minute, days = values[2])
+        return null
+    }
+    if (fields[2] != "*" || minute == null || hour == null) return null
+    return ScheduleCronShape("weekly", hour = hour, minute = minute, weekdays = values[4].map { if (it == 0) 7 else it }.toSet())
+}
+
+internal fun scheduleCronExpression(shape: ScheduleCronShape): String {
+    require(shape.hour in 0..23 && shape.minute in 0..59)
+    fun field(values: Set<Int>): String {
+        val sorted = values.sorted()
+        val runs = mutableListOf<String>()
+        var index = 0
+        while (index < sorted.size) {
+            val start = index
+            while (index + 1 < sorted.size && sorted[index + 1] == sorted[index] + 1) index++
+            runs += if (index - start >= 2) "${sorted[start]}-${sorted[index]}" else sorted.subList(start, index + 1).joinToString(",")
+            index++
+        }
+        return runs.joinToString(",")
+    }
+    return when (shape.kind) {
+        "minutely" -> {
+            require(shape.step in 1..59)
+            "${if (shape.step == 1) "*" else "*/${shape.step}"} * * * *"
+        }
+        "hourly" -> {
+            require(shape.step in 1..23)
+            "${shape.minute} ${if (shape.step == 1) "*" else "*/${shape.step}"} * * *"
+        }
+        "daily" -> "${shape.minute} ${shape.hour} * * *"
+        "weekly" -> {
+            require(shape.weekdays.isNotEmpty() && shape.weekdays.all { it in 1..7 })
+            "${shape.minute} ${shape.hour} * * ${field(shape.weekdays.map { it % 7 }.toSet())}"
+        }
+        "monthly" -> {
+            require(shape.days.isNotEmpty() && shape.days.all { it in 1..31 })
+            "${shape.minute} ${shape.hour} ${field(shape.days)} * *"
+        }
+        else -> error("Unsupported cron shape")
+    }
+}
+
+internal data class ScheduleRelativeTime(val direction: Int, val value: Long, val unit: String)
+
+internal fun scheduleRelativeTime(scheduledAt: String?, now: Instant): ScheduleRelativeTime? {
+    val target = try { Instant.parse(scheduledAt) } catch (_: Exception) { return null }
+    val millis = java.time.Duration.between(now, target).toMillis()
+    val seconds = kotlin.math.abs(millis.toDouble()) / 1000
+    val unit = listOf("day" to 86400, "hour" to 3600, "minute" to 60, "second" to 1).first { seconds >= it.second || it.first == "second" }
+    val count = if (millis > 0) kotlin.math.ceil(seconds / unit.second) else kotlin.math.floor(seconds / unit.second)
+    return ScheduleRelativeTime(millis.compareTo(0L), count.toLong().coerceAtLeast(1), unit.first)
+}
+
 internal fun scheduleTimingChange(draft: ScheduleTimingDraft): JsonObject {
     if (draft.kind == "every") {
         val seconds = scheduleIntervalSeconds(draft.quantity, draft.unit) ?: throw IllegalArgumentException("frequency_too_high")
@@ -110,7 +202,7 @@ internal fun scheduleTimingChange(draft: ScheduleTimingDraft): JsonObject {
     require(zone == "UTC" || (zone.contains('/') && !zone.any { it.isWhitespace() })) { "invalid_time_zone" }
     if (draft.kind == "cron") {
         require(scheduleCronValid(draft.expression)) { "invalid_cron" }
-        return jsonOf("kind" to "cron", "cron" to jsonOf("expression" to draft.expression.trim(), "time_zone" to zone))
+        return jsonOf("kind" to "cron", "cron" to jsonOf("expression" to draft.expression, "time_zone" to zone))
     }
     val time = draft.time.trim()
     require(Regex("\\d{2}:\\d{2}(?::\\d{2}(?:\\.\\d{1,3})?)?").matches(time)) { "invalid_rule" }

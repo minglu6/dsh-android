@@ -3,7 +3,7 @@ package dev.dsh.pocket.protocol
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 
-class PocketError(val code: String, message: String) : Exception("$code: $message")
+class PocketError(val code: String, message: String, val details: JsonElement? = null) : Exception("$code: $message")
 
 data class SessionSummary(
     val sessionId: String,
@@ -16,13 +16,15 @@ data class SessionSummary(
     /** Optional flags when the Host includes them on list/search rows. */
     val archived: Boolean? = null,
     val pinned: Boolean? = null,
+    val origin: String? = null,
+    val searchSnippet: String? = null,
 ) {
     companion object {
         fun parse(e: JsonElement?): SessionSummary? {
             val id = e["sessionId"].str() ?: return null
             return SessionSummary(
                 sessionId = id,
-                title = e["projections"]["values"]["title"].str() ?: e["title"].str() ?: e["snippet"].str(),
+                title = e["projections"]["values"]["title"].str() ?: e["title"].str(),
                 cwd = e["cwd"].str(),
                 running = e["running"].bool() ?: false,
                 blank = e["blank"].bool() ?: false,
@@ -30,7 +32,28 @@ data class SessionSummary(
                 parentSessionId = e["parentSessionId"].str(),
                 archived = e["archived"].bool(),
                 pinned = e["pinned"].bool(),
+                origin = e["origin"].str(),
+                searchSnippet = e["snippet"].str(),
             )
+        }
+    }
+}
+
+data class WorkspaceView(
+    val workspaceId: String,
+    val path: String,
+    val title: String,
+    val sessionIds: List<String>,
+    val createdAt: String?,
+    val updatedAt: String?,
+) {
+    companion object {
+        fun parse(e: JsonElement?): WorkspaceView? {
+            val id = e["workspaceId"].str() ?: return null
+            val path = e["path"].str() ?: return null
+            return WorkspaceView(id, path, e["title"].str() ?: path,
+                e["sessionIds"].arr().orEmpty().mapNotNull { it.str() },
+                e["createdAt"].str(), e["updatedAt"].str())
         }
     }
 }

@@ -22,59 +22,52 @@ export function searchOps(sc) {
   }
 }
 
-/**
- * Workspace archive / pin / unpin + snapshot of archive/pin sets.
- * Prefers Host `workspaceController` remotes; falls back to `workspaceRegistry`.
- */
-export function workspaceOps(workspaceController, workspaceRegistry) {
-  const registry = () => {
-    const r = workspaceRegistry
-    if (!r) throw Object.assign(new Error('workspace registry unavailable'), { code: 'unavailable' })
-    return r
+/** Workspace mutations use the official controller; state comes from its baseline. */
+export function workspaceOps(workspaceController) {
+  const c = workspaceController
+  const ops = {
+    'workspace.state': async (_a, signal) => {
+      const ac = new AbortController()
+      const abort = () => ac.abort()
+      signal?.addEventListener('abort', abort, { once: true })
+      if (signal?.aborted) ac.abort()
+      try {
+        for await (const frame of c.follow(ac.signal)) {
+          if (frame.type === 'baseline') return frame.value
+        }
+        throw Object.assign(new Error('workspace baseline unavailable'), { code: 'unavailable' })
+      } finally {
+        ac.abort()
+        signal?.removeEventListener('abort', abort)
+      }
+    },
   }
-  const controller = () => workspaceController
+  for (const name of ['create', 'rename', 'delete', 'insertBefore', 'insertSessionBefore',
+    'archiveSession', 'unarchiveSession', 'pinSession', 'unpinSession']) {
+    if (typeof c?.[name] === 'function') ops[`workspace.${name}`] = (a) => c[name](a)
+  }
+  return ops
+}
+
+/** Only advertise browse when the composed Host picker actually serves it. */
+export function directoryOps(controller, directoryPicker) {
+  if (directoryPicker.capability().kind !== 'browse') return {}
   return {
-    'workspace.state': () => {
-      const r = registry()
-      return {
-        archivedSessionIds: [...(r.archivedSessionIds ?? [])],
-        pinnedSessionIds: [...(r.pinnedSessionIds ?? [])],
-      }
-    },
-    'workspace.archiveSession': async (a) => {
-      if (!str(a.sessionId)) throw bad('sessionId required')
-      const c = controller()
-      if (c?.archiveSession) {
-        return c.archiveSession({
-          sessionId: a.sessionId,
-          ...(a.stopActivity === true ? { stopActivity: true } : {}),
-        })
-      }
-      await registry().archiveSession(a.sessionId, a.stopActivity === true ? { stopActivity: true } : {})
-      return { archivedSessionIds: [...registry().archivedSessionIds] }
-    },
-    'workspace.unarchiveSession': async (a) => {
-      if (!str(a.sessionId)) throw bad('sessionId required')
-      const c = controller()
-      if (c?.unarchiveSession) return c.unarchiveSession({ sessionId: a.sessionId })
-      await registry().unarchiveSession(a.sessionId)
-      return { archivedSessionIds: [...registry().archivedSessionIds] }
-    },
-    'workspace.pinSession': async (a) => {
-      if (!str(a.sessionId)) throw bad('sessionId required')
-      const c = controller()
-      if (c?.pinSession) return c.pinSession({ sessionId: a.sessionId })
-      await registry().pinSession(a.sessionId)
-      return { pinnedSessionIds: [...registry().pinnedSessionIds] }
-    },
-    'workspace.unpinSession': async (a) => {
-      if (!str(a.sessionId)) throw bad('sessionId required')
-      const c = controller()
-      if (c?.unpinSession) return c.unpinSession({ sessionId: a.sessionId })
-      await registry().unpinSession(a.sessionId)
-      return { pinnedSessionIds: [...registry().pinnedSessionIds] }
-    },
+    'workspace.directoryList': (a, signal) => controller.list(str(a.path) ? a.path : undefined, signal),
   }
+}
+
+/** Goal refs are the official id/revision CAS fence, never inferred from an objective. */
+export function goalOps(goals, agents) {
+  const ops = { 'goals.get': (a) => ({ goal: goals.get(agentOf(agents, a.sessionId)) ?? null }) }
+  for (const name of ['edit', 'pause', 'resume', 'clear']) {
+    ops[`goals.${name}`] = (a) => {
+      if (!str(a.ref?.id) || !Number.isSafeInteger(a.ref?.revision) || a.ref.revision < 1) throw bad('goal id/revision required')
+      const value = goals[name](agentOf(agents, a.sessionId), a.ref, a.request)
+      return name === 'clear' ? { cleared: value } : { goal: value }
+    }
+  }
+  return ops
 }
 
 /**

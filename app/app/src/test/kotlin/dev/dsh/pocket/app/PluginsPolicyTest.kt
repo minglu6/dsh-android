@@ -28,6 +28,24 @@ class PluginsPolicyTest {
     }
 
     @Test
+    fun partsSummaryCountsHostRuntimeRatherThanDeclarations() {
+        val rows = listOf(
+            """{"entryId":"a","enabled":false}""",
+            """{"entryId":"b","enabled":true}""",
+            """{"entryId":"c"}""",
+            """{"entryId":"missing","enabled":true,"fiberPhase":"active"}""",
+        ).map { Json.parseToJsonElement(it) }
+        val live = listOf(
+            """{"entryId":"a","enabled":true,"fiberPhase":"active"}""",
+            """{"entryId":"b","enabled":false,"fiberPhase":"failed"}""",
+            """{"entryId":"c","enabled":true,"fiberPhase":"pending"}""",
+            """{"entryId":"unrelated","enabled":true,"fiberPhase":"active"}""",
+        ).map { Json.parseToJsonElement(it) }
+        org.junit.Assert.assertEquals(PluginParts(4, 1, 2, 1), pluginParts(rows, live))
+        org.junit.Assert.assertEquals(PluginParts(0, 0, 0, 0), pluginParts(emptyList(), live))
+    }
+
+    @Test
     fun parentWritesCannotEraseRedactedSecrets() {
         val secrets = listOf(listOf("provider", "apiKey"))
         assertTrue(pluginSettingsReplacesSecret(emptyList(), secrets))

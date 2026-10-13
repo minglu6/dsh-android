@@ -29,6 +29,10 @@ import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.selected
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
@@ -532,7 +536,9 @@ fun TrajectoryView(st: ChatState) {
             }
     }
 
-    Column(Modifier.fillMaxSize()) {
+    BoxWithConstraints(Modifier.fillMaxSize()) {
+        val showMetrics = maxWidth >= 600.dp
+        Column(Modifier.fillMaxSize()) {
         TrajectoryToolbar(
             actualDuration = actualDuration,
             onActualDurationChange = { actualDuration = it },
@@ -549,9 +555,11 @@ fun TrajectoryView(st: ChatState) {
             }
         }
         Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp), horizontalArrangement = Arrangement.End) {
-            Text(TrajL.columnInput, style = monoCap(), modifier = Modifier.width(44.dp))
-            Text(TrajL.columnOutput, style = monoCap(), modifier = Modifier.width(40.dp))
-            Text(TrajL.columnThink, style = monoCap(), modifier = Modifier.width(40.dp))
+            if (showMetrics) {
+                Text(TrajL.columnInput, style = monoCap(), modifier = Modifier.width(44.dp))
+                Text(TrajL.columnOutput, style = monoCap(), modifier = Modifier.width(40.dp))
+                Text(TrajL.columnThink, style = monoCap(), modifier = Modifier.width(40.dp))
+            }
             Text(TrajL.columnTime, style = monoCap(), modifier = Modifier.width(40.dp))
         }
         HorizontalDivider(color = T.Fill)
@@ -597,7 +605,8 @@ fun TrajectoryView(st: ChatState) {
                             row = row,
                             hl = selected?.key == row.key,
                             requestBoundary = boundary,
-                            requestSelected = selectedRequest?.identity == boundary?.identity,
+                            requestSelected = selectedRequest != null && selectedRequest?.identity == boundary?.identity,
+                            showMetrics = showMetrics,
                             onRequestClick = { req ->
                                 selected = null
                                 selectedRequest = req
@@ -607,6 +616,7 @@ fun TrajectoryView(st: ChatState) {
                     }
                 }
             }
+        }
         }
     }
     selected?.let { row ->
@@ -638,6 +648,7 @@ private fun HistoryLoadEarlierRow(loading: Boolean, enabled: Boolean, onClick: (
     Row(
         Modifier
             .fillMaxWidth()
+            .heightIn(min = 48.dp)
             .clickable(enabled = enabled, onClick = onClick)
             .padding(horizontal = 12.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -669,54 +680,104 @@ private fun TrajectoryToolbar(
     searchQuery: String,
     onSearchQueryChange: (String) -> Unit,
 ) {
-    Row(
-        Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Seg(actualDuration, TrajL.toolbarDuration) { onActualDurationChange(!actualDuration) }
-        Spacer(Modifier.width(6.dp))
-        ToolbarChip(turnsCollapsed, TrajL.toolbarTurns, onToggleTurns)
-        Spacer(Modifier.width(6.dp))
-        ToolbarChip(callsCollapsed, TrajL.toolbarCalls, onToggleCalls)
-        Spacer(Modifier.width(8.dp))
+    val actions: @Composable () -> Unit = {
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            ToolbarChip(actualDuration, TrajL.toolbarDuration, onClick = { onActualDurationChange(!actualDuration) }) {
+                Icon(D.clock, null, Modifier.size(14.dp), tint = T.Text2)
+            }
+            ToolbarChip(turnsCollapsed, TrajL.toolbarTurns, onToggleTurns) {
+                Text(if (turnsCollapsed) "⊞" else "⊟", fontSize = 14.sp, color = T.Text2)
+            }
+            ToolbarChip(callsCollapsed, TrajL.toolbarCalls, onToggleCalls) {
+                Text(if (callsCollapsed) "⊞" else "⊟", fontSize = 14.sp, color = T.Text2)
+            }
+        }
+    }
+    val search: @Composable (Modifier) -> Unit = { modifier ->
         Row(
-            Modifier.weight(1f).height(32.dp)
-                .background(T.Fill2, RoundedCornerShape(8.dp))
-                .border(1.dp, T.Border, RoundedCornerShape(8.dp))
-                .padding(horizontal = 8.dp),
+            modifier.heightIn(min = 48.dp)
+                .background(T.Fill2, T.R8)
+                .border(1.dp, T.Border, T.R8)
+                .padding(horizontal = 10.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Icon(D.search, contentDescription = TrajL.toolbarSearch, tint = T.Caption, modifier = Modifier.size(14.dp))
-            Spacer(Modifier.width(4.dp))
-            Box(Modifier.weight(1f)) {
-                if (searchQuery.isEmpty()) {
-                    Text(TrajL.toolbarSearchPlaceholder, fontSize = 12.sp, color = T.Caption)
-                }
-                BasicTextField(
-                    value = searchQuery,
-                    onValueChange = onSearchQueryChange,
-                    singleLine = true,
-                    textStyle = T.Mono.copy(fontSize = 12.sp),
-                    cursorBrush = SolidColor(T.Accent),
-                    modifier = Modifier.fillMaxWidth(),
-                )
+            Icon(D.search, null, tint = T.Caption, modifier = Modifier.size(14.dp))
+            Spacer(Modifier.width(6.dp))
+            BasicTextField(
+                value = searchQuery,
+                onValueChange = onSearchQueryChange,
+                singleLine = true,
+                textStyle = T.Mono.copy(fontSize = 13.sp),
+                cursorBrush = SolidColor(T.Accent),
+                modifier = Modifier.weight(1f).semantics { contentDescription = TrajL.toolbarSearch },
+                decorationBox = { field ->
+                    if (searchQuery.isEmpty()) Text(TrajL.toolbarSearchPlaceholder, fontSize = 13.sp, color = T.Caption)
+                    field()
+                },
+            )
+        }
+    }
+    BoxWithConstraints(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp)) {
+        if (maxWidth < 440.dp) {
+            Column {
+                actions()
+                search(Modifier.fillMaxWidth())
+                Spacer(Modifier.height(4.dp))
+            }
+        } else {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                actions()
+                search(Modifier.weight(1f))
             }
         }
     }
 }
 
 @Composable
-private fun ToolbarChip(pressed: Boolean, label: String, onClick: () -> Unit) {
-    Text(
-        label,
-        fontSize = 12.sp,
-        color = if (pressed) T.Ink else T.Text2,
-        modifier = Modifier
-            .border(1.dp, T.Border, T.R8)
-            .background(if (pressed) T.Fill else Color.Transparent, T.R8)
-            .clickable(onClick = onClick)
-            .padding(horizontal = 10.dp, vertical = 6.dp),
-    )
+private fun ToolbarChip(pressed: Boolean, label: String, onClick: () -> Unit, icon: @Composable () -> Unit) {
+    Box(
+        Modifier.heightIn(min = 48.dp)
+            .semantics { selected = pressed }
+            .clickable(role = Role.Button, onClick = onClick),
+        contentAlignment = Alignment.Center,
+    ) {
+        Row(
+            Modifier.border(1.dp, T.Border, T.R8)
+                .background(if (pressed) T.Fill else Color.Transparent, T.R8)
+                .padding(horizontal = 10.dp, vertical = 6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(5.dp),
+        ) {
+            icon()
+            Text(label, fontSize = 12.sp, color = if (pressed) T.Ink else T.Text2)
+        }
+    }
+}
+
+/** Hit testing follows the painted lane as well as time, including zero-duration markers. */
+internal fun trajectorySpanAt(
+    model: TrajectoryTimelineModel,
+    x: Float,
+    y: Float,
+    width: Float,
+    minSpanWidth: Float,
+    pointWidth: Float,
+    topPadding: Float,
+    laneHeight: Float,
+): String? {
+    if (x < 0f || x > width || y < topPadding || laneHeight <= 0f) return null
+    val lane = ((y - topPadding) / laneHeight).toInt()
+    if (lane !in 0..2) return null
+    val domain = (model.end - model.start).takeIf { it > 0 } ?: 1.0
+    for (index in model.spans.lastIndex downTo 0) {
+        val span = model.spans[index]
+        if (span.lane != lane) continue
+        val left = ((span.start - model.start) / domain * width).toFloat()
+        val rawWidth = ((span.end - span.start) / domain * width).toFloat()
+        val spanWidth = if (span.end <= span.start || rawWidth < minSpanWidth) pointWidth else rawWidth
+        if (x in left..(left + spanWidth)) return span.key
+    }
+    return null
 }
 
 /** Desktop three-lane overview: 输入 / 模型 / 工具. Tap a segment → select matching ledger row. */
@@ -765,15 +826,10 @@ private fun SwimlaneChart(
                         .fillMaxHeight()
                         .pointerInput(model, mode, widthPxTarget, selectedKey) {
                             detectTapGestures { offset ->
-                                val widthPx = size.width.toFloat().coerceAtLeast(1f)
-                                val hit = model.spans.asReversed().firstOrNull { span ->
-                                    val left = ((span.start - model.start) / domain * widthPx).toFloat()
-                                    val rawW = ((span.end - span.start) / domain * widthPx).toFloat()
-                                    val point = span.end <= span.start || rawW < minSpanPx
-                                    val w = if (point) equalSpanPx else maxOf(rawW, minSpanPx)
-                                    offset.x in left..(left + w)
-                                }
-                                hit?.let { onSpanClick(it.key) }
+                                trajectorySpanAt(
+                                    model, offset.x, offset.y, size.width.toFloat(),
+                                    minSpanPx, equalSpanPx, 7.dp.toPx(), 14.dp.toPx(),
+                                )?.let(onSpanClick)
                             }
                         },
                 ) {
@@ -805,7 +861,8 @@ private fun SwimlaneChart(
                             alpha = when {
                                 selected -> 1f
                                 span.isError -> 1f
-                                else -> 0.9f
+                                span.kind == "message" || span.kind == "tool" || span.kind == "subtool" -> 1f
+                                else -> 0.78f
                             },
                         )
                         if (selected) {
@@ -824,16 +881,27 @@ private fun SwimlaneChart(
     }
 }
 
-/** Desktop timeline span colors (business / success / violet / warn). */
+/** CSS color-mix(in srgb), not Compose's perceptual-space lerp. */
+private fun trajectoryColorMix(first: Color, second: Color, firstWeight: Float): Color {
+    val secondWeight = 1f - firstWeight
+    return Color(
+        first.red * firstWeight + second.red * secondWeight,
+        first.green * firstWeight + second.green * secondWeight,
+        first.blue * firstWeight + second.blue * secondWeight,
+        first.alpha * firstWeight + second.alpha * secondWeight,
+    )
+}
+
+/** Exact ui-trajectory semantic aliases, resolved in the active light/dark palette. */
 private fun spanColor(kind: String, isError: Boolean): Color {
-    if (isError) return T.Err
+    val colors = ThemeState.colors
+    if (isError) return colors.StateErrorPrimary
     return when (kind) {
-        "user" -> T.Accent
-        "context" -> Color(0xFF4CAF6A) // success mixed toward secondary
-        "message" -> Color(0xFF8B5CF6) // assistant violet
-        "tool", "subtool" -> T.WarnBorder
-        "system", "compacted" -> T.Text3
-        else -> T.Text3
+        "user" -> colors.StateBusinessPrimary
+        "context" -> trajectoryColorMix(colors.StateSuccessPrimary, colors.LabelSecondary, 0.68f)
+        "message" -> trajectoryColorMix(colors.BrandPrimaryNewColorprimaryNewColor, colors.StateErrorSecondary, 0.60f)
+        "tool", "subtool" -> colors.StateWarnLabel
+        else -> colors.LabelSecondary
     }
 }
 
@@ -845,6 +913,7 @@ private fun TrajRowView(
     requestSelected: Boolean = false,
     onRequestClick: (TrajectoryRequest) -> Unit = {},
     onClick: () -> Unit,
+    showMetrics: Boolean = true,
 ) {
     val statusGlyph = when {
         row.running -> "◌"
@@ -858,6 +927,7 @@ private fun TrajRowView(
     }
     Row(
         Modifier.fillMaxWidth()
+            .heightIn(min = 48.dp)
             .background(if (hl || requestSelected) T.Tint.copy(alpha = 0.45f) else Color.Transparent)
             .then(if (hl || requestSelected) Modifier.drawSelectedBar() else Modifier)
             .clickable(onClick = onClick)
@@ -909,11 +979,14 @@ private fun TrajRowView(
                 }
             }
         }
+        Spacer(Modifier.width(8.dp))
         SelectableOutput {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(row.input, style = monoCap(), modifier = Modifier.width(44.dp), maxLines = 1, overflow = TextOverflow.Ellipsis)
-                Text(row.output, style = monoCap(), modifier = Modifier.width(40.dp), maxLines = 1, overflow = TextOverflow.Ellipsis)
-                Text(row.think, style = monoCap(), modifier = Modifier.width(40.dp), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                if (showMetrics) {
+                    Text(row.input, style = monoCap(), modifier = Modifier.width(44.dp), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Text(row.output, style = monoCap(), modifier = Modifier.width(40.dp), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Text(row.think, style = monoCap(), modifier = Modifier.width(40.dp), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                }
                 Text(row.time, style = monoCap(), modifier = Modifier.width(40.dp), maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
         }
@@ -930,15 +1003,19 @@ private fun Modifier.drawSelectedBar(): Modifier = this.then(
 
 @Composable
 private fun KindBadge(kind: String) {
-    // Desktop TrajectoryTable.module.css kind tag tokens (Tokyo Night-adapted solids).
-    val (fg, bg) = when (kind) {
-        TrajL.kindUser -> T.Accent to T.Tint
-        TrajL.kindContext -> Color(0xFF3D8B55) to Color(0xFFE8F6EC)
-        TrajL.kindAssistant -> Color(0xFF7C3AED) to Color(0xFFF3E8FF)
-        TrajL.kindTool -> T.WarnText to T.WarnTint
-        TrajL.kindSubtool -> Color(0xFF9A7B2F) to Color(0xFFF7F0DE)
-        TrajL.kindSystem, TrajL.kindCompacted -> T.Text2 to T.Fill
-        else -> T.Text3 to T.Fill
+    val colors = ThemeState.colors
+    val (fg, bg) = remember(kind, colors) {
+        when (kind) {
+            TrajL.kindUser -> colors.StateSuccessPrimary to colors.StateSuccessTertiary
+            TrajL.kindContext -> trajectoryColorMix(colors.StateSuccessPrimary, colors.LabelSecondary, 0.68f) to colors.StateSuccessTertiary
+            TrajL.kindAssistant -> trajectoryColorMix(colors.BrandPrimaryNewColorprimaryNewColor, colors.StateErrorSecondary, 0.60f) to
+                trajectoryColorMix(trajectoryColorMix(colors.BrandPrimaryNewColorprimaryNewColor, colors.StateErrorSecondary, 0.55f), colors.BgLayer1, 0.15f)
+            TrajL.kindTool -> colors.StateWarnLabel to colors.StateWarnTertiary
+            TrajL.kindSubtool -> trajectoryColorMix(colors.StateWarnLabel, colors.LabelTertiary, 0.62f) to
+                trajectoryColorMix(colors.StateWarnTertiary, colors.BgLayer1, 0.58f)
+            TrajL.kindSystem, TrajL.kindCompacted -> colors.LabelSecondary to colors.BgModulePlatform
+            else -> colors.LabelTertiary to colors.BgModulePlatform
+        }
     }
     Text(
         kind,

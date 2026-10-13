@@ -1,24 +1,27 @@
 package dev.dsh.pocket.app
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.test.onNodeWithTag
-import androidx.compose.ui.test.performKeyInput
-import androidx.compose.ui.test.pressKey
+import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performKeyInput
+import androidx.compose.ui.test.pressKey
 import com.github.takahirom.roborazzi.ExperimentalRoborazziApi
 import com.github.takahirom.roborazzi.RoborazziOptions
 import com.github.takahirom.roborazzi.captureRoboImage
 import com.github.takahirom.roborazzi.captureScreenRoboImage
 import dev.dsh.pocket.protocol.*
+import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
@@ -78,11 +81,29 @@ class ScreenshotTest {
         Pocket.prefs.sessionGroupBy = SessionGroupBy.Workspace
         Pocket.prefs.sessionOrderBy = SessionOrderBy.Updated
         Pocket.prefs.archivedFilter = ArchivedFilter.Default
+        Pocket.prefs.fontSize = 14
+        Pocket.prefs.codeFontSize = 13
+        Pocket.prefs.terminalFontSize = 13
+        Pocket.prefs.showCodeWorkView = true
+        Pocket.prefs.transcriptView = TranscriptView.Detailed
+        Pocket.prefs.setCollapsedWorkspaces("p1", emptySet())
+        Pocket.pinnedIds.value = emptySet()
+        Pocket.archivedIds.value = emptySet()
+        Pocket.userQuestions.value = emptyList()
+        Pocket.workspaces.value = listOf(
+            WorkspaceView("w1", "/Users/felix/src/pi-android", "pi-android", listOf("s1", "s2"), null, null),
+            WorkspaceView("w2", "/Users/felix/Documents", "Documents", listOf("s3"), null, null),
+        )
         Pocket.ops.value = setOf(
             "permissions.catalog", "permissions.set", "presets.list",
             "plugins.list", "schedule.catalog", "sessions.search", "workspace.state",
         )
-        Pocket.presets.value = listOf("standard", "ptc", "minimal", "cordis")
+        Pocket.presetRoster.value = listOf(
+            jsonOf("id" to "standard", "name" to "标准模式", "isDefault" to true),
+            jsonOf("id" to "ptc", "name" to "编程模式"),
+            jsonOf("id" to "minimal", "name" to "极简模式"),
+            jsonOf("id" to "cordis", "name" to "Cordis"),
+        )
         Pocket.sessions.value = listOf(
             SessionSummary("s1", "重构 bridge 鉴权流程", "/Users/felix/src/pi-android", true, false, 3, null),
             SessionSummary("s2", "Termux RUN_COMMAND 失败排查", "/Users/felix/src/pi-android", false, false, 2, null),
@@ -169,9 +190,16 @@ class ScreenshotTest {
     }
     @Test fun s07_pairSheet() { Pocket.profiles.value = emptyList(); showWithDialogs("07-pair-sheet") { PairSheet(PairingLink("100.106.128.87", 7690, "752314"), onDismiss = {}, onPaired = {}) } }
     @Test fun s07b_cameraPermissionSheet() = showWithDialogs("07b-camera-permission") { CameraPermissionSheet({}, {}) }
-    @Test fun s08_settings() = show("08-settings") {
+    @Test fun s08_settings() {
+        // Older Hosts may still advertise this API; it must not invent a settings page.
         Pocket.ops.value = setOf("models.providers", "plugins.list", "schedule.catalog", "credentials.list")
-        SettingsScreen({}, {}, {}, {}, {}, {}, {})
+        var modelsOpened = false
+        show("08-settings") {
+            SettingsScreen({}, {}, {}, onModels = { modelsOpened = true })
+        }
+        rule.onNodeWithText("凭证").assertDoesNotExist()
+        rule.onNodeWithText(L.modelsNav()).performClick()
+        assertTrue(modelsOpened)
     }
     @Test fun s09_general() = show("09-general-settings") { GeneralSettingsScreen {} }
     @Test fun s22_modelsSettings() = show("22-models-settings") {
@@ -185,10 +213,6 @@ class ScreenshotTest {
     @Test fun s24_scheduleSettings() = show("24-schedule-settings") {
         Pocket.ops.value = setOf("schedule.catalog", "schedule.create")
         ScheduleSettingsScreen(onBack = {}, onNewTask = {}, onOpenSession = {})
-    }
-    @Test fun s25_credentialsSettings() = show("25-credentials-settings") {
-        Pocket.ops.value = setOf("credentials.list", "credentials.set")
-        CredentialsSettingsScreen {}
     }
     @OptIn(androidx.compose.ui.test.ExperimentalTestApi::class)
     @Test fun s10_modelPicker() {
@@ -293,7 +317,7 @@ class ScreenshotTest {
     @Test fun s16_panelWithTerminal() {
         Pocket.ops.value = setOf("files.list", "terminal.create", "terminal.follow", "jobs.list")
         showWithDialogs("16-panel-terminal") {
-            PanelSheet(onDismiss = {}, onFiles = {}, onTerminal = {})
+            PanelSheet(onDismiss = {}, onFiles = {}, onTerminal = {}, onBrowser = {}, onInspector = {})
         }
     }
     @Test fun s17_profileManageSheet() = showWithDialogs("17-profile-manage") {
@@ -311,19 +335,27 @@ class ScreenshotTest {
         rule.waitForIdle()
         captureScreenRoboImage(out("18-profile-rename"))
     }
-    @Test fun s20_todoSheet() = showWithDialogs("20-todo-sheet") {
-        TodoSheet(
-            listOf(
-                TodoItem("读配置", "completed"),
-                TodoItem("改代码", "in_progress"),
-                TodoItem("写测试", "pending"),
-            ),
-        ) {}
+    @Test fun s20_todoSheet() {
+        showWithDialogs("20-todo-sheet") {
+            TodoSheet(
+                listOf(
+                    TodoItem("读配置", "completed"),
+                    TodoItem("改代码", "in_progress"),
+                    TodoItem("写测试", "pending"),
+                ),
+            ) {}
+        }
+        val rows = listOf("读配置", "改代码", "写测试").map {
+            rule.onNodeWithText(it, useUnmergedTree = true).fetchSemanticsNode().boundsInRoot
+        }
+        rows.zipWithNext().forEach { (previous, next) ->
+            assertTrue("Task content must not overlap the next task", previous.bottom <= next.top)
+        }
     }
     @Test fun s21_panelWithoutSession() {
         Pocket.ops.value = setOf("files.list", "terminal.create", "terminal.follow")
         showWithDialogs("21-panel-no-session") {
-            PanelSheet(hasSession = false, onDismiss = {}, onFiles = {}, onTerminal = {})
+            PanelSheet(onDismiss = {}, onFiles = {}, onTerminal = {}, onBrowser = {}, onInspector = {})
         }
     }
     @Test
@@ -331,14 +363,14 @@ class ScreenshotTest {
     fun s22_panelLandscape() {
         Pocket.ops.value = setOf("files.list", "terminal.create", "terminal.follow")
         showWithDialogs("22-panel-landscape") {
-            PanelSheet(onDismiss = {}, onFiles = {}, onTerminal = {})
+            PanelSheet(onDismiss = {}, onFiles = {}, onTerminal = {}, onBrowser = {}, onInspector = {})
         }
     }
     @Test fun s23_panelDark() {
         Pocket.prefs.appearance = Appearance.Dark
         Pocket.ops.value = setOf("files.list", "terminal.create", "terminal.follow")
         showWithDialogs("23-panel-dark") {
-            PanelSheet(onDismiss = {}, onFiles = {}, onTerminal = {})
+            PanelSheet(onDismiss = {}, onFiles = {}, onTerminal = {}, onBrowser = {}, onInspector = {})
         }
     }
     @Test fun s19_terminalSheet() {
@@ -362,4 +394,48 @@ class ScreenshotTest {
             }
         }
     }
+    private fun messageChromeState(): ChatState {
+        val at = java.util.Calendar.getInstance().apply {
+            set(java.util.Calendar.HOUR_OF_DAY, 17)
+            set(java.util.Calendar.MINUTE, 10)
+            set(java.util.Calendar.SECOND, 0)
+            set(java.util.Calendar.MILLISECOND, 0)
+        }.timeInMillis
+        return ChatState("s1", title = "你好", loaded = true, running = false,
+            turns = listOf(TurnRecord(1, startSeq = 2, endSeq = 12, startedAt = at, endedAt = at + 6000, endReason = "completed")),
+            items = listOf(
+                Item.User("u1", "你好", at = at, seq = 1, messageSourceJson = """{"kind":"user"}"""),
+                Item.Reasoning("r1", "Let me check the status of the background jobs and wait for the teammates to complete their work.", 1000, false, turn = 1, step = 1),
+                Item.Tool("t1", "c1", "wait_agent", """{"timeout_ms":120000}""", ToolStatus.Ok,
+                    result = """{"timedOut":false,"noProgress":{"message":"No active subagents"}}""", startedAt = at + 1000, endedAt = at + 1010, turn = 1, step = 1),
+                Item.Reasoning("r2", "Let me check the status of the background jobs and the teammates.", 1000, false, turn = 1, step = 2),
+                Item.Tool("t2", "c2", "job_list", "{}", ToolStatus.Ok,
+                    result = "(no background jobs)", startedAt = at + 2000, endedAt = at + 2010, turn = 1, step = 2),
+                Item.Tool("t3", "c3", "list_agents", "{}", ToolStatus.Ok,
+                    result = "Main [running]", startedAt = at + 2010, endedAt = at + 2020, turn = 1, step = 2),
+                Item.Reasoning("r3", "The user just said \"你好\" (Hello in Chinese). This is a simple greeting.\n\nI should respond with a friendly greeting and ask how I can help.", 1000, false, turn = 1, step = 3),
+                Item.Text("a1", "你好！有什么可以帮你的吗？", false, at = at + 6000, seq = 11, messageId = "m1", turn = 1, step = 3),
+            ))
+    }
+
+    private fun messageChromeScreenshots(dark: Boolean) {
+        Pocket.prefs.appearance = if (dark) Appearance.Dark else Appearance.Light
+        Pocket.prefs.transcriptView = TranscriptView.Standard
+        Pocket.prefs.collapseTiming = CollapseTiming.Completion
+        Pocket.ops.value = setOf("feedback.set", "sessions.fork")
+        val state = messageChromeState()
+        val suffix = if (dark) "dark" else "light"
+        show("26-message-chrome-collapsed-$suffix") {
+            Box(Modifier.fillMaxSize().background(T.Bg)) { Transcript(state, {}, canFork = true) }
+        }
+        rule.onNodeWithTag("processHeader:turn-1-process").performClick()
+        rule.waitForIdle()
+        rule.onRoot().captureRoboImage(out("26-message-chrome-expanded-$suffix"))
+        rule.onNodeWithTag("reasoningHeader:r3").performClick()
+        rule.waitForIdle()
+        rule.onRoot().captureRoboImage(out("26-message-reasoning-expanded-$suffix"))
+    }
+
+    @Test fun s26_messageChromeLight() = messageChromeScreenshots(false)
+    @Test fun s26_messageChromeDark() = messageChromeScreenshots(true)
 }

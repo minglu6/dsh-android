@@ -21,6 +21,7 @@ class PanelSheetTest {
     @Before fun state() {
         Pocket.init(RuntimeEnvironment.getApplication())
         Pocket.prefs.appearance = Appearance.Light
+        Pocket.prefs.language = AppLanguage.Zh
         Pocket.ops.value = setOf("files.list", "terminal.create", "terminal.follow", "jobs.list")
     }
 
@@ -29,7 +30,7 @@ class PanelSheetTest {
             PocketTheme {
                 var page by remember { mutableStateOf("guide") }
                 when (page) {
-                    "guide" -> PanelSheet(onDismiss = { page = "closed" }, onFiles = { page = "files" }, onTerminal = {})
+                    "guide" -> PanelSheet(onDismiss = { page = "closed" }, onFiles = { page = "files" }, onTerminal = {}, onBrowser = {}, onInspector = {})
                     "files" -> FilesSheet("no-connection", onDismiss = { page = "closed" }, onBack = { page = "guide" })
                 }
             }
@@ -43,7 +44,7 @@ class PanelSheetTest {
 
     @Test fun capabilitiesUpdateWhileGuideIsOpen() {
         Pocket.ops.value = setOf("terminal.create", "jobs.list")
-        rule.setContent { PocketTheme { PanelSheet(onDismiss = {}, onFiles = {}, onTerminal = {}) } }
+        rule.setContent { PocketTheme { PanelSheet(onDismiss = {}, onFiles = {}, onTerminal = {}, onBrowser = {}, onInspector = {}) } }
         rule.onNodeWithText("终端").assertDoesNotExist()
         rule.onNodeWithText("后台任务").assertDoesNotExist()
         rule.runOnIdle { Pocket.ops.value = setOf("files.list", "terminal.create", "terminal.follow") }
@@ -52,13 +53,18 @@ class PanelSheetTest {
         rule.runOnIdle { Pocket.ops.value = emptySet() }
         rule.onNodeWithText("工作区文件").assertDoesNotExist()
         rule.onNodeWithText("终端").assertDoesNotExist()
+        rule.onNodeWithText("浏览器").assertIsEnabled()
+        rule.onNodeWithText("会话数据诊断").assertIsEnabled()
     }
 
-    @Test fun guideCannotOpenSessionToolsWithoutSession() {
+    @Test fun guideAllowsAllAvailableToolsBeforeSelectingSession() {
+        Pocket.chat.value = null
         rule.setContent {
-            PocketTheme { PanelSheet(hasSession = false, onDismiss = {}, onFiles = {}, onTerminal = {}) }
+            PocketTheme { PanelSheet(onDismiss = {}, onFiles = {}, onTerminal = {}, onBrowser = {}, onInspector = {}) }
         }
-        rule.onNodeWithText("工作区文件").assertIsNotEnabled()
-        rule.onNodeWithText("终端").assertIsNotEnabled()
+        rule.onNodeWithText("工作区文件").assertIsEnabled()
+        rule.onNodeWithText("终端").assertIsEnabled()
+        rule.onNodeWithText("会话数据诊断").assertIsEnabled()
+        rule.onNodeWithText("浏览器").assertIsEnabled()
     }
 }

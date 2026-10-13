@@ -1,13 +1,14 @@
 package dev.dsh.pocket.app
 
-import androidx.compose.ui.test.assertCountEquals
-import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.createComposeRule
-import androidx.compose.ui.test.onAllNodesWithContentDescription
-import androidx.compose.ui.test.onAllNodesWithTag
-import androidx.compose.ui.test.onAllNodesWithText
-import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.semantics.SemanticsProperties
+import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.ClipboardManager
 import dev.dsh.pocket.protocol.Item
+import dev.dsh.pocket.protocol.ToolStatus
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
@@ -29,6 +30,8 @@ class MessageActionsTest {
 
     @Before fun state() {
         Pocket.init(RuntimeEnvironment.getApplication())
+        Pocket.prefs.language = AppLanguage.Zh
+        Pocket.prefs.transcriptView = TranscriptView.Standard
         Pocket.profiles.value = listOf(Profile("p1", "desk", host = "100.106.128.87", port = 7690))
         Pocket.active.value = "p1"
         Pocket.status.value = mapOf("p1" to Dot.Online)
@@ -67,5 +70,97 @@ class MessageActionsTest {
         rule.onAllNodesWithText("在新对话中分支").assertCountEquals(0)
         rule.onAllNodesWithText("好的回答").assertCountEquals(0)
         rule.onAllNodesWithText("有问题的回答").assertCountEquals(0)
+        // Official UserMessageNodeView never wires a branch action.
+        rule.onAllNodesWithTag("messageBranch").assertCountEquals(1)
+    }
+
+    @Test fun actionOrderClipboardAndCallbacksRemainFunctional() {
+        var branch: Long? = null
+        var like: String? = null
+        var dislike: String? = null
+        lateinit var clipboard: ClipboardManager
+        rule.setContent {
+            clipboard = LocalClipboardManager.current
+            PocketTheme {
+                Transcript(Pocket.chat.value!!, {}, canFork = true, onFork = { branch = it },
+                    onLike = { like = it }, onDislike = { dislike = it })
+            }
+        }
+        val copies = rule.onAllNodesWithTag("messageCopy")
+        val clocks = rule.onAllNodesWithTag("messageClock")
+        assertTrue(clocks[0].fetchSemanticsNode().boundsInRoot.right <= copies[0].fetchSemanticsNode().boundsInRoot.left)
+        val controls = listOf(copies[1], rule.onNodeWithTag("messageLike"), rule.onNodeWithTag("messageDislike"),
+            rule.onNodeWithTag("messageBranch"), clocks[1])
+        controls.zipWithNext().forEach { (left, right) ->
+            assertTrue(left.fetchSemanticsNode().boundsInRoot.right <= right.fetchSemanticsNode().boundsInRoot.left)
+        }
+        copies[1].performClick()
+        rule.runOnIdle { assertEquals("你好！有什么可以帮你的吗？", clipboard.getText()?.text) }
+        rule.onNodeWithTag("messageLike").performClick()
+        rule.onNodeWithTag("messageDislike").performClick()
+        rule.onNodeWithTag("messageBranch").performClick()
+        rule.runOnIdle {
+            assertEquals("m1", like)
+            assertEquals("m1", dislike)
+            assertEquals(2L, branch)
+        }
+    }
+
+    @Test fun earlierAssistantBranchExplainsWhyItIsUnavailable() {
+        val state = Pocket.chat.value!!.copy(items = Pocket.chat.value!!.items +
+            Item.User("u2", "下一轮", at = System.currentTimeMillis(), seq = 3, messageSourceJson = """{"kind":"user"}"""))
+        rule.setContent { PocketTheme { Transcript(state, {}, canFork = true) } }
+        rule.onNodeWithTag("messageBranch", useUnmergedTree = true).assertIsNotEnabled()
+            .assert(SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, L.branchUnavailable()))
+    }
+
+    @Test fun processPreservesOrderAndIndependentReasoningDisclosure() {
+        val first = Item.Reasoning("r1", "First preview\n\nFirst details", 1000, false)
+        val tool = Item.Tool("t1", "c1", "job_list", "{}", ToolStatus.Ok, result = """{"jobs":[]}""")
+        val last = Item.Reasoning("r2", "Last preview\n\nLast details", 1000, false)
+        val members = listOf(first, tool, last)
+        val proc = ChatRow.Process("p1", listOf(tool), listOf(first, last), "已完成，用时 6 秒", true, true,
+            members = members, steps = listOf(ProcessStep("s1", 1, listOf(first, tool)), ProcessStep("s2", 2, listOf(last))),
+            turnSummary = true)
+        var opened: Item.Tool? = null
+        rule.setContent { PocketTheme { ProcessGroupRow(proc) { opened = it } } }
+        val firstRow = rule.onNodeWithTag("reasoningHeader:r1")
+        val toolRow = rule.onNodeWithTag("processTool:t1")
+        val lastRow = rule.onNodeWithTag("reasoningHeader:r2")
+        assertTrue(firstRow.fetchSemanticsNode().boundsInRoot.bottom <= toolRow.fetchSemanticsNode().boundsInRoot.top)
+        assertTrue(toolRow.fetchSemanticsNode().boundsInRoot.bottom <= lastRow.fetchSemanticsNode().boundsInRoot.top)
+        rule.onNodeWithTag("reasoningBody:r1").assertDoesNotExist()
+        firstRow.performClick()
+        rule.onNodeWithTag("reasoningBody:r1").assertIsDisplayed()
+        rule.onNodeWithTag("reasoningBody:r2").assertDoesNotExist()
+        toolRow.performClick()
+        rule.runOnIdle { assertEquals(tool, opened) }
+        rule.onNodeWithTag("processHeader:p1").performClick()
+        rule.onNodeWithTag("reasoningHeader:r1").assertDoesNotExist()
+        rule.onNodeWithText("已完成，用时 6 秒").assertIsDisplayed()
+    }
+
+    @Test fun reasoningPreviewUsesTheLatestCompletedParagraphWhileStreaming() {
+        assertEquals("", reasoningPreview("partial first line", true))
+        assertEquals("first", reasoningPreview("**first**\n\nunfinished", true))
+        assertEquals("second", reasoningPreview("first\n\nsecond\ncontinued", true))
+        assertEquals("first", reasoningPreview("**first**\n\nsecond", false))
+    }
+    @Test fun failedTurnCannotHideItsFailureDetails() {
+        val failure = Item.Tool("failed", "c1", "bash", "{}", ToolStatus.Error, error = "permission denied")
+        val proc = ChatRow.Process("failed-turn", listOf(failure), emptyList(), "处理失败", true, true,
+            members = listOf(failure), turnSummary = true, canCollapse = false)
+        rule.setContent { PocketTheme { ProcessGroupRow(proc) {} } }
+        rule.onNodeWithTag("processHeader:failed-turn").assertHasNoClickAction()
+        rule.onNodeWithText("处理失败").assertIsDisplayed()
+        rule.onNodeWithText("permission denied").assertIsDisplayed()
+    }
+
+    @Test fun completedTurnWithoutProcessDoesNotOfferEmptyDisclosure() {
+        val proc = ChatRow.Process("empty", emptyList(), emptyList(), "已完成", true, false,
+            turnSummary = true, canCollapse = false)
+        rule.setContent { PocketTheme { ProcessGroupRow(proc) {} } }
+        rule.onNodeWithTag("processHeader:empty").assertHasNoClickAction()
+        rule.onNodeWithText("已完成").assertIsDisplayed()
     }
 }

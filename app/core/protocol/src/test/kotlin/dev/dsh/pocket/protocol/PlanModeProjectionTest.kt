@@ -23,6 +23,16 @@ class PlanModeProjectionTest {
         assertTrue(r.planMode)
     }
 
+    @Test fun livePlanProjectionCannotBeOverwrittenByOlderEventOrResume() {
+        val r = TranscriptReducer()
+        r.apply(el("""{"type":"projection","key":"plan","seq":10,"value":{"active":true}}"""))
+        r.apply(el("""{"type":"event","event":{"type":"plan/mode","seq":9,"data":{"active":false}}}"""))
+        r.apply(el("""{"type":"resume","cursor":9,"records":[],"projections":{"asOfSeq":9,"values":{"plan":{"active":false}}}}"""))
+        assertTrue(r.planMode)
+        r.apply(el("""{"type":"projection","key":"plan","seq":11,"value":null}"""))
+        assertFalse(r.planMode)
+    }
+
     @Test fun snapshotResetsPlanMode() {
         val r = TranscriptReducer()
         r.apply(el("""{"type":"event","event":{"type":"plan/mode","seq":1,"time":1,"data":{"active":true}}}"""))

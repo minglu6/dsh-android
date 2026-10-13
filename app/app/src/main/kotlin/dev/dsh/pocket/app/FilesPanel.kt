@@ -1,6 +1,8 @@
 package dev.dsh.pocket.app
 
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -15,6 +17,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -65,11 +68,16 @@ fun FilesSheet(sessionId: String, onDismiss: () -> Unit, onBack: (() -> Unit)? =
         generation++
     }
 
-    LaunchedEffect(sessionId, generation) {
+    LaunchedEffect(sessionId, generation, cwd) {
         val requestGeneration = generation
         val target = requestedPath
         loading = true
         failure = null
+        if (cwd.isNullOrBlank()) {
+            entries = emptyList()
+            loading = false
+            return@LaunchedEffect
+        }
         try {
             val result = Pocket.listFiles(sessionId, target.ifEmpty { "." })
             ensureActive()
@@ -114,10 +122,11 @@ fun FilesSheet(sessionId: String, onDismiss: () -> Unit, onBack: (() -> Unit)? =
         return
     }
 
+    val parentPath = workspaceFilesParentPath(path)
     RightPanelFrame(
         title = ft("工作区文件", "Workspace files"),
         onDismiss = onDismiss,
-        onBack = onBack,
+        onBack = if (parentPath != null) ({ load(parentPath) }) else onBack,
     ) {
         Row(
             Modifier.fillMaxWidth().padding(start = 12.dp, end = 8.dp),
@@ -132,17 +141,20 @@ fun FilesSheet(sessionId: String, onDismiss: () -> Unit, onBack: (() -> Unit)? =
                     modifier = Modifier.size(18.dp),
                 )
             }
-            val displayPath = if (cwd.isNullOrEmpty()) path.ifEmpty { "." }
-                else cwd.trimEnd('/', '\\') + if (path.isEmpty()) "" else "/$path"
-            Text(
-                displayPath.ifEmpty { "/" },
-                style = T.Mono.copy(color = T.Text3, fontSize = 12.sp),
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.weight(1f),
-            )
-            TextButton(onClick = { load(path) }, enabled = !loading) {
-                Text(reloadLabel, color = if (loading) T.Text3 else T.Accent, fontSize = 12.sp)
+            Row(Modifier.weight(1f).horizontalScroll(rememberScrollState()), verticalAlignment = Alignment.CenterVertically) {
+                TextButton(onClick = { load("") }, enabled = !loading && !cwd.isNullOrBlank()) {
+                    Text(cwd?.trimEnd('/', '\\')?.substringAfterLast('/')?.ifEmpty { "/" } ?: ft("无工作区", "No workspace"),
+                        color = T.Text2, fontSize = 12.sp)
+                }
+                path.split('/').filter { it.isNotEmpty() }.forEachIndexed { index, part ->
+                    Icon(D.chevronRight, null, tint = T.Text3, modifier = Modifier.size(12.dp))
+                    TextButton(onClick = { load(path.split('/').take(index + 1).joinToString("/")) }, enabled = !loading) {
+                        Text(part, color = T.Text2, fontSize = 12.sp)
+                    }
+                }
+            }
+            IconButton(onClick = { load(path) }, enabled = !loading && !cwd.isNullOrBlank()) {
+                Icon(D.refresh, reloadLabel, tint = if (loading) T.Text3 else T.Text2, modifier = Modifier.size(18.dp))
             }
         }
         HorizontalDivider(color = T.Border, thickness = 0.5.dp)
@@ -152,6 +164,10 @@ fun FilesSheet(sessionId: String, onDismiss: () -> Unit, onBack: (() -> Unit)? =
             contentPadding = PaddingValues(vertical = 8.dp),
         ) {
             when {
+                cwd.isNullOrBlank() -> item {
+                    Text(ft("此会话没有工作区。请先在会话设置中选择工作区。", "This session has no workspace. Choose one in session settings first."),
+                        color = T.Text3, fontSize = 13.sp, modifier = Modifier.padding(20.dp))
+                }
                 loading -> item {
                     Row(
                         Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 16.dp),
@@ -183,22 +199,18 @@ fun FilesSheet(sessionId: String, onDismiss: () -> Unit, onBack: (() -> Unit)? =
                         val otherLabel = ft("这不是文件或目录，没法打开。", "Not a file or a directory, so it cannot be opened.")
                         Row(
                             Modifier.fillMaxWidth()
-                                .clickable(enabled = openable) {
+                                .clickable(enabled = openable, role = Role.Button) {
                                     val child = if (path.isEmpty()) entry.name else "$path/${entry.name}"
                                     if (directory) load(child) else previewPath = child
                                 }
                                 .then(if (openable) Modifier else Modifier.semantics { contentDescription = "${entry.name}。$otherLabel" })
-                                .heightIn(min = 44.dp)
+                                .heightIn(min = 48.dp)
                                 .padding(horizontal = 20.dp, vertical = 9.dp),
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.spacedBy(10.dp),
                         ) {
-                            Icon(
-                                if (directory) D.folderOpen else if (openable) D.document else D.warning,
-                                contentDescription = null,
-                                modifier = Modifier.size(18.dp),
-                                tint = if (openable) T.Text2 else T.Text3,
-                            )
+                            if (openable) FileTypeIcon(entry.name, directory, Modifier.size(20.dp))
+                            else Icon(D.warning, null, tint = T.Text3, modifier = Modifier.size(20.dp))
                             Text(
                                 entry.name, color = if (openable) T.Ink else T.Text3,
                                 fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis,

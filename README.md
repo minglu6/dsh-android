@@ -18,11 +18,11 @@
 git clone https://github.com/minglu6/dsh-android && cd dsh-android/plugin && npm install && npm run build:client
 dsh plugin --profile web add "$PWD"
 dsh web
-# 日志：[pocket] remote transport: tailscale (advertise …)
+# 日志：[pocket] ws listening … (pairing lan: host:port)
 # 设置 →「手机连接」出示 QR / 配对串（dshpocket://pair?h=host:port&c=）
 ```
 
-未配置 `host` 时，插件会优先检测本机 Tailscale IP（`100.64/10`），否则用局域网 IPv4，并默认绑定 `0.0.0.0`。也可在 patch 里写死 `host`。
+未配置 `host` 时，插件默认绑定 `0.0.0.0`，优先使用局域网 IPv4（不需要 Tailscale）。同时检测到 Tailscale 时，可在「手机连接」中切换，二维码及复制链接跟随所选网络。配置具体 `host` 会限制为该监听接口。
 
 `dsh web`（以及桌面 App）在 **设置 →「手机连接」** 管理配对码 / QR / 设备。配对格式见 [plugin/README.md](plugin/README.md)。
 

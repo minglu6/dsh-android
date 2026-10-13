@@ -61,6 +61,19 @@ dsh web
 
 开发时改完 `src/client/**` 后需 `npm run build:client` 生成 `lib/client.js`（lazy-CJS `window.__ModuleLoader__.load` 格式）。
 
+## 原生菜单能力与状态
+
+手机以 `hello.ops` 及后续能力变更为准，不把 Host 上存在某个方法视为可用产品入口：
+
+- 工作区使用 `workspaceController` 的实体、成员关系与归档状态；归档有活动任务时保留官方拒绝详情，由手机确认是否停止活动后再次提交。
+- `workspace.directoryList` 只在官方目录选择器为 `browse` 时公布。macOS `native` 选择器不支持远程目录枚举，手机仍可输入完整路径注册工作区，不弹出电脑系统选择器。
+- 指令目录来自当前 Agent 的 `commands.list`；目标修改使用官方目标的 `id/revision`，不靠目标文本猜测版本。
+- 后台任务输出通过 `jobs.follow` 推送 `job` / `job.end` / `job.error`，关闭订阅使用共享 `unfollow`，不会自动终止任务。
+- `workspace.changed`、`schedule.changed`、`plugins.changed` 驱动对应页面更新；预设名册和默认值从 Host 读取，配置写入携带观察到的 revision。
+- 模型密钥仅经提供商页面写入或清除，不提供独立凭证目录。删除提供商先完成配置 CAS，再清理该页面管理的密钥，避免冲突导致仍在使用的密钥丢失。
+
+完整入口和原生边界见 [功能对齐清单](../docs/feature-parity.md)。升级 APK 不会自动重载已运行的桥接进程。
+
 ## 配对（M1）
 
 首次启动且还没有任何已配对设备时，会自动打开一个配对窗口，日志里打印 6 位配对码。配对码 10 分钟内有效，最多试 3 次，用一次就作废。之后要再开窗口，有四种方式：

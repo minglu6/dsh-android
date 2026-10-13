@@ -25,7 +25,7 @@ import kotlinx.coroutines.launch
 
 enum class Screen {
     Chat, Connections, Settings, General,
-    Models, Plugins, Schedule, Credentials,
+    Models, Plugins, Schedule,
 }
 
 class MainActivity : ComponentActivity() {
@@ -89,6 +89,11 @@ private fun Root(deepLink: MutableStateFlow<PairingLink?>) {
     val widthDp = LocalConfiguration.current.screenWidthDp
     val layoutMode = Pocket.prefs.layoutMode
     val twoPane = useTwoPaneLayout(widthDp, layoutMode)
+    var sidebarCollapsed by rememberSaveable { mutableStateOf(Pocket.prefs.sidebarCollapsed) }
+    fun toggleSidebar() {
+        sidebarCollapsed = !sidebarCollapsed
+        Pocket.prefs.sidebarCollapsed = sidebarCollapsed
+    }
     var drawerMenuOpen by remember { mutableStateOf(false) }
 
     LaunchedEffect(active) {
@@ -118,7 +123,7 @@ private fun Root(deepLink: MutableStateFlow<PairingLink?>) {
 
     BackHandler(screen != Screen.Chat && active != null) {
         screen = when (screen) {
-            Screen.General, Screen.Models, Screen.Credentials -> Screen.Settings
+            Screen.General, Screen.Models -> Screen.Settings
             Screen.Plugins, Screen.Schedule -> panelReturn
             else -> Screen.Chat
         }
@@ -139,7 +144,6 @@ private fun Root(deepLink: MutableStateFlow<PairingLink?>) {
                 onModels = { screen = Screen.Models },
                 onPlugins = { panelReturn = Screen.Settings; screen = Screen.Plugins },
                 onSchedule = { panelReturn = Screen.Settings; screen = Screen.Schedule },
-                onCredentials = { screen = Screen.Credentials },
             )
             Screen.General -> GeneralSettingsScreen(onBack = { screen = Screen.Settings })
             Screen.Models -> ModelsSettingsScreen(onBack = { screen = Screen.Settings })
@@ -149,7 +153,6 @@ private fun Root(deepLink: MutableStateFlow<PairingLink?>) {
                 onNewTask = { Pocket.closeChat(); screen = Screen.Chat },
                 onOpenSession = { Pocket.openSession(it); screen = Screen.Chat },
             )
-            Screen.Credentials -> CredentialsSettingsScreen(onBack = { screen = Screen.Settings })
             Screen.Chat -> {
                 val drawerContent: @Composable () -> Unit = {
                     SessionDrawer(
@@ -169,14 +172,17 @@ private fun Root(deepLink: MutableStateFlow<PairingLink?>) {
                             if (!twoPane) scope.launch { drawer.close() }
                         },
                         onMenuOpenChange = { drawerMenuOpen = it },
+                        onCollapse = if (twoPane) ::toggleSidebar else null,
                     )
                 }
                 if (twoPane) {
                     Row(Modifier.fillMaxSize().statusBarsPadding()) {
-                        drawerContent()
-                        VerticalDivider(color = T.Border, thickness = 0.5.dp)
+                        if (!sidebarCollapsed) {
+                            drawerContent()
+                            VerticalDivider(color = T.Border, thickness = 0.5.dp)
+                        }
                         Box(Modifier.weight(1f).fillMaxHeight().navigationBarsPadding()) {
-                            ChatRoot(onMenu = {}, showMenuButton = false)
+                            ChatRoot(onMenu = ::toggleSidebar, showMenuButton = true)
                         }
                     }
                 } else {
