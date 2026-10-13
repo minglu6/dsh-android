@@ -525,6 +525,9 @@ object Pocket {
 
     fun hasOp(op: String) = op in ops.value
 
+    /** Live pocket client while connected; null when idle/disconnected. */
+    fun clientOrNull(): PocketClient? = client
+
     fun executeCommand(line: String) = main.launch {
         val c = client ?: run { errors.tryEmit("未连接"); return@launch }
         val st = chat.value ?: run { errors.tryEmit("无会话"); return@launch }

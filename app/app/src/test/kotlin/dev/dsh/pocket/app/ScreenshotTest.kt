@@ -123,8 +123,27 @@ class ScreenshotTest {
     @Test fun s06_connectionsEmpty() { Pocket.profiles.value = emptyList(); Pocket.active.value = null; show("06-connections-empty") { ConnectionsScreen(null, {}, false, {}, {}) } }
     @Test fun s07_pairSheet() { Pocket.profiles.value = emptyList(); showWithDialogs("07-pair-sheet") { PairSheet(PairingLink("100.106.128.87", 7690, "752314"), onDismiss = {}, onPaired = {}) } }
     @Test fun s07b_cameraPermissionSheet() = showWithDialogs("07b-camera-permission") { CameraPermissionSheet({}, {}) }
-    @Test fun s08_settings() = show("08-settings") { SettingsScreen({}, {}, {}) }
+    @Test fun s08_settings() = show("08-settings") {
+        Pocket.ops.value = setOf("models.providers", "plugins.list", "schedule.catalog", "credentials.list")
+        SettingsScreen({}, {}, {}, {}, {}, {}, {})
+    }
     @Test fun s09_general() = show("09-general-settings") { GeneralSettingsScreen {} }
+    @Test fun s22_modelsSettings() = show("22-models-settings") {
+        Pocket.ops.value = setOf("models.providers")
+        ModelsSettingsScreen {}
+    }
+    @Test fun s23_pluginsSettings() = show("23-plugins-settings") {
+        Pocket.ops.value = setOf("plugins.list")
+        PluginsSettingsScreen {}
+    }
+    @Test fun s24_scheduleSettings() = show("24-schedule-settings") {
+        Pocket.ops.value = setOf("schedule.catalog", "schedule.create")
+        ScheduleSettingsScreen {}
+    }
+    @Test fun s25_credentialsSettings() = show("25-credentials-settings") {
+        Pocket.ops.value = setOf("credentials.list", "credentials.set")
+        CredentialsSettingsScreen {}
+    }
     @Test fun s10_modelSheet() = showWithDialogs("10-model-sheet") { ModelSheet(catalog, ModelChoice("deepseek", "deepseek-v4.1-flash", "DeepSeek-V4.1-Flash", "high"), {}) {} }
     @Test fun s11_permissionSheet() = showWithDialogs("11-permission-sheet") { PermissionSheet("workspace-write", {}) {} }
     @Test fun s12_plusSheet() = showWithDialogs("12-plus-sheet") {

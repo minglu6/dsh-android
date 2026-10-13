@@ -270,6 +270,77 @@ class PocketClient(
     suspend fun workspaceChangesSummary(sessionId: String, seq: Long): JsonElement =
         call("workspaceChanges.summary", jsonOf("sessionId" to sessionId, "seq" to seq))
 
+    // ---- Desktop settings parity (models / plugins / schedule / credentials)
+    suspend fun modelsProviders(): JsonElement = call("models.providers")
+    suspend fun modelsProviderGet(provider: String): JsonElement =
+        call("models.providerGet", jsonOf("provider" to provider))
+    suspend fun modelsSettingsMutate(ns: String, ops: JsonArray, expectedRevision: Long? = null): JsonElement =
+        call(
+            "models.settingsMutate",
+            buildJsonObject {
+                put("ns", ns)
+                put("ops", ops)
+                expectedRevision?.let { put("expectedRevision", it) }
+            },
+        )
+    suspend fun modelsDiscover(settingsNs: String, request: JsonObject = JsonObject(emptyMap())): JsonElement =
+        call("models.discover", buildJsonObject {
+            put("settingsNs", settingsNs)
+            put("request", request)
+        })
+
+    suspend fun pluginsList(): JsonElement = call("plugins.list")
+    suspend fun pluginsInventory(): JsonElement = call("plugins.inventory")
+    suspend fun pluginsSetEnabled(enabled: Boolean, bundle: String? = null, id: String? = null): JsonElement =
+        call(
+            "plugins.setEnabled",
+            buildJsonObject {
+                put("enabled", enabled)
+                bundle?.let { put("bundle", it) }
+                id?.let { put("id", it) }
+            },
+        )
+    suspend fun pluginsInstall(spec: String, options: JsonObject? = null): JsonElement =
+        call(
+            "plugins.install",
+            buildJsonObject {
+                put("spec", spec)
+                options?.let { put("options", it) }
+            },
+        )
+
+    suspend fun scheduleCatalog(): JsonElement = call("schedule.catalog")
+    suspend fun scheduleList(sessionId: String): JsonElement =
+        call("schedule.list", jsonOf("sessionId" to sessionId))
+    suspend fun scheduleCreate(args: JsonObject): JsonElement = call("schedule.create", args)
+    suspend fun scheduleUpdate(args: JsonObject): JsonElement = call("schedule.update", args)
+    suspend fun scheduleDelete(sessionId: String, id: String): JsonElement =
+        call("schedule.delete", jsonOf("sessionId" to sessionId, "id" to id))
+    suspend fun scheduleHistory(sessionId: String, id: String, limit: Int = 20, before: String? = null): JsonElement =
+        call(
+            "schedule.history",
+            jsonOf("sessionId" to sessionId, "id" to id, "limit" to limit, "before" to before),
+        )
+
+    suspend fun credentialsList(refs: List<String> = emptyList()): JsonElement =
+        call(
+            "credentials.list",
+            buildJsonObject {
+                if (refs.isNotEmpty()) putJsonArray("refs") { refs.forEach { add(it) } }
+            },
+        )
+    suspend fun credentialsDescribe(refs: List<String>): JsonElement =
+        call(
+            "credentials.describe",
+            buildJsonObject { putJsonArray("refs") { refs.forEach { add(it) } } },
+        )
+    suspend fun credentialsSet(ref: String, value: String): JsonElement =
+        call("credentials.set", jsonOf("ref" to ref, "value" to value))
+    suspend fun credentialsUnset(ref: String): JsonElement =
+        call("credentials.unset", jsonOf("ref" to ref))
+    suspend fun credentialsDeleteRecord(key: String): JsonElement =
+        call("credentials.deleteRecord", jsonOf("key" to key))
+
     fun close() {
         pump?.cancel(); pump = null
         transport?.close(); transport = null

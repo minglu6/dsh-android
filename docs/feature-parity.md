@@ -6,7 +6,7 @@ Plugin surface: `dsh-plugin-pocket` WebSocket ops (+ optional Cordis injects).
 
 **Decision rules**
 - **implement** — can work on phone via existing follow/session data and/or new plugin RPC over in-process host services (including the **host-machine PTY / terminal**, which is useful remotely).
-- **hide** — only surfaces that require a **local desktop app/editor/browser chrome** (open-in-editor, embedded browser webview, plugin install manager, schedule CRUD, credentials UI) and have no meaningful remote substitute.
+- **hide** — only surfaces that require a **local desktop app/editor/browser chrome** (open-in-editor, embedded browser webview, OS directory picker for plugin install / open-config) and have no meaningful remote substitute.
 
 | Feature | Desktop behavior (0.2.1-alpha.2) | Decision | Status | Notes |
 |---|---|---|---|---|
@@ -33,14 +33,17 @@ Plugin surface: `dsh-plugin-pocket` WebSocket ops (+ optional Cordis injects).
 | Composer + → 压缩 | `/compact` | implement | done | `commands.execute` `/compact`. |
 | Composer + → 权限 / 模型 | Permission presets / model catalog | keep | done | |
 | Composer + → 下载日志 | Session export | implement | done | Same `session.export`. |
-| Drawer 插件 | Plugin manager | hide | done | Row removed. |
-| Drawer 自动化任务 | Schedule panel | hide | done | Row removed. |
+| Drawer 插件 | Plugin manager | implement | done | Settings → 插件 (native); local-path install still hide. |
+| Drawer 自动化任务 | Schedule panel | implement | done | Settings → 自动化任务 (native catalog/CRUD/history). |
 | Drawer 工作区 / 会话 | Group by cwd; open session | keep | done | |
 | New-chat 工作区 chip | Workspace picker | implement (limited) | done | Known session `cwd`s only; no OS directory dialog. |
 | New-chat / settings Agent 预设 | Preset roster | keep | done | |
 | Settings → 通用设置 | Locale, theme, font, transcript, collapse, busy-send, performance | implement | done | Phone-local prefs; official labels/values. |
-| Settings → 模型 | Provider / credentials configuration | hide | done | Row removed. |
-| Settings → 内置插件 | Plugin manager | hide | done | Row removed. |
+| Settings → 模型 | Provider / credentials configuration | implement | done | `models.providers` + credential set/unset; Compose detail. |
+| Settings → 插件 | Plugin manager | implement | done | `plugins.list` / `setEnabled`; npm install op available, path picker hide. |
+| Settings → 自动化任务 | Schedule catalog CRUD + history | implement | done | `schedule.*` pocket ops over Host `schedule`. |
+| Settings → 凭证 | credentials describe/set/unset (masked) | implement | done | `credentials.*`; values never returned. |
+| Settings → 内置插件 | Plugin inventory | implement | done | Merged into Plugins page (`plugins.inventory` / listPlugins). |
 | Settings → Agent 预设 | Roster / info | keep | done | |
 | Settings → 打开配置文件 | Local editor | hide | done | Row removed. |
 | Settings → 连接 / 审批通知 | Profiles + notify flag | keep | done | |
@@ -64,5 +67,9 @@ Plugin surface: `dsh-plugin-pocket` WebSocket ops (+ optional Cordis injects).
 | `files.list` / `files.read` | `workspaceFiles` + `sessions` | Right-panel files |
 | `jobs.list` / `jobs.kill` | `jobController` | Right-panel background tasks |
 | `terminal.list` / `create` / `follow` / `write` / `resize` / `close` | `terminalController` + `agents` | Host PTY; `follow` pushes `{ev:"terminal"}` |
+| `models.providers` / `providerGet` / `settingsMutate` / `discover` | `llm` + `settings`/`settingsController` + `credentials` | Settings → 模型 |
+| `plugins.list` / `setEnabled` / `install` / `inventory` | `pluginManager` (+ inventory) | Settings → 插件 |
+| `schedule.catalog` / `list` / `create` / `update` / `delete` / `history` | `schedule` | Settings → 自动化任务 |
+| `credentials.list` / `describe` / `set` / `unset` / `deleteRecord` | `credentials` | Settings → 凭证 (masked) |
 
-Existing ops kept: sessions.*, prompt, cancel, follow/unfollow, models.*, permissions.*, presets.list, approval.*, devices.*, pairing.*.
+Existing ops kept: sessions.*, prompt, cancel, follow/unfollow, models.catalog/select, permissions.*, presets.list, approval.*, devices.*, pairing.*.

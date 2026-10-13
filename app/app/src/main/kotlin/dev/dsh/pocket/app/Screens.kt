@@ -620,26 +620,54 @@ private fun Field(label: String, v: String, hint: String, onChange: (String) -> 
 // ---------- Settings ----------
 
 @Composable
-fun SettingsScreen(onBack: () -> Unit, onGeneral: () -> Unit, onConnections: () -> Unit) {
+fun SettingsScreen(
+    onBack: () -> Unit,
+    onGeneral: () -> Unit,
+    onConnections: () -> Unit,
+    onModels: () -> Unit = {},
+    onPlugins: () -> Unit = {},
+    onSchedule: () -> Unit = {},
+    onCredentials: () -> Unit = {},
+) {
     val profile = Pocket.activeProfile
+    val ops by Pocket.ops.collectAsState()
     var notify by remember { mutableStateOf(Pocket.prefs.approvalNotify) }
     var sheet by remember { mutableStateOf(false) }
     var diagnostics by remember { mutableStateOf(false) }
-    Column(Modifier.fillMaxSize().background(Color.White).systemBarsPadding().verticalScroll(rememberScrollState())) {
-        Header("设置", onBack)
+    Column(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background).systemBarsPadding().verticalScroll(rememberScrollState())) {
+        Header(L.settings(), onBack)
         Card {
-            Row2("通用设置", icon = D.settings, onClick = onGeneral)
+            Row2(L.generalNav(), icon = D.settings, onClick = onGeneral)
+            if ("models.providers" in ops) {
+                Row2(L.modelsNav(), icon = D.database, onClick = onModels)
+            }
+            if ("plugins.list" in ops) {
+                Row2(L.pluginsNav(), icon = D.plugin, onClick = onPlugins)
+            }
+            if ("schedule.catalog" in ops) {
+                Row2(L.scheduleNav(), icon = D.alarm, onClick = onSchedule)
+            }
+            if ("credentials.list" in ops) {
+                Row2(L.credentialsNav(), icon = D.shield, onClick = onCredentials)
+            }
             Row2("Agent 预设", icon = D.agentPreset, value = "标准模式", divider = false, onClick = { sheet = true })
         }
-        Text("dsh-android", fontSize = 13.sp, color = T.Text3, modifier = Modifier.padding(start = 22.dp, top = 12.dp, bottom = 2.dp))
+        Text("dsh-android", fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(start = 22.dp, top = 12.dp, bottom = 2.dp))
         Card {
             Row2("连接", icon = D.rightUp, value = profile?.name ?: "未连接", onClick = onConnections)
             Row2(L.diagnostics(), icon = D.inspect, onClick = { diagnostics = true })
             Row2("审批通知", divider = false, trailing = {
-                Switch(notify, { notify = it; Pocket.prefs.approvalNotify = it }, colors = SwitchDefaults.colors(checkedTrackColor = T.Ink, checkedThumbColor = Color.White))
+                Switch(
+                    notify,
+                    { notify = it; Pocket.prefs.approvalNotify = it },
+                    colors = SwitchDefaults.colors(
+                        checkedTrackColor = MaterialTheme.colorScheme.onSurface,
+                        checkedThumbColor = MaterialTheme.colorScheme.surface,
+                    ),
+                )
             })
         }
-        Text("当前版本：${BuildConfig.VERSION_NAME}${profile?.let { " · ${it.name}" } ?: ""}", fontSize = 12.sp, color = T.Caption,
+        Text("当前版本：${BuildConfig.VERSION_NAME}${profile?.let { " · ${it.name}" } ?: ""}", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant,
             textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth().padding(16.dp))
     }
     if (sheet) PresetSheet("standard", editable = false, onDismiss = { sheet = false }) {}

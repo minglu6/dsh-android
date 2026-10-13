@@ -21,6 +21,7 @@ object D {
     val newChat @Composable get() = v(R.drawable.dsh_new_chat)
     val plugin @Composable get() = v(R.drawable.dsh_cordis_plugin)
     val clock @Composable get() = v(R.drawable.dsh_clock)
+    val alarm @Composable get() = v(R.drawable.dsh_alarm_clock)
     val settings @Composable get() = v(R.drawable.dsh_settings)
     val search @Composable get() = v(R.drawable.dsh_search)
     val database @Composable get() = v(R.drawable.dsh_database)
