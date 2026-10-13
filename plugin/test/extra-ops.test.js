@@ -125,8 +125,10 @@ test('terminal.create/write/follow pumps frames then unfollow aborts', async () 
   }, { get: (id) => id === 's1' ? { session: {} } : undefined })
 
   assert.equal((await ops['terminal.list']({ sessionId: 's1' })).terminals[0].id, 'term1')
+  assert.equal((await ops['terminal.list']({ sessionId: 's1' })).platform, process.platform)
   const created = await ops['terminal.create']({ sessionId: 's1', cols: 40, rows: 12 }, AbortSignal.timeout(1000))
   assert.equal(created.terminal.state, 'running')
+  assert.equal(created.platform, process.platform)
 
   const pushed = []
   const client = {
@@ -145,6 +147,22 @@ test('terminal.create/write/follow pumps frames then unfollow aborts', async () 
   assert.equal(wrote[0].data, 'ls\r')
 
   client.subs.get(sub.subId).abort()
+})
+
+test('terminal roster keeps owner scope and retained metadata without requiring a live agent', () => {
+  const retained = { id: 'same-id', title: 'Retained shell', cwd: '/prior-workspace', state: 'exited' }
+  const queried = []
+  const ops = terminalOps({
+    list: (sessionId) => {
+      queried.push(sessionId)
+      return sessionId === 'prior' ? [retained] : []
+    },
+  }, { get: () => undefined })
+  assert.deepEqual(ops['terminal.list']({ sessionId: 'current' }).terminals, [])
+  assert.deepEqual(ops['terminal.list']({ sessionId: 'prior' }), {
+    terminals: [retained], platform: process.platform,
+  })
+  assert.deepEqual(queried, ['current', 'prior'])
 })
 
 test('session.export pages history into a zip of jsonl', async () => {

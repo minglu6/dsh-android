@@ -3,6 +3,8 @@ package dev.dsh.pocket.app
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
+import kotlin.test.assertFalse
+import kotlin.test.assertNull
 
 class AnsiTest {
     @Test fun terminalDefaultColorsFollowThemeWithoutOverwritingAnsiColors() {
@@ -89,5 +91,70 @@ class AnsiTest {
         assertEquals(1, charWidth("A"))
         assertEquals(2, charWidth("中"))
         assertEquals(0, charWidth("\u0007"))
+    }
+
+    @Test fun tapMovesByCharactersNotWideCellsAndNeverNavigatesHistory() {
+        val t = AnsiTerminal(20, 3)
+        t.write("old\r\n$ a中e\u0301😀z")
+        assertNull(t.tapInput(0, 1))
+        assertNull(t.tapInput(-1, 1))
+        assertNull(t.tapInput(1, 20))
+        assertEquals("\u001b[D".repeat(4), t.tapInput(1, 3))
+        assertEquals(t.tapInput(1, 3), t.tapInput(1, 4))
+        assertNull(t.tapInput(1, 19)) // Padding after the current end is not editable.
+        t.write("\u001b[3D")
+        assertEquals("\u001b[C".repeat(2), t.tapInput(1, 19))
+    }
+
+    @Test fun mouseClicksHonorSgrLegacyAndAlternateScreenModes() {
+        val t = AnsiTerminal(120, 4)
+        t.write("shell\u001b[?1049h")
+        assertTrue(t.alternateScreen)
+        assertNull(t.tapInput(0, 0))
+        t.write("\u001b[?1000;1006h")
+        assertEquals("\u001b[<0;111;3M\u001b[<0;111;3m", t.tapInput(2, 110))
+        t.write("\u001b[?1006l")
+        assertEquals("\u001b[M \"#\u001b[M#\"#", t.tapInput(2, 1))
+        assertNull(t.tapInput(2, 110)) // Do not corrupt legacy mouse bytes through UTF-8.
+        t.write("\u001b[?1000l\u001b[?9h")
+        assertEquals("\u001b[M \"#", t.tapInput(2, 1))
+        t.write("\u001b[?9l\u001b[?1049l")
+        assertFalse(t.alternateScreen)
+        assertEquals("shell", t.plainText())
+        assertEquals("\u001b[D".repeat(5), t.tapInput(0, 0))
+    }
+
+    @Test fun selectionKeepsUnicodeAndDistinguishesSoftWrapFromNewline() {
+        val t = AnsiTerminal(6, 4)
+        t.write("ab中e\u0301😀z\r\nnext")
+        val grid = t.snapshot()
+        assertEquals(2, grid.position(0, 3)) // The trailing half of 中 selects its full grapheme.
+        assertEquals("中", grid.selectedText(2, 2))
+        assertEquals("e\u0301😀z", grid.selectedText(4, 8))
+        assertEquals("ab中e\u0301😀z\nnext", grid.selectedText(0, 15))
+        assertEquals("ab中e\u0301😀z\nnext", grid.selectedText(15, 0))
+        t.write("changed")
+        assertEquals("ab中e\u0301😀z\nnext", grid.selectedText(0, 15))
+    }
+
+    @Test fun selectionRetainsHardNewlinesAndWordAtTouchedLocation() {
+        val t = AnsiTerminal(8, 3)
+        t.write("one two\r\n三😀")
+        val grid = t.snapshot()
+        assertEquals(4..6, grid.wordAt(grid.position(0, 5)))
+        assertEquals("two\n三😀", grid.selectedText(4, 11))
+        assertEquals("😀", grid.selectedText(grid.position(1, 3), grid.position(1, 3)))
+    }
+
+    @Test fun snapshotResetDropsPreviousTerminalModesAndParserState() {
+        val t = AnsiTerminal(4, 3)
+        t.write("old\u001b7\u001b[?7l\u001b[?25l\u001b[4h\u001b[?1049h\u001b[?1000;1006h\u001b(")
+        t.applySnapshot("abcde")
+        assertEquals("abcd\ne", t.plainText())
+        assertTrue(t.isCursorVisible())
+        assertFalse(t.alternateScreen)
+        assertNull(t.tapInput(0, 0))
+        t.write("\u001b8X")
+        assertEquals("Xbcd\ne", t.plainText())
     }
 }

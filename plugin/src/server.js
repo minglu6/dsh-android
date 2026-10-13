@@ -3,6 +3,7 @@ import { createPairing } from './pairing.js'
 import { createDeviceStore } from './devices.js'
 import { createServer } from 'node:http'
 import { WebSocketServer } from 'ws'
+import { createHostUi, uiRequestOrigin } from './host-ui.js'
 
 export const PROTO = 1
 const PRE_AUTH_MAX = 64 * 1024
@@ -267,9 +268,9 @@ export function createPocketServer(opts) {
   const idleMs = opts.idleMs ?? DEFAULT_IDLE_MS
   const pairFailDelayMs = opts.pairFailDelayMs ?? 200
   const ops = createOps(sc)
+  let hostUi
   const http = createServer(async (req, res) => {
-    const url = new URL(req.url || '/', `http://${req.headers.host || '127.0.0.1'}`)
-    if (req.method === 'GET' && url.pathname === '/diagnostics') {
+    if (req.method === 'GET' && req.url === '/diagnostics') {
       if (typeof opts.getDiagnostics !== 'function') {
         res.writeHead(404, { 'content-type': 'application/json; charset=utf-8' }).end(JSON.stringify({ error: 'unavailable' }))
         return
@@ -283,7 +284,7 @@ export function createPocketServer(opts) {
       }
       return
     }
-    if (req.method === 'GET' && url.pathname === '/discovery') {
+    if (req.method === 'GET' && req.url === '/discovery') {
       const info = opts.info ?? {}
       res.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' })
       res.end(JSON.stringify({
@@ -296,14 +297,27 @@ export function createPocketServer(opts) {
       }))
       return
     }
+    if (hostUi) { await hostUi.http(req, res); return }
     res.writeHead(426, { 'content-type': 'text/plain' }).end('websocket required')
   })
   // Adapted from saya-ch/dsh-mobile (Apache-2.0): negotiate permessage-deflate with phones.
   // Frame-size caps (PRE_AUTH_MAX / MAX_PAYLOAD / FRAME_*_LIMIT) still apply to decoded JSON.
   const wss = new WebSocketServer({
-    server: http,
+    noServer: true,
     maxPayload: MAX_PAYLOAD,
     perMessageDeflate: opts.perMessageDeflate === false ? false : (opts.perMessageDeflate ?? WS_DEFLATE),
+  })
+  http.on('upgrade', (req, socket, head) => {
+    if (req.url?.split('?')[0] === '/api/remote.mux') {
+      if (hostUi) void hostUi.upgrade(req, socket, head)
+      else socket.end('HTTP/1.1 401 Unauthorized\r\nConnection: close\r\nContent-Length: 0\r\n\r\n')
+      return
+    }
+    if (req.url !== '/') {
+      socket.end('HTTP/1.1 403 Forbidden\r\nConnection: close\r\nContent-Length: 0\r\n\r\n')
+      return
+    }
+    wss.handleUpgrade(req, socket, head, (ws) => wss.emit('connection', ws, req))
   })
   const clients = new Set()
   /** approvalId -> { payload, settle(outcome) } */
@@ -383,6 +397,7 @@ export function createPocketServer(opts) {
       if (disposed) return
       disposed = true
       clearTimeout(helloTimer); clearInterval(beat); clients.delete(client)
+      hostUi?.revoke(client)
       for (const ac of client.subs.values()) ac.abort()
     }
     const client = {
@@ -396,7 +411,7 @@ export function createPocketServer(opts) {
     beat = setInterval(() => {
       if (!client.device) return
       if (Date.now() - client.lastSeen > idleMs) {
-        if (typeof transport.terminate === 'function') transport.terminate()
+        if (typeof transport.terminate === 'function') { transport.terminate(); dispose() }
         else client.close(1001, 'idle')
         return
       }
@@ -445,12 +460,12 @@ export function createPocketServer(opts) {
     }
   }
 
-  wss.on('connection', (ws) => {
+  wss.on('connection', (ws, req) => {
     const bound = bindClient({
       push: (m) => { if (ws.readyState === ws.OPEN) ws.send(JSON.stringify(m)) },
       close: (code, reason) => { try { ws.close(code ?? 1000, reason) } catch { /* ignore */ } },
       terminate: () => ws.terminate(),
-      meta: { transport: 'ws' },
+      meta: { transport: 'ws', uiOrigin: uiRequestOrigin(req) },
     })
     ws.on('close', () => bound.onRemoteClose())
     ws.on('message', (raw, isBinary) => {
@@ -566,6 +581,25 @@ export function createPocketServer(opts) {
 
   return {
     devices, pairing,
+    /** A service-scoped, fixed-local Host backend. Disposing removes ops and all grants. */
+    installHostUi(backend) {
+      const installed = createHostUi({ ...backend, devices, isClientLive: (client) => clients.has(client) })
+      hostUi?.dispose()
+      hostUi = installed
+      const unregister = this.registerOps({
+        'ui.open': (args, _signal, client) => installed.open(args, client),
+        'ui.close': (args, _signal, client) => {
+          need(args.ticket === undefined || typeof args.ticket === 'string', 'ticket must be a string')
+          installed.revoke(client, args.ticket)
+          return { closed: true }
+        },
+      })
+      return () => {
+        installed.dispose()
+        if (hostUi === installed) hostUi = undefined
+        unregister()
+      }
+    },
     /** Register extra ops; returns a disposer. */
     registerOps(table) {
       Object.assign(extraOps, table)
@@ -726,6 +760,8 @@ export function createPocketServer(opts) {
     address: () => http.address(),
     close: () => new Promise((resolve) => {
       unsub?.()
+      hostUi?.dispose()
+      hostUi = undefined
       for (const c of [...clients]) c.close(1001, 'shutdown')
       for (const ws of wss.clients) ws.terminate()
       wss.close(() => {

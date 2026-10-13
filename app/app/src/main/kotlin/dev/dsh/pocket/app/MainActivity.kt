@@ -25,7 +25,7 @@ import kotlinx.coroutines.launch
 
 enum class Screen {
     Chat, Connections, Settings, General,
-    Models, Plugins, Schedule,
+    Models, Plugins, BuiltInPlugins, Schedule,
 }
 
 class MainActivity : ComponentActivity() {
@@ -83,6 +83,7 @@ private fun Root(deepLink: MutableStateFlow<PairingLink?>) {
     var screen by rememberSaveable { mutableStateOf(if (Pocket.active.value == null) Screen.Connections else Screen.Chat) }
     /** Plugins / Schedule can open from Settings or the drawer; back returns to the source. */
     var panelReturn by rememberSaveable { mutableStateOf(Screen.Settings) }
+    var pendingCreatorPreset by rememberSaveable(active) { mutableStateOf<String?>(null) }
     val drawer = rememberDrawerState(DrawerValue.Closed)
     val scope = rememberCoroutineScope()
     val snack = remember { SnackbarHostState() }
@@ -123,7 +124,7 @@ private fun Root(deepLink: MutableStateFlow<PairingLink?>) {
 
     BackHandler(screen != Screen.Chat && active != null) {
         screen = when (screen) {
-            Screen.General, Screen.Models -> Screen.Settings
+            Screen.General, Screen.Models, Screen.BuiltInPlugins -> Screen.Settings
             Screen.Plugins, Screen.Schedule -> panelReturn
             else -> Screen.Chat
         }
@@ -142,12 +143,18 @@ private fun Root(deepLink: MutableStateFlow<PairingLink?>) {
                 onGeneral = { screen = Screen.General },
                 onConnections = { screen = Screen.Connections },
                 onModels = { screen = Screen.Models },
-                onPlugins = { panelReturn = Screen.Settings; screen = Screen.Plugins },
+                onPlugins = { screen = Screen.BuiltInPlugins },
                 onSchedule = { panelReturn = Screen.Settings; screen = Screen.Schedule },
+                onCreatePreset = {
+                    pendingCreatorPreset = "cordis"
+                    Pocket.closeChat()
+                    screen = Screen.Chat
+                },
             )
             Screen.General -> GeneralSettingsScreen(onBack = { screen = Screen.Settings })
             Screen.Models -> ModelsSettingsScreen(onBack = { screen = Screen.Settings })
             Screen.Plugins -> PluginsSettingsScreen(onBack = { screen = panelReturn })
+            Screen.BuiltInPlugins -> BuiltInPluginsScreen(onBack = { screen = Screen.Settings })
             Screen.Schedule -> ScheduleSettingsScreen(
                 onBack = { screen = panelReturn },
                 onNewTask = { Pocket.closeChat(); screen = Screen.Chat },
@@ -182,7 +189,8 @@ private fun Root(deepLink: MutableStateFlow<PairingLink?>) {
                             VerticalDivider(color = T.Border, thickness = 0.5.dp)
                         }
                         Box(Modifier.weight(1f).fillMaxHeight().navigationBarsPadding()) {
-                            ChatRoot(onMenu = ::toggleSidebar, showMenuButton = true)
+                            ChatRoot(onMenu = ::toggleSidebar, showMenuButton = true,
+                                pendingPreset = pendingCreatorPreset, onPresetConsumed = { pendingCreatorPreset = null })
                         }
                     }
                 } else {
@@ -191,7 +199,8 @@ private fun Root(deepLink: MutableStateFlow<PairingLink?>) {
                         gesturesEnabled = !drawerMenuOpen,
                         drawerContent = { drawerContent() },
                     ) {
-                        ChatRoot(onMenu = { scope.launch { drawer.open() } }, showMenuButton = true)
+                        ChatRoot(onMenu = { scope.launch { drawer.open() } }, showMenuButton = true,
+                            pendingPreset = pendingCreatorPreset, onPresetConsumed = { pendingCreatorPreset = null })
                     }
                 }
             }

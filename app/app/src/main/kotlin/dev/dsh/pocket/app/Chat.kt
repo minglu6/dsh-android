@@ -1,5 +1,6 @@
 package dev.dsh.pocket.app
 
+import androidx.compose.animation.core.*
 import androidx.compose.foundation.*
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -49,6 +50,7 @@ import dev.dsh.pocket.protocol.ToolStatus
 import dev.dsh.pocket.protocol.UserQuestion
 import dev.dsh.pocket.protocol.get
 import dev.dsh.pocket.protocol.str
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
@@ -94,7 +96,12 @@ fun CompatibilityBanner(issue: CompatibilityIssue?) {
 }
 
 @Composable
-fun ChatRoot(onMenu: () -> Unit, showMenuButton: Boolean = true) {
+fun ChatRoot(
+    onMenu: () -> Unit,
+    showMenuButton: Boolean = true,
+    pendingPreset: String? = null,
+    onPresetConsumed: () -> Unit = {},
+) {
     val chat by Pocket.chat.collectAsState()
     val approvals by Pocket.approvals.collectAsState()
     val catalog by Pocket.catalog.collectAsState()
@@ -121,6 +128,12 @@ fun ChatRoot(onMenu: () -> Unit, showMenuButton: Boolean = true) {
     var modelDirect by remember { mutableStateOf(false) }
     // New-chat drafts (applied when the session gets created).
     var draftPreset by remember(active) { mutableStateOf("") }
+    LaunchedEffect(active, pendingPreset) {
+        if (pendingPreset != null) {
+            draftPreset = pendingPreset
+            onPresetConsumed()
+        }
+    }
     val presetRoster by Pocket.presetRoster.collectAsState()
     LaunchedEffect(presetRoster, active) {
         if (draftPreset.isEmpty()) draftPreset = presetRoster.firstOrNull { it["isDefault"].toString() == "true" }?.get("id").str().orEmpty()
@@ -201,6 +214,10 @@ fun ChatRoot(onMenu: () -> Unit, showMenuButton: Boolean = true) {
     }
 
     val sid = chat?.sessionId
+    val inspectorPicking = InspectorNavigation.sessionId == sid && InspectorNavigation.picking
+    DisposableEffect(active) {
+        onDispose { InspectorNavigation.reset() }
+    }
     LaunchedEffect(sid) {
         if (sid != previousSession) {
             if (previousSession == null && sidebarDraft != null) {
@@ -295,6 +312,7 @@ fun ChatRoot(onMenu: () -> Unit, showMenuButton: Boolean = true) {
         previewPath = path
         sheet = Sheet.FilePreview
     }) {
+    InspectorChatSurface(sid) {
     Column(Modifier.fillMaxSize().background(T.Bg).then(if (showMenuButton) Modifier.systemBarsPadding() else Modifier).imePadding()) {
         TopBar(
             summary?.title ?: chat?.title, sid != null,
@@ -347,6 +365,9 @@ fun ChatRoot(onMenu: () -> Unit, showMenuButton: Boolean = true) {
             val st = chat!!
             var tab by remember(st.sessionId) { mutableIntStateOf(0) }
             LaunchedEffect(Pocket.prefs.showCodeWorkView) { if (!Pocket.prefs.showCodeWorkView) tab = 0 }
+            LaunchedEffect(inspectorPicking, InspectorNavigation.revealItemKey) {
+                if (inspectorPicking || InspectorNavigation.sessionId == sid && InspectorNavigation.revealItemKey != null) tab = 0
+            }
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                 Box(Modifier.weight(1f)) { Tabs(tab) { tab = it } }
                 JobsAction(active, st.sessionId, dot == Dot.Online && "jobs.list" in ops) { sheet = Sheet.Jobs }
@@ -391,7 +412,7 @@ fun ChatRoot(onMenu: () -> Unit, showMenuButton: Boolean = true) {
             GoalBar(st) { sheet = Sheet.Goal }
             if (!questionVisible && approval == null) {
             Composer(
-                "发消息或创建任务, / 调用指令, @ 文件或对话", st.running, curPerm, curModel, enabled = dot == Dot.Online,
+                "发消息或创建任务, / 调用指令, @ 文件或对话", st.running, curPerm, curModel, enabled = dot == Dot.Online && !inspectorPicking,
                 draft = composerDraft, onDraftChange = { composerDraft = it },
                 planMode = st.planMode,
                 pendingImages = pendingImages, pendingFiles = pendingFiles,
@@ -416,6 +437,7 @@ fun ChatRoot(onMenu: () -> Unit, showMenuButton: Boolean = true) {
                 onMention = { sheet = Sheet.Mentions },
                 onExitPlan = { Pocket.executeCommand("/plan off") },
                 onSend = { text ->
+                    if (InspectorNavigation.picking) return@Composer
                     val ready = pendingFiles.filter { it.status == AttachStatus.Ready && it.receiptId != null }
                     val imgs = pendingImages
                     when {
@@ -425,11 +447,12 @@ fun ChatRoot(onMenu: () -> Unit, showMenuButton: Boolean = true) {
                     }
                     pendingImages = emptyList(); pendingFiles = emptyList()
                 },
-                onStop = { Pocket.cancel() },
+                onStop = { if (!InspectorNavigation.picking) Pocket.cancel() },
             )
             ComposerStats(st.composerMetrics)
             }
         }
+    }
     }
 
     tool?.let { ToolSheet(it) { tool = null } }
@@ -437,7 +460,7 @@ fun ChatRoot(onMenu: () -> Unit, showMenuButton: Boolean = true) {
         val title = when (sheet) {
             Sheet.Files -> if (Pocket.prefs.language == AppLanguage.En) "Workspace files" else "工作区文件"
             Sheet.Terminal -> if (Pocket.prefs.language == AppLanguage.En) "Terminal" else "终端"
-            else -> if (Pocket.prefs.language == AppLanguage.En) "Session data inspector" else "会话数据诊断"
+            else -> if (Pocket.prefs.language == AppLanguage.En) "Session Log" else "会话数据诊断"
         }
         RightPanelFrame(title, onDismiss = { sheet = Sheet.None }, onBack = { sheet = Sheet.Panel }) {
             Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
@@ -633,6 +656,9 @@ internal fun Transcript(
     val list = rememberLazyListState()
     var followBottom by remember(st.sessionId) { mutableStateOf(true) }
     val scrollScope = rememberCoroutineScope()
+    InspectorTranscriptScroll { delta -> followBottom = false; list.dispatchRawDelta(delta) }
+    val revealItemKey = InspectorNavigation.revealItemKey.takeIf { InspectorNavigation.sessionId == st.sessionId }
+    var highlightedRow by remember(st.sessionId) { mutableStateOf<String?>(null) }
     // Shared presentation preferences are read from the connected Host.
     val livePolicy = presentationPolicyFor(Pocket.prefs.transcriptView, Pocket.prefs.collapseTiming)
     val en = Pocket.prefs.language == AppLanguage.En
@@ -640,14 +666,42 @@ internal fun Transcript(
         foldChatItems(st.items, livePolicy, st.running, turnRecords = st.turns, en = en)
     }
     val openTurns = remember(st.sessionId, livePolicy.mode, livePolicy.collapseTiming) { mutableStateMapOf<String, Boolean>() }
+    LaunchedEffect(revealItemKey, allRows) {
+        val target = revealItemKey ?: return@LaunchedEffect
+        val targetRow = allRows.firstOrNull { it.key == target || it is ChatRow.Process && it.members.any { member -> member.key == target } }
+        allRows.filterIsInstance<ChatRow.Process>().forEach { control ->
+            if (control.turnSummary && targetRow != null && targetRow.key in control.controlledKeys) openTurns[control.key] = true
+        }
+    }
     val rows = visibleChatRows(allRows, openTurns)
     val lastAnswers = remember(allRows) {
         allRows.filterIsInstance<ChatRow.Answer>().mapNotNull { row -> row.item.turn?.let { it to row.key } }.toMap()
     }
+    val revealIndex = remember(rows, revealItemKey) { revealItemKey?.let { inspectorRowIndex(rows, it) } ?: -1 }
     val n = rows.size
     val lastLen = (st.items.lastOrNull() as? Item.Text)?.text?.length ?: 0
     // Desktop: branch only on the last message of a completed turn.
     val branchKey = rows.lastOrNull { it is ChatRow.User || it is ChatRow.Answer }?.key
+    LaunchedEffect(revealItemKey, revealIndex, st.loaded, st.loadingOlder, st.hasMore) {
+        highlightedRow = null
+        val target = revealItemKey ?: return@LaunchedEffect
+        followBottom = false
+        val index = revealIndex
+        if (index < 0) {
+            // The reveal effect first opens the containing Turn; do not page or clear it meanwhile.
+            if (inspectorRowIndex(allRows, target) >= 0) return@LaunchedEffect
+            if (st.loaded && st.hasMore && !st.loadingOlder) Pocket.loadOlderHistory()
+            else if (st.loaded && !st.hasMore && !st.loadingOlder) InspectorNavigation.revealItemKey = null
+            return@LaunchedEffect
+        }
+        list.scrollToItem(index)
+        highlightedRow = rows[index].key
+        delay(1400)
+        highlightedRow = null
+        if (InspectorNavigation.sessionId == st.sessionId && InspectorNavigation.revealItemKey == target) {
+            InspectorNavigation.revealItemKey = null
+        }
+    }
     LaunchedEffect(n, lastLen, st.running) {
         if (followBottom && n > 0 && !st.loadingOlder) list.animateScrollToItem(n)
     }
@@ -681,6 +735,7 @@ internal fun Transcript(
                 else -> 12
             }
             Column(Modifier.fillMaxWidth().padding(top = gap.dp)) {
+            InspectorChatTarget(inspectorPickKey(row), highlightedRow == row.key, revealItemKey == row.key) {
             when (row) {
                 is ChatRow.User -> {
                     Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.End) {
@@ -741,13 +796,14 @@ internal fun Transcript(
                 is ChatRow.Tool -> ToolCard(row.item) { onTool(row.item) }
                 is ChatRow.Reasoning -> ReasoningRow(row.item)
                 is ChatRow.Process -> ProcessGroupRow(
-                    row,
+                    row, revealItemKey,
                     turnOpen = if (row.turnSummary) openTurns[row.key] ?: row.defaultOpen else null,
                     onTurnOpenChange = { openTurns[row.key] = it },
                     onTool = onTool,
                 )
                 is ChatRow.Deliverable -> DeliverableCard(row.item)
                 is ChatRow.Changes -> if (Pocket.prefs.showCodeWorkView) ChangesCard(row.item)
+            }
             }
             }
         }
@@ -921,14 +977,18 @@ private fun ActionIconButton(
 @Composable
 internal fun ProcessGroupRow(
     proc: ChatRow.Process,
+    revealItemKey: String? = null,
     turnOpen: Boolean? = null,
     onTurnOpenChange: (Boolean) -> Unit = {},
     onTool: (Item.Tool) -> Unit,
 ) {
     var expanded by rememberSaveable(proc.key, proc.grouped) { mutableStateOf(proc.defaultOpen) }
+    LaunchedEffect(revealItemKey) {
+        if (revealItemKey != null && proc.members.any { it.key == revealItemKey }) expanded = true
+    }
     if (!proc.grouped && !proc.turnSummary) {
         Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-            proc.members.forEach { member -> key(member.key) { ProcessMember(member, onTool) } }
+            proc.members.forEach { member -> key(member.key) { ProcessMember(member, revealItemKey, onTool) } }
         }
         return
     }
@@ -977,7 +1037,7 @@ internal fun ProcessGroupRow(
                 }
             }
             Column(Modifier.padding(top = 8.dp).heightIn(max = maxHeight).verticalScroll(scroll), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                proc.members.forEach { member -> key(member.key) { ProcessMember(member, onTool) } }
+                proc.members.forEach { member -> key(member.key) { ProcessMember(member, revealItemKey, onTool) } }
             }
         }
     }
@@ -999,11 +1059,13 @@ private fun processActivityIcon(kind: String) = when (kind) {
 }
 
 @Composable
-private fun ProcessMember(item: Item, onTool: (Item.Tool) -> Unit) {
+private fun ProcessMember(item: Item, revealItemKey: String?, onTool: (Item.Tool) -> Unit) {
+    InspectorChatTarget(item.key, reveal = item.key == revealItemKey) {
     when (item) {
         is Item.Reasoning -> ReasoningRow(item)
         is Item.Tool -> ToolCard(item) { onTool(item) }
         else -> Unit
+    }
     }
 }
 
@@ -1094,6 +1156,7 @@ private fun ToolCard(t: Item.Tool, onClick: () -> Unit) {
         }
     }
 }
+
 
 @Composable
 internal fun ApprovalCard(a: Approval, onAnswer: (String, String, (Boolean) -> Unit) -> Unit = { id, outcome, done -> Pocket.answer(id, outcome, done) }) {

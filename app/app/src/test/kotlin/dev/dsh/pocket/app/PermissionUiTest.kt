@@ -13,7 +13,6 @@ import kotlinx.coroutines.runBlocking
 import androidx.compose.ui.test.performClick
 import dev.dsh.pocket.protocol.PermissionCatalog
 import dev.dsh.pocket.protocol.PermissionOption
-import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -31,11 +30,6 @@ class PermissionUiTest {
     private val team = PermissionOption("team", "团队权限", "主机提供的限制说明")
     private val auto = PermissionOption("auto", "Auto review")
     private val directory = PermissionCatalog(listOf(team, auto), listOf(team), "team")
-
-    @Before fun setUp() {
-        Pocket.init(RuntimeEnvironment.getApplication())
-        installHostSettingsFixture()
-    }
 
     private fun settle() {
         rule.mainClock.advanceTimeBy(1500)
@@ -137,6 +131,7 @@ class PermissionUiTest {
 
     @Test fun newConversationKeepsDraftWhilePermissionDirectoryLoads() {
         Pocket.init(RuntimeEnvironment.getApplication())
+        installHostSettingsFixture()
         Pocket.prefs.defaultPermission = "workspace-write"
         Pocket.active.value = "permission-test"
         Pocket.status.value = mapOf("permission-test" to Dot.Online)
@@ -159,6 +154,7 @@ class PermissionUiTest {
 
     @Test fun autoChosenForOneConversationDoesNotBecomeNextConversationDefault() {
         Pocket.init(RuntimeEnvironment.getApplication())
+        installHostSettingsFixture()
         Pocket.prefs.defaultPermission = "workspace-write"
         Pocket.active.value = "permission-session-test"
         Pocket.status.value = mapOf("permission-session-test" to Dot.Online)

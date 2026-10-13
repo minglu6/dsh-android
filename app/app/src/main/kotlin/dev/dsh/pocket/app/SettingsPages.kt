@@ -23,6 +23,19 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.stateDescription
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -32,7 +45,6 @@ import dev.dsh.pocket.protocol.bool
 import dev.dsh.pocket.protocol.get
 import dev.dsh.pocket.protocol.jsonOf
 import dev.dsh.pocket.protocol.str
-import kotlinx.coroutines.launch
 import kotlinx.serialization.json.*
 import kotlinx.coroutines.CancellationException
 
@@ -120,24 +132,26 @@ internal fun SettingsScaffold(
     content: @Composable ColumnScope.() -> Unit,
 ) {
     BackHandler(onBack = onBack)
-    Column(
-        Modifier
-            .fillMaxSize()
-            .background(T.Bg)
-            .systemBarsPadding()
-            .imePadding(),
-    ) {
-        Row(
-            Modifier.fillMaxWidth().height(56.dp).padding(horizontal = 6.dp),
-            verticalAlignment = Alignment.CenterVertically,
+    CompositionLocalProvider(LocalContentColor provides T.Ink) {
+        Column(
+            Modifier
+                .fillMaxSize()
+                .background(T.Surface2)
+                .systemBarsPadding()
+                .imePadding(),
         ) {
-            IconButton(onBack) {
-                Icon(D.chevronLeft, st("返回", "Back"), tint = T.Ink)
+            Row(
+                Modifier.fillMaxWidth().height(56.dp).padding(horizontal = 6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                IconButton(onBack) {
+                    Icon(D.chevronLeft, st("返回", "Back"), tint = T.Ink)
+                }
+                Text(title, fontSize = 20.sp, color = T.Ink, modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                actions()
             }
-            Text(title, fontSize = 20.sp, color = T.Ink, modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
-            actions()
+            Column(Modifier.weight(1f).fillMaxWidth().verticalScroll(rememberScrollState()), content = content)
         }
-        Column(Modifier.weight(1f).fillMaxWidth().verticalScroll(rememberScrollState()), content = content)
     }
 }
 
@@ -161,11 +175,10 @@ internal fun SettingsNavRow(
     icon: ImageVector? = null,
     value: String? = null,
     divider: Boolean = true,
-    enabled: Boolean = true,
     onClick: () -> Unit,
 ) {
     Row(
-        Modifier.fillMaxWidth().heightIn(min = 48.dp).clickable(enabled = enabled, onClick = onClick).padding(horizontal = 16.dp, vertical = 15.dp),
+        Modifier.fillMaxWidth().heightIn(min = 48.dp).clickable(onClick = onClick).padding(horizontal = 16.dp, vertical = 15.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         icon?.let {
@@ -245,7 +258,7 @@ internal fun collapseText(value: CollapseTiming): String = when (value) {
 }
 
 @Composable
-internal fun AppearanceCards(current: Appearance, enabled: Boolean = true, onPick: (Appearance) -> Unit) {
+internal fun AppearanceCards(current: Appearance, onPick: (Appearance) -> Unit) {
     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         Appearance.entries.forEach { value ->
             val label = when (value) { Appearance.Light -> L.light(); Appearance.Dark -> L.dark(); Appearance.System -> L.followSystem() }
@@ -255,7 +268,7 @@ internal fun AppearanceCards(current: Appearance, enabled: Boolean = true, onPic
                     .background(if (current == value) T.Fill2 else Color.Transparent)
                     .border(0.5.dp, if (current == value) Color(0xFFADB2B8) else T.BorderStrong, T.R20)
                     .semantics { selected = current == value }
-                    .clickable(enabled = enabled, role = Role.Button) { onPick(value) }
+                    .clickable(role = Role.Button) { onPick(value) }
                     .padding(horizontal = 4.dp, vertical = 20.dp),
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.Center,
@@ -269,137 +282,150 @@ internal fun AppearanceCards(current: Appearance, enabled: Boolean = true, onPic
 }
 
 @Composable
-internal fun SettingsFontRow(title: String, description: String, value: Int, range: IntRange, enabled: Boolean = true, onChange: (Int) -> Unit) {
-    Column(Modifier.fillMaxWidth().padding(16.dp)) {
-        Text(title, color = T.Ink, fontSize = 16.sp)
-        Text(description, color = T.Text3, fontSize = 12.sp)
-        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.End) {
-            IconButton({ onChange(value - 1) }, enabled = enabled && value > range.first, modifier = Modifier.size(48.dp)) { Icon(D.chevronDown, st("减小字号", "Decrease font size"), tint = if (enabled && value > range.first) T.Ink else T.Text3) }
-            Text("$value sp", color = T.Ink, modifier = Modifier.padding(horizontal = 12.dp))
-            IconButton({ onChange(value + 1) }, enabled = enabled && value < range.last, modifier = Modifier.size(48.dp)) { Icon(D.chevronDown, st("增大字号", "Increase font size"), tint = if (enabled && value < range.last) T.Ink else T.Text3, modifier = Modifier.rotate(180f)) }
+internal fun SettingsFontRow(
+    title: String,
+    description: String,
+    value: Int,
+    range: IntRange,
+    expanded: Boolean? = null,
+    onToggle: (() -> Unit)? = null,
+    onChange: (Int) -> Unit,
+) {
+    Row(
+        Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 14.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Text(title, color = T.Ink, fontSize = 14.sp)
+            Text(description, color = T.Text3, fontSize = 12.sp, lineHeight = 18.sp)
+        }
+        Box(Modifier.width(72.dp).height(56.dp), contentAlignment = Alignment.Center) {
+            Box(Modifier.fillMaxWidth().height(36.dp).clip(T.R8).background(T.Fill2))
+            Text("$value", color = T.Ink, fontSize = 14.sp)
+            Column(Modifier.width(32.dp).align(Alignment.CenterEnd)) {
+                // Keep the desktop pill size; enlarge the arrows' transparent, disjoint touch areas.
+                repeat(2) { index ->
+                    val delta = if (index == 0) 1 else -1
+                    val enabled = value + delta in range
+                    Box(
+                        Modifier.size(width = 32.dp, height = 28.dp)
+                            .semantics { contentDescription = "$title：${if (delta > 0) st("增大字号", "Increase font size") else st("减小字号", "Decrease font size")}" }
+                            .clickable(enabled = enabled, role = Role.Button) { onChange(value + delta) },
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Box(Modifier.size(width = 17.dp, height = 12.dp).clip(T.R4)
+                            .background(T.Surface.copy(alpha = 0.75f)), contentAlignment = Alignment.Center) {
+                            Icon(D.chevronDown, null, tint = if (enabled) T.Ink else T.Caption,
+                                modifier = Modifier.size(10.dp).rotate(if (delta > 0) 180f else 0f))
+                        }
+                    }
+                }
+            }
+        }
+        Text("px", color = T.Text2, fontSize = 14.sp)
+        if (onToggle != null) {
+            IconButton(onToggle, modifier = Modifier.size(40.dp).testTag("fontSettingsToggle")
+                .semantics { stateDescription = if (expanded == true) st("已展开", "Expanded") else st("已折叠", "Collapsed") }) {
+                Icon(D.chevronDown, st("更多字体设置", "More font settings"), tint = T.Text2,
+                    modifier = Modifier.size(14.dp).rotate(if (expanded == true) 180f else 0f))
+            }
         }
     }
+    HorizontalDivider(Modifier.padding(horizontal = 16.dp), color = T.Border)
 }
 
 @Composable
-internal fun AgentPresetSettingsScreen(onBack: () -> Unit) {
+internal fun SettingsFontFamilyRow(title: String, description: String, value: String, tag: String, onChange: (String) -> Unit) {
     val host by Pocket.active.collectAsState()
-    val ops by Pocket.ops.collectAsState()
-    val scope = rememberCoroutineScope()
-    var data by remember(host) { mutableStateOf<JsonElement?>(null) }
-    var loading by remember(host) { mutableStateOf(true) }
-    var busy by remember(host) { mutableStateOf(false) }
-    var error by remember(host) { mutableStateOf<String?>(null) }
-    var selected by remember(host) { mutableStateOf<String?>(null) }
-    var details by remember(host) { mutableStateOf<JsonElement?>(null) }
-    var saved by remember(host) { mutableStateOf(false) }
-    var composition by remember(host) { mutableStateOf<String?>(null) }
-    var compositionError by remember(host) { mutableStateOf<String?>(null) }
-    var compositionLoading by remember(host) { mutableStateOf(false) }
-    suspend fun loadComposition(row: JsonElement) {
-        compositionLoading = true
-        compositionError = null
-        try {
-            composition = Pocket.readPreset(row["id"].str().orEmpty())["content"].str()
-                ?: error(st("主机未返回预设组成", "Host did not return the preset composition"))
-        } catch (t: Throwable) { compositionError = settingsFailure(t) }
-        finally { compositionLoading = false }
+    var draft by remember(host) { mutableStateOf(TextFieldValue(value)) }
+    var dirty by remember(host) { mutableStateOf(false) }
+    var hadFocus by remember(host) { mutableStateOf(false) }
+    LaunchedEffect(value, host) {
+        if (!dirty) draft = TextFieldValue(value)
+        else if (normalizeFontFamily(draft.text) == value) dirty = false
     }
-    LaunchedEffect(details) {
-        composition = null
-        compositionError = null
-        if ("presets.read" in ops) details?.let { loadComposition(it) }
+    val focus = LocalFocusManager.current
+    fun commit() {
+        if (draft.composition != null) return
+        if (!dirty) return
+        val normalized = normalizeFontFamily(draft.text)
+        draft = TextFieldValue(normalized)
+        if (normalized == value) { dirty = false; return }
+        onChange(normalized)
     }
-    suspend fun load() {
-        data = if ("presets.settings" in ops) Pocket.presetsSettings()
-        else {
-            check("presets.list" in ops) { L.unavailable() }
-            val roster = checkNotNull(Pocket.clientOrNull()) { L.unavailable() }.call("presets.list")
-            buildJsonObject { put("presets", roster["presets"] ?: JsonArray(emptyList())); put("writable", false) }
+    Row(
+        Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 16.dp),
+        horizontalArrangement = Arrangement.spacedBy(16.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Text(title, color = T.Ink, fontSize = 14.sp)
+            Text(description, color = T.Text3, fontSize = 12.sp, lineHeight = 18.sp)
         }
-    }
-    fun reload() {
-        if (busy) return
-        loading = true
-        error = null
-        scope.launch {
-            try { load() } catch (t: Throwable) { error = settingsFailure(t) }
-            finally { loading = false }
-        }
-    }
-    LaunchedEffect(host, ops) {
-        try { load() } catch (t: Throwable) { error = settingsFailure(t) }
-        finally { loading = false }
-    }
-    val rows = data["presets"].arr().orEmpty()
-    val current = rows.find { it["isDefault"].bool() == true }
-    val writable = data["writable"].bool() == true && data["namespace"]["revision"] != null && "models.settingsMutate" in ops
-    SettingsScaffold(st("Agent 预设", "Agent presets"), onBack = { if (!busy) onBack() }, actions = {
-        IconButton(::reload, enabled = !busy && !loading) { Icon(D.refresh, L.retry(), tint = T.Ink) }
-    }) {
-        SettingsMessage(st("默认预设由主机提供，仅影响之后创建的会话。已有会话保持原预设。", "The Host default applies to new conversations. Existing conversations keep their preset."))
-        SettingsMessage(current?.let { st("当前默认：", "Current default: ") + presetName(it) })
-        SettingsMessage(error, true)
-        if (saved) SettingsMessage(st("默认预设已保存并回读确认", "Default preset saved and confirmed"))
-        when {
-            loading -> ErrorOrEmpty(L.loading())
-            rows.isEmpty() -> ErrorOrEmpty(L.unavailable(), ::reload)
-            else -> SettingsCard {
-                rows.forEach { row ->
-                    val id = row["id"].str().orEmpty()
-                    Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)) {
-                        Row(Modifier.fillMaxWidth().heightIn(min = 48.dp), verticalAlignment = Alignment.CenterVertically) {
-                            RadioButton(id == (selected ?: current?.get("id").str()), { selected = id; saved = false }, enabled = writable && !busy && row["broken"].str() == null)
-                            Text(presetName(row), color = T.Ink, modifier = Modifier.weight(1f))
-                            TextButton({ details = row }) { Text(st("详情", "Details")) }
-                        }
-                        presetDescription(row)?.let { Text(it, color = T.Text3, fontSize = 13.sp) }
-                        row["broken"].str()?.let { Text(it, color = T.Err, fontSize = 12.sp) }
-                    }
+        BasicTextField(
+            value = draft,
+            onValueChange = { if (it.text.length <= 200) { draft = it; dirty = true } },
+            singleLine = true,
+            textStyle = MaterialTheme.typography.bodyMedium.copy(color = T.Ink, fontSize = 14.sp),
+            cursorBrush = SolidColor(T.Accent),
+            keyboardOptions = KeyboardOptions(autoCorrectEnabled = false, imeAction = ImeAction.Done),
+            keyboardActions = KeyboardActions(onDone = { if (draft.composition == null) { commit(); focus.clearFocus() } }),
+            modifier = Modifier.weight(1f).heightIn(min = 48.dp).testTag(tag)
+                .semantics { contentDescription = title }
+                .onFocusChanged { state ->
+                    if (hadFocus && !state.isFocused) commit()
+                    hadFocus = state.isFocused
                 }
-            }
-        }
-        if (!loading && !writable) SettingsMessage(st("当前主机仅支持查看预设，默认设置为只读", "This Host allows viewing presets only; the default is read-only"))
-        Button({
-            val id = selected ?: return@Button
-            val revision = (data["namespace"]["revision"] as? JsonPrimitive)?.longOrNull ?: return@Button
-            if (busy) return@Button
-            busy = true; error = null
-            scope.launch {
-                try {
-                    val client = checkNotNull(Pocket.clientOrNull()) { L.unavailable() }
-                    requireSettingsSuccess(client.modelsSettingsMutate("agent-preset-registry", JsonArray(listOf(jsonOf("op" to "set", "path" to listOf("selectedDefault"), "value" to id))), revision))
-                    load()
-                    check(data["presets"].arr().orEmpty().any { it["id"].str() == id && it["isDefault"].bool() == true }) { st("已保存，但主机当前默认值未改变，可能存在更高优先级覆盖", "Saved, but the Host default is unchanged; a higher-priority override may be active") }
-                    selected = null; saved = true
-                } catch (t: Throwable) { error = settingsFailure(t) }
-                finally { busy = false }
-            }
-        }, enabled = writable && !busy && selected != null && rows.any { it["id"].str() == selected && it["broken"].str() == null } && selected != current?.get("id").str(), modifier = Modifier.fillMaxWidth().padding(18.dp).heightIn(min = 48.dp)) { Text(if (busy) L.loading() else st("设为默认", "Set as default")) }
-    }
-    details?.let { row ->
-        AlertDialog(
-            onDismissRequest = { details = null },
-            title = { Text(presetName(row)) },
-            text = { Column(Modifier.verticalScroll(rememberScrollState())) {
-                Text(row["id"].str().orEmpty(), style = T.Mono, color = T.Text3)
-                Text(presetDescription(row) ?: st("主机未提供描述", "No description supplied by the Host"))
-                if (row["isDefault"].bool() == true) Text(st("当前主机默认预设", "Current Host default"))
-                row["broken"].str()?.let { Text(it, color = T.Err, fontSize = 12.sp) }
-                if (compositionLoading) Text(L.loading(), color = T.Text3)
-                compositionError?.let {
-                    Text(it, color = T.Err)
-                    TextButton({ scope.launch { loadComposition(row) } }, enabled = !compositionLoading) { Text(L.retry()) }
+                .onPreviewKeyEvent {
+                    if (it.key == Key.Enter && it.type == KeyEventType.KeyUp && draft.composition == null) {
+                        commit(); focus.clearFocus(); true
+                    } else false
+                },
+            decorationBox = { inner ->
+                Box(Modifier.fillMaxWidth().background(T.Surface, T.R8).border(0.5.dp, T.BorderStrong, T.R8).padding(horizontal = 10.dp, vertical = 10.dp),
+                    contentAlignment = Alignment.CenterStart) {
+                    if (draft.text.isEmpty()) Text(st("默认", "Default"), fontSize = 14.sp, color = T.Caption)
+                    inner()
                 }
-                composition?.let { content ->
-                    Spacer(Modifier.height(12.dp))
-                    Text(st("预设组成（只读）", "Preset composition (read-only)"), color = T.Text3)
-                    androidx.compose.foundation.text.selection.SelectionContainer {
-                        Text(content, style = T.Mono.copy(fontSize = Pocket.prefs.codeFontSize.sp), color = T.Ink)
-                    }
-                }
-            } },
-            confirmButton = { TextButton({ details = null }) { Text(st("关闭", "Close")) } },
+            },
         )
     }
+    HorizontalDivider(Modifier.padding(horizontal = 16.dp), color = T.Border)
+}
+
+/** Keep long setting names and values out of the trailing control's touch target. */
+@Composable
+internal fun GeneralPreferenceRow(
+    title: String,
+    description: String? = null,
+    value: String? = null,
+    onClick: (() -> Unit)? = null,
+    divider: Boolean = true,
+    trailing: (@Composable () -> Unit)? = null,
+) {
+    Row(
+        Modifier.fillMaxWidth().heightIn(min = 56.dp)
+            .then(if (onClick != null) Modifier.clickable(role = Role.Button, onClick = onClick) else Modifier)
+            .padding(horizontal = 16.dp, vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Text(title, fontSize = 14.sp, color = T.Ink)
+            description?.let { Text(it, fontSize = 12.sp, lineHeight = 18.sp, color = T.Text3) }
+        }
+        value?.let {
+            Text(it, fontSize = 14.sp, color = T.Text2, maxLines = 2, overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.widthIn(max = 136.dp))
+        }
+        if (trailing != null) trailing()
+        else if (onClick != null) Icon(D.chevronDown, null, tint = T.Text2, modifier = Modifier.size(18.dp))
+    }
+    if (divider) HorizontalDivider(Modifier.padding(horizontal = 16.dp), color = T.Border)
+}
+
+@Composable
+internal fun GeneralSectionLabel(title: String) {
+    Text(title, fontSize = 13.sp, color = T.Text3, modifier = Modifier.padding(start = 22.dp, top = 12.dp, bottom = 2.dp))
 }

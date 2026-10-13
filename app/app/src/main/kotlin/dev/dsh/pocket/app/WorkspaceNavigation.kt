@@ -2,8 +2,6 @@ package dev.dsh.pocket.app
 
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -15,7 +13,6 @@ import androidx.compose.ui.unit.sp
 import dev.dsh.pocket.protocol.*
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.CancellationException
-import kotlinx.serialization.json.JsonElement
 
 @Composable
 internal fun WorkspaceNavigationGroups(
@@ -111,63 +108,4 @@ private fun WorkspaceGroupHeader(
         confirmButton = { TextButton({ action { Pocket.deleteWorkspace(workspace.workspaceId); remove = false } }, enabled = !busy) { Text(L.delete()) } },
         dismissButton = { TextButton({ remove = false }, enabled = !busy) { Text(L.cancel()) } },
     )
-}
-
-@Composable
-internal fun WorkspaceDirectorySheet(onCreated: (WorkspaceView) -> Unit = {}, onDismiss: () -> Unit) {
-    val scope = rememberCoroutineScope()
-    val ops by Pocket.ops.collectAsState()
-    var path by remember { mutableStateOf("") }
-    var listing by remember { mutableStateOf<JsonElement?>(null) }
-    var loading by remember { mutableStateOf(false) }
-    var saving by remember { mutableStateOf(false) }
-    var error by remember { mutableStateOf<String?>(null) }
-    var showHidden by remember { mutableStateOf(false) }
-    fun browse(target: String?) {
-        loading = true; error = null
-        scope.launch {
-            try { listing = Pocket.listWorkspaceDirectories(target); path = listing["path"].str().orEmpty() }
-            catch (e: CancellationException) { throw e } catch (e: Exception) { error = e.message }
-            finally { loading = false }
-        }
-    }
-    LaunchedEffect(Unit) { if ("workspace.directoryList" in ops) browse(null) }
-    PocketSheet(onDismiss) {
-        SheetTitle(L.addWorkspace())
-        OutlinedTextField(path, { path = it }, singleLine = true, enabled = !saving && !loading,
-            placeholder = { Text(L.workspacePathPlaceholder()) }, modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp))
-        if ("workspace.directoryList" in ops) {
-            Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp), verticalAlignment = Alignment.CenterVertically) {
-                TextButton({ browse(path.takeIf { it.isNotBlank() }) }, enabled = !saving && !loading) { Text(navText("浏览目录", "Browse")) }
-                Spacer(Modifier.weight(1f))
-                Text(navText("隐藏目录", "Hidden"), fontSize = 12.sp)
-                Switch(showHidden, { showHidden = it })
-            }
-            if (loading) LinearProgressIndicator(Modifier.fillMaxWidth().padding(horizontal = 16.dp))
-            Column(Modifier.fillMaxWidth().heightIn(max = 280.dp).verticalScroll(rememberScrollState())) {
-                val crumbs = listing["crumbs"].arr().orEmpty()
-                crumbs.dropLast(1).lastOrNull()?.let { parent ->
-                    TextButton({ browse(parent["path"].str()) }, enabled = !loading && !saving) { Text(navText("上一级", "Parent") + " · " + parent["path"].str().orEmpty()) }
-                }
-                listing["entries"].arr().orEmpty().filter { showHidden || it["hidden"].bool() != true }.forEach { entry ->
-                    TextButton({ browse(entry["path"].str()) }, enabled = !loading && !saving, modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)) {
-                        Icon(D.folderOpen, null, Modifier.size(18.dp)); Spacer(Modifier.width(8.dp)); Text(entry["name"].str().orEmpty(), Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    }
-                }
-                if (!loading && listing != null && listing["entries"].arr().orEmpty().isEmpty()) Text(navText("没有子目录", "No subdirectories"), color = T.Caption, modifier = Modifier.padding(16.dp))
-                if (listing["truncated"].bool() == true) Text(navText("目录较多，列表未完整显示；可输入完整路径。", "More directories exist. Enter the full path if needed."), modifier = Modifier.padding(16.dp), color = T.Caption)
-            }
-        }
-        error?.let { Text(it, color = T.Err, modifier = Modifier.padding(16.dp)) }
-        Button({
-            saving = true; error = null
-            scope.launch {
-                try { val workspace = Pocket.createWorkspace(path.trim()); onCreated(workspace); onDismiss() }
-                catch (e: CancellationException) { throw e } catch (e: Exception) { error = e.message }
-                finally { saving = false }
-            }
-        }, enabled = path.isNotBlank() && !saving && !loading, modifier = Modifier.fillMaxWidth().padding(16.dp).heightIn(min = 48.dp), colors = PrimaryColors()) {
-            Text(if (saving) navText("添加中…", "Adding…") else L.addWorkspace())
-        }
-    }
 }

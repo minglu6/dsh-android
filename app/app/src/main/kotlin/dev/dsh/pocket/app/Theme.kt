@@ -9,6 +9,7 @@ import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.SideEffect
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.platform.LocalView
 import androidx.core.view.WindowCompat
@@ -118,8 +119,8 @@ object T {
     val R28 = RoundedCornerShape(28.dp)
     val Sheet = RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp)
 
-    /** Meslo Nerd Font — same code face as desktop / terminal. */
-    val Mono get() = TextStyle(fontFamily = MesloNerdFamily, fontSize = 13.sp, color = Ink)
+    /** Local code font preference, with bundled Meslo as its built-in fallback. */
+    val Mono get() = TextStyle(fontFamily = LocalFonts.code, fontSize = Pocket.prefs.codeFontSize.sp, color = Ink)
 }
 
 /** Resolve Appearance pref + system setting into a dark flag. */
@@ -171,6 +172,27 @@ fun PocketTheme(content: @Composable () -> Unit) {
     // Also set immediately so the first frame's T.* reads are correct (SideEffect runs after).
     ThemeState.setDark(dark)
     val colors = if (dark) DswColors.Dark else DswColors.Light
+    val textFont = LocalFonts.text
+    val typography = remember(textFont) {
+        val defaults = Typography()
+        Typography(
+            displayLarge = defaults.displayLarge.copy(fontFamily = textFont),
+            displayMedium = defaults.displayMedium.copy(fontFamily = textFont),
+            displaySmall = defaults.displaySmall.copy(fontFamily = textFont),
+            headlineLarge = defaults.headlineLarge.copy(fontFamily = textFont),
+            headlineMedium = defaults.headlineMedium.copy(fontFamily = textFont),
+            headlineSmall = defaults.headlineSmall.copy(fontFamily = textFont),
+            titleLarge = TextStyle(fontFamily = textFont, fontSize = 20.sp, fontWeight = FontWeight.SemiBold),
+            titleMedium = TextStyle(fontFamily = textFont, fontSize = 17.sp, fontWeight = FontWeight.SemiBold),
+            titleSmall = defaults.titleSmall.copy(fontFamily = textFont),
+            bodyLarge = TextStyle(fontFamily = textFont, fontSize = 16.sp, lineHeight = 26.sp),
+            bodyMedium = TextStyle(fontFamily = textFont, fontSize = 14.sp, lineHeight = 22.sp),
+            bodySmall = defaults.bodySmall.copy(fontFamily = textFont),
+            labelLarge = defaults.labelLarge.copy(fontFamily = textFont),
+            labelMedium = TextStyle(fontFamily = textFont, fontSize = 13.sp),
+            labelSmall = defaults.labelSmall.copy(fontFamily = textFont),
+        )
+    }
     MaterialTheme(
         colorScheme = if (dark) darkColorScheme(
             primary = colors.ButtonInfoFill,
@@ -203,13 +225,7 @@ fun PocketTheme(content: @Composable () -> Unit) {
             surfaceContainer = colors.BgBase,
             surfaceContainerHigh = colors.BgBase,
         ),
-        typography = Typography(
-            bodyLarge = TextStyle(fontSize = 16.sp, lineHeight = 26.sp),
-            bodyMedium = TextStyle(fontSize = 14.sp, lineHeight = 22.sp),
-            titleLarge = TextStyle(fontSize = 20.sp, fontWeight = FontWeight.SemiBold),
-            titleMedium = TextStyle(fontSize = 17.sp, fontWeight = FontWeight.SemiBold),
-            labelMedium = TextStyle(fontSize = 13.sp),
-        ),
+        typography = typography,
         content = content,
     )
 }

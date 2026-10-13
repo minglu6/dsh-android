@@ -364,11 +364,15 @@ export function scheduleOps(schedule) {
   }
 }
 
-/** Model API-key writes return only metadata; Host credential records stay private. */
+/** Credential operations return only metadata; Host credential records stay private. */
 export function credentialsOps({ credentials }) {
   if (!credentials) throw bad('credentials service required')
 
   return {
+    'credentials.describe': async (a) => {
+      if (!str(a.ref)) throw bad('ref required')
+      return { ref: a.ref, ...projectCredentialInfo(await credentials.describe(a.ref)) }
+    },
     'credentials.set': async (a) => {
       if (!str(a.ref) || !str(a.value)) throw bad('ref and non-empty value required')
       await credentials.set(a.ref, a.value)

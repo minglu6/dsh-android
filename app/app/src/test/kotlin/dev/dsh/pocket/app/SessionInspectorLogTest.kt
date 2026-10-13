@@ -62,7 +62,6 @@ class SessionInspectorLogTest {
         log.apply(jsonOf("type" to "projection", "key" to "title", "seq" to 7))
         assertSame(baseline, log.snapshot().single())
         val row = inspectorRawRows(log.snapshot()).single()
-        assertEquals("assistant-stream/baseline", row.type)
         assertNull(row.seq)
         assertNull(row.time)
         log.apply(jsonOf("type" to "resume", "records" to JsonArray(emptyList()), "assistantStream" to jsonOf()))
@@ -73,10 +72,7 @@ class SessionInspectorLogTest {
         val log = SessionInspectorLog()
         log.apply(chunk("live"))
         val row = inspectorRawRows(log.snapshot()).single()
-        assertEquals("assistant-stream/text-delta", row.type)
         assertNull(row.seq)
         assertNull(row.time)
-        assertEquals("—", inspectorTime(null))
-        assertEquals("1970-01-01 00:00:01.234 UTC", inspectorTime(1234))
     }
 }

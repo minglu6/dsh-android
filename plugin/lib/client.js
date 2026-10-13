@@ -2061,11 +2061,225 @@ function PocketSettings({ t, api }) {
 }
 
 //#endregion
+//#region src/client/host-ui-styles.ts
+/** Scoped to this WebView window; no generated classes or plugin-specific selectors. */
+const css = `
+html[data-pocket-ui] [data-pocket-ui-notice] {
+  position: fixed;
+  z-index: 1100;
+  inset: auto 12px max(12px, env(safe-area-inset-bottom));
+  box-sizing: border-box;
+  max-height: 50dvh;
+  overflow: auto;
+  padding: 16px;
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: var(--dsw-radius-panel, 16px);
+  background: var(--dsw-alias-bg-layer-2);
+  color: var(--dsw-alias-label-primary);
+  box-shadow: var(--dsw-elevation-prominent);
+  font: inherit;
+  overflow-wrap: anywhere;
+}
+html[data-pocket-ui] [data-pocket-ui-notice] p { margin: 0 0 12px; }
+html[data-pocket-ui] [data-pocket-ui-notice] > div { display: flex; flex-wrap: wrap; gap: 8px; }
+html[data-pocket-ui] [data-pocket-ui-notice] button {
+  min-height: 44px;
+  padding: 8px 12px;
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: var(--dsw-radius-md, 12px);
+  background: var(--dsw-alias-bg-base);
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+@media (max-width: 700px) {
+  html[data-pocket-ui] [data-shortcut-modal="settings"] {
+    box-sizing: border-box;
+    flex-direction: column;
+    width: 100%;
+    max-width: 100%;
+    height: 100dvh;
+    max-height: 100dvh;
+    padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
+    border-radius: 0;
+  }
+  html[data-pocket-ui] [data-shortcut-modal="settings"] > nav {
+    width: 100%;
+    min-width: 0;
+    padding: 12px 12px 0;
+    gap: 8px;
+    border-bottom: 1px solid var(--dsw-alias-border-l2);
+  }
+  html[data-pocket-ui] [data-shortcut-modal="settings"] > nav > div:last-child {
+    flex-direction: row;
+    overflow-x: auto;
+    overflow-y: hidden;
+    padding-bottom: 8px;
+    overscroll-behavior-x: contain;
+  }
+  html[data-pocket-ui] [data-shortcut-modal="settings"] > nav button {
+    flex: 0 0 auto;
+    min-height: 44px;
+    white-space: nowrap;
+  }
+  html[data-pocket-ui] [data-shortcut-modal="settings"] > nav + div {
+    min-width: 0;
+    min-height: 0;
+    width: 100%;
+  }
+  html[data-pocket-ui] [data-shortcut-modal="settings"] > nav + div > div:last-child {
+    min-width: 0;
+    min-height: 0;
+    padding-left: 16px;
+    padding-right: 16px;
+    overflow: auto;
+    overscroll-behavior: contain;
+  }
+}
+`;
+function installHostUiStyles() {
+	const root = document.documentElement;
+	const previous = root.getAttribute("data-pocket-ui");
+	const style = document.createElement("style");
+	style.dataset.pocketUiStyles = "";
+	style.textContent = css;
+	root.setAttribute("data-pocket-ui", "");
+	document.head.append(style);
+	return () => {
+		style.remove();
+		if (previous === null) root.removeAttribute("data-pocket-ui");
+		else root.setAttribute("data-pocket-ui", previous);
+	};
+}
+
+//#endregion
+//#region src/client/HostUiLauncher.tsx
+const NS$1 = "pocket.host-ui";
+const messages = {
+	zh: {
+		waiting: "请求的设置页“{section}”尚未注册。插件就绪后将自动打开；也可以浏览当前已注册的设置。",
+		unsupported: "此 Host 的设置导航接口不兼容，无法直接打开“{section}”。请从设置导航中选择页面。",
+		settings: "浏览已注册的设置",
+		dismiss: "返回完整界面"
+	},
+	en: {
+		waiting: "The requested settings section “{section}” is not registered yet. It will open when its plugin is ready, or you can browse the currently registered settings.",
+		unsupported: "This Host does not expose compatible settings navigation for “{section}”. Please select the page from Settings.",
+		settings: "Browse registered settings",
+		dismiss: "Return to the full interface"
+	}
+};
+/**
+* The shell publishes its store on the settings.launcher-owning sidebar entry.
+* Its create() returns the SAME root-scoped instance used by the renderer and
+* keyboard command (ui-settings-general), not a second private React tree.
+*/
+function sectionNavigator(slots) {
+	const store = slots.entries("sidebar.settings").find((entry) => entry.children?.["settings.launcher"])?.store;
+	if (typeof store !== "object" || store === null || !("create" in store) || typeof store.create !== "function") return void 0;
+	const instance = store.create();
+	if (typeof instance?.actions?.openSection !== "function") return void 0;
+	return (id) => {
+		instance.actions.openSection(id);
+	};
+}
+/** A temporary launcher occupant; the official launcher resumes after navigation. */
+function HostUiLauncher({ section, slots, finish, openSettings, t, useSessionReadiness }) {
+	const ready = useSessionReadiness((state) => state.phase === "ready");
+	const [problem, setProblem] = (0, react.useState)("waiting");
+	(0, react.useEffect)(() => {
+		let finished = false;
+		const navigate = () => {
+			if (!ready) return;
+			if (finished) return;
+			if (!slots.entries("settings.section").some((entry) => entry.options.id === section)) {
+				setProblem("waiting");
+				return;
+			}
+			const openSection = sectionNavigator(slots);
+			if (!openSection) {
+				setProblem("unsupported");
+				return;
+			}
+			finished = true;
+			queueMicrotask(() => {
+				if (!finished) return;
+				openSection(section);
+				finish();
+			});
+		};
+		const offSections = slots.subscribe("settings.section", navigate);
+		const offShell = slots.subscribe("sidebar.settings", navigate);
+		navigate();
+		return () => {
+			finished = false;
+			offSections();
+			offShell();
+		};
+	}, [
+		section,
+		slots,
+		finish,
+		ready
+	]);
+	return (0, react_dom.createPortal)(/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("aside", {
+		"data-pocket-ui-notice": "",
+		role: "status",
+		"aria-live": "polite",
+		children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)("p", { children: t(problem).replace("{section}", () => section) }), /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", { children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
+			type: "button",
+			onClick: () => {
+				finish();
+				openSettings();
+			},
+			children: t("settings")
+		}), /* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
+			type: "button",
+			onClick: finish,
+			children: t("dismiss")
+		})] })]
+	}), document.body);
+}
+/** Returns false on ordinary desktop windows, leaving all existing registrations intact. */
+function installHostUi(ctx) {
+	const query = new URLSearchParams(window.location.search);
+	if (query.get("pocket-ui") !== "1") return false;
+	ctx.effect(() => installHostUiStyles(), "pocket:host-ui-styles");
+	const section = query.get("section");
+	if (!section) return true;
+	ctx.effect(() => ctx.locale.register(NS$1, messages), "pocket:host-ui-locale");
+	let completed = false;
+	ctx.inject(["sessions"], (scope) => {
+		scope.slots.inject("settings.launcher", () => {
+			if (completed) return;
+			const finish = () => {
+				completed = true;
+				unregister();
+			};
+			const unregister = scope.slots.register({
+				name: "settings.launcher",
+				priority: -100,
+				locale: NS$1,
+				inject: () => ({
+					section,
+					slots: scope.slots,
+					finish,
+					hooks: { sessionReadiness: scope.sessions.list }
+				})
+			}, HostUiLauncher);
+			return unregister;
+		});
+	});
+	return true;
+}
+
+//#endregion
 //#region src/client/index.ts
 /** Must be a static array — cordis rejects function-form inject. */
 const inject = ["slots", "locale"];
 const NS = "pocket";
 function apply(ctx) {
+	if (installHostUi(ctx)) return;
 	ctx.effect(() => ctx.locale.register(NS, {
 		zh,
 		en

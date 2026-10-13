@@ -1,15 +1,18 @@
 package dev.dsh.pocket.app
 
 import android.content.Context
+import androidx.compose.ui.text.font.FontFamily
 import org.junit.Assert.assertEquals
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
 import org.robolectric.annotation.Config
+import org.robolectric.annotation.GraphicsMode
 
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
+@GraphicsMode(GraphicsMode.Mode.NATIVE)
 class FontPreferencesTest {
     @Test fun normalizesDesktopFamilyListsWithoutChangingPriority() {
         assertEquals("serif, monospace", normalizeFontFamily("  serif , monospace  "))
@@ -17,6 +20,19 @@ class FontPreferencesTest {
         assertEquals("", normalizeFontFamily(" , \"'<>\\\u0000, "))
         val normalized = normalizeFontFamily("MesloLGL DZ Nerd Font, ui-monospace")
         assertEquals(normalized, normalizeFontFamily(normalized))
+    }
+
+    @Test fun resolvesGenericFontsAndBuiltInDefaultsForEachRole() {
+        assertEquals(FontFamily.Default, LocalFonts.resolve("", false))
+        assertEquals(MesloNerdFamily, LocalFonts.resolve("", true))
+        assertEquals(FontFamily.Serif, LocalFonts.resolve("serif, monospace", false))
+        assertEquals(FontFamily.Monospace, LocalFonts.resolve("ui-monospace", true))
+        assertEquals(FontFamily.SansSerif, LocalFonts.resolve("system-ui", false))
+    }
+
+    @Test fun unavailableFamilyFallsThroughToNextLocalFamilyOrBuiltIn() {
+        assertEquals(FontFamily.Serif, LocalFonts.resolve("\"dsh-missing-font-9dcdb\", serif", false))
+        assertEquals(MesloNerdFamily, LocalFonts.resolve("\"dsh-missing-font-9dcdb\"", true))
     }
 
     @Test fun hostStoresIndependentNormalizedFamiliesAndClampsEverySizeWithoutLocalPersistence() {

@@ -24,6 +24,12 @@ tokens and localized labels follow the official
 `schedule` modules. The Android implementation uses native Kotlin/Compose and
 delegates authoritative operations to those Host services.
 
+The preset mode guides in `PresetGuideLocales.kt` reproduce the English and
+Chinese help from `ui-agent-preset` (`guide-locales.ts` and display labels).
+`dsh_close.xml` reproduces `IconCloseOutlineRegular` from `ui-primitives`.
+These text and vector assets are Copyright (c) 2026 DeepSeek under the MIT
+License below.
+
 Chat process presentation and labels follow `ui-chat`. `running_whale_frames.png`
 is a lossless 60-frame atlas of its `running-whale@2x.png` (28×28 pixels per
 frame, 50 ms each); `ic_running_whale.xml` uses `RunningWhaleTail.REST_PATH`.

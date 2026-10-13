@@ -421,6 +421,8 @@ class PocketClient(
             jsonOf("sessionId" to sessionId, "id" to id, "limit" to limit, "before" to before),
         )
 
+    suspend fun credentialsDescribe(ref: String): JsonElement =
+        call("credentials.describe", jsonOf("ref" to ref))
     suspend fun credentialsSet(ref: String, value: String): JsonElement =
         call("credentials.set", jsonOf("ref" to ref, "value" to value))
     suspend fun credentialsUnset(ref: String): JsonElement =

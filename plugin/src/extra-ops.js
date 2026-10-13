@@ -133,7 +133,7 @@ export function terminalOps(terminalController, agents) {
   return {
     'terminal.list': (a) => {
       if (!str(a.sessionId)) throw bad('sessionId required')
-      return { terminals: terminalController.list(a.sessionId) ?? [] }
+      return { terminals: terminalController.list(a.sessionId) ?? [], platform: process.platform }
     },
     'terminal.create': async (a, signal) => {
       const agent = agentOf(agents, a.sessionId)
@@ -144,7 +144,7 @@ export function terminalOps(terminalController, agents) {
         id, cols, rows,
         ...(str(a.shellPath) ? { shellPath: a.shellPath } : {}),
       }, signal)
-      return { terminal: info }
+      return { terminal: info, platform: process.platform }
     },
     'terminal.write': async (a) => {
       const agent = agentOf(agents, a.sessionId)

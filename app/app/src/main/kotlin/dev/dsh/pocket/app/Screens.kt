@@ -36,7 +36,6 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import dev.dsh.pocket.protocol.classifyWsRoute
 import dev.dsh.pocket.protocol.Route
-import dev.dsh.pocket.protocol.bool
 import android.Manifest
 import android.content.pm.PackageManager
 import android.os.Build
@@ -1271,18 +1270,22 @@ fun SettingsScreen(
     onModels: () -> Unit = {},
     onPlugins: () -> Unit = {},
     onSchedule: () -> Unit = {},
+    onCreatePreset: (() -> Unit)? = null,
 ) {
     val profile = Pocket.activeProfile
     val ops by Pocket.ops.collectAsState()
     var notify by remember { mutableStateOf(Pocket.prefs.approvalNotify) }
     var presets by remember { mutableStateOf(false) }
     var diagnostics by remember { mutableStateOf(false) }
-    if (presets) { AgentPresetSettingsScreen { presets = false }; return }
+    if (presets) {
+        AgentPresetSettingsScreen(onBack = { presets = false }, onCreator = onCreatePreset?.takeIf { "sessions.create" in ops })
+        return
+    }
     SettingsScaffold(L.settings(), onBack) {
         SettingsCard {
             SettingsNavRow(L.generalNav(), D.settings, onClick = onGeneral)
             if ("models.providers" in ops) SettingsNavRow(L.modelsNav(), D.dataMedium, onClick = onModels)
-            if ("plugins.list" in ops) SettingsNavRow(st("内置插件", "Built-in plugins"), D.personalization, onClick = onPlugins)
+            if ("plugins.inventory" in ops) SettingsNavRow(st("内置插件", "Built-in plugins"), D.personalization, onClick = onPlugins)
             if ("schedule.catalog" in ops) SettingsNavRow(L.scheduleNav(), D.clock, onClick = onSchedule)
             SettingsNavRow(st("Agent 预设", "Agent presets"), D.agentPreset, divider = false, onClick = { presets = true })
         }
@@ -1376,8 +1379,10 @@ fun GeneralSettingsScreen(onBack: () -> Unit) {
     val perf = Pocket.prefs.performanceUsage
     var layout by remember { mutableStateOf(Pocket.prefs.layoutMode) }
     var sheet by remember { mutableStateOf<String?>(null) }
+    var fontsExpanded by remember { mutableStateOf(false) }
     fun save(setting: SharedSetting, value: String) =
         shared.set(setting, kotlinx.serialization.json.JsonPrimitive(value)) { sheet = null }
+    val ops by Pocket.ops.collectAsState()
     val permissionDirectory by Pocket.permissionCatalog.collectAsState()
     val permissionLoading by Pocket.permissionCatalogLoading.collectAsState()
     val permissionError by Pocket.permissionCatalogError.collectAsState()
@@ -1398,47 +1403,55 @@ fun GeneralSettingsScreen(onBack: () -> Unit) {
         })
         SettingsMessage(shared.error, error = true)
         if (!shared.loading && shared.online) TextButton(onClick = shared::refresh) { Text(st("重新读取 Host 设置", "Reload Host settings")) }
-        SettingsCard {
-            LabeledField(L.appearance()) { AppearanceCards(appearance, enabled = shared.writable(SharedSetting.Appearance)) { Pocket.prefs.appearance = it } }
-            SettingsNavRow(L.language(), value = lang.label, enabled = shared.writable(SharedSetting.Language), onClick = { sheet = "lang" }, divider = false)
+        if ("permissions.catalog" in ops) {
+            GeneralPreferenceRow(st("权限", "Permissions"), st("Host 新会话的默认权限", "Default permissions for new Host conversations"), value = permissionLabel(perm, permissionDirectory?.find(perm)), onClick = { sheet = "perm" })
         }
-        SettingsCard {
-            SettingsFontRow(st("字号大小", "Font size"), st("仅影响会话内容的字号", "Only affects conversation content"), fontSize, 10..22, enabled = shared.writable(SharedSetting.FontSize)) { Pocket.prefs.fontSize = it }
-            SettingsFontRow(st("代码字号", "Code font size"), st("用于代码块、行内代码与工具输出", "Used for code blocks, inline code, and tool output"), codeFontSize, 10..16, enabled = shared.writable(SharedSetting.CodeFontSize)) { Pocket.prefs.codeFontSize = it }
-            SettingsFontRow(st("终端字号", "Terminal font size"), st("用于侧栏终端", "Used for the sidebar terminal"), terminalFontSize, 10..20, enabled = shared.writable(SharedSetting.TerminalFontSize)) { Pocket.prefs.terminalFontSize = it }
+        GeneralPreferenceRow(L.language(), value = lang.label, onClick = { sheet = "lang" })
+        Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text(L.appearance(), fontSize = 14.sp, color = T.Ink)
+            AppearanceCards(appearance) { Pocket.prefs.appearance = it }
         }
-        Card {
-            Row2(st("权限", "Permissions"), st("选择新会话的默认权限模式", "Default permission mode for new conversations"), value = permissionLabel(perm, permissionDirectory?.find(perm)), enabled = shared.writable(SharedSetting.Permission), onClick = { sheet = "perm" }, trailing = { DownArrow() })
-            Row2(st("显示代码工作视图", "Show code work views"), st("显示轨迹、本轮代码差异及完整 Agent 预设", "Show trajectory, turn code changes, and the full Agent preset picker"), divider = false, trailing = {
-                Switch(codeWork, { Pocket.prefs.showCodeWorkView = it }, enabled = shared.writable(SharedSetting.CodeWork))
-            })
+        HorizontalDivider(Modifier.padding(horizontal = 16.dp), color = T.Border)
+        SettingsFontRow(
+            st("字号大小", "Font size"), st("仅影响会话内容的字号", "Only affects conversation content"), fontSize, 10..22,
+            expanded = fontsExpanded, onToggle = { fontsExpanded = !fontsExpanded },
+        ) { Pocket.prefs.fontSize = it }
+        if (fontsExpanded) {
+            SettingsFontFamilyRow(
+                st("正文字体", "Text font"),
+                st("用于界面与会话正文。多个字体用逗号分隔，留空使用默认字体", "Interface and conversation text. Separate fonts with commas; leave empty for defaults."),
+                Pocket.prefs.textFontFamily, "textFontFamily",
+            ) { Pocket.prefs.textFontFamily = it }
+            SettingsFontFamilyRow(
+                st("代码字体", "Code font"),
+                st("用于代码块、行内代码与工具输出。多个字体用逗号分隔，留空使用默认字体", "Code blocks, inline code, and tool output. Separate fonts with commas; leave empty for defaults."),
+                Pocket.prefs.codeFontFamily, "codeFontFamily",
+            ) { Pocket.prefs.codeFontFamily = it }
+            SettingsFontRow(st("代码字号", "Code font size"), st("用于代码块、行内代码与工具输出", "Used for code blocks, inline code, and tool output"), codeFontSize, 10..16) { Pocket.prefs.codeFontSize = it }
+            SettingsFontFamilyRow(
+                st("终端字体", "Terminal font"),
+                st("用于侧栏终端。多个字体用逗号分隔，留空使用默认字体", "Sidebar terminal. Separate fonts with commas; leave empty for defaults."),
+                Pocket.prefs.terminalFontFamily, "terminalFontFamily",
+            ) { Pocket.prefs.terminalFontFamily = it }
+            SettingsFontRow(st("终端字号", "Terminal font size"), st("用于侧栏终端", "Used for the sidebar terminal"), terminalFontSize, 10..20) { Pocket.prefs.terminalFontSize = it }
         }
-        Card {
-            Row2(st("工作步骤展示", "Work step detail"), st("选择希望看到多少工具调用细节", "Choose how much tool-call detail to show"), value = transcriptText(transcript), enabled = shared.writable(SharedSetting.Transcript), onClick = { sheet = "transcript" }, trailing = { DownArrow() })
-            Row2(st("工作步骤收起时机", "Collapse work steps"), st("选择何时自动收起工作步骤", "Choose when work steps collapse automatically"), value = collapseText(collapse), onClick = { sheet = "collapse" }, divider = false, trailing = { DownArrow() })
-        }
-        Card {
-            Row2(st("繁忙时的发送行为", "Send while busy"), st("智能体运行时发送按钮的行为", "Send button behavior while the Agent is running"), value = if (busy == BusySend.Queue) L.queueSend() else L.steerSend(), enabled = shared.writable(SharedSetting.BusySend), onClick = { sheet = "busy" }, trailing = { DownArrow() })
-            Row2(st("性能与用量", "Performance and usage"), st("选择用量信息展示的详细程度", "Choose usage detail level"), value = if (perf == PerformanceUsage.Compact) st("简洁", "Compact") else st("详细", "Detailed"), enabled = shared.writable(SharedSetting.Performance), onClick = { sheet = "perf" }, divider = false, trailing = { DownArrow() })
-        }
-        if (shared.namespace(SharedSetting.SessionLog) != null) Card {
-            Row2(st("在使用官方模型 API 时上传 Session Log", "Upload Session Log when using the official model API"),
-                st("帮助改进 DeepSeek 模型与产品", "Help improve DeepSeek models and products."), divider = false, trailing = {
-                    Switch(shared.value(SharedSetting.SessionLog).bool() == true, { enabled ->
-                        shared.set(SharedSetting.SessionLog, kotlinx.serialization.json.JsonPrimitive(enabled))
-                    }, enabled = shared.writable(SharedSetting.SessionLog))
-                })
-        }
-        Text(st("移动端显示", "Mobile display"), fontSize = 13.sp, color = T.Text3, modifier = Modifier.padding(start = 22.dp, top = 12.dp))
-        Card {
-            Row2(L.layout(), st("宽屏（≥${WideLayoutMinDp}dp）时侧栏常显", "Keep the sidebar visible on screens ≥${WideLayoutMinDp}dp"), value = when (layout) {
-                LayoutMode.Auto -> L.layoutAuto(); LayoutMode.Phone -> L.layoutPhone(); LayoutMode.Desktop -> L.layoutDesktop()
-            }, onClick = { sheet = "layout" }, trailing = { DownArrow() })
-            Row2(st("代码自动换行", "Wrap code"), st("适用于会话代码与文件代码预览，不改变文件内容", "Wrap conversation code and file previews without changing file contents"), divider = false, trailing = {
-                Switch(codeWrap, { codeWrap = it; Pocket.prefs.codeWordWrap = it })
-            })
-        }
-        Text(st("移动端布局、代码换行与过程收起时机仅作用于本设备；其余通用设置由当前 Host 管理。", "Mobile layout, code wrapping, and collapse timing apply only to this device; other general settings are managed by the current Host."), fontSize = 12.sp, color = T.Caption, modifier = Modifier.padding(22.dp))
+        GeneralPreferenceRow(st("工作步骤展示", "Work step detail"), value = transcriptText(transcript), onClick = { sheet = "transcript" })
+        GeneralPreferenceRow(st("显示代码工作视图", "Show code work views"), st("在手机与桌面显示轨迹、本轮代码差异及完整 Agent 预设", "Show trajectory, turn code changes, and full Agent presets on mobile and desktop"), trailing = {
+            Switch(codeWork, { Pocket.prefs.showCodeWorkView = it }, enabled = shared.writable(SharedSetting.CodeWork), colors = SwitchDefaults.colors(checkedTrackColor = T.PrimaryButton, checkedThumbColor = T.OnPrimary))
+        })
+        GeneralPreferenceRow(st("繁忙时的发送行为", "Send while busy"), value = if (busy == BusySend.Queue) L.queueSend() else L.steerSend(), onClick = { sheet = "busy" })
+        GeneralPreferenceRow(st("性能与用量", "Performance and usage"), value = if (perf == PerformanceUsage.Compact) st("简洁", "Compact") else st("详细", "Detailed"), onClick = { sheet = "perf" })
+        SessionLogUploadPreference()
+        GeneralSectionLabel(st("移动端专属", "Mobile only"))
+        GeneralPreferenceRow(st("过程收起时机", "Collapse work steps"), st("与桌面一样，这是客户端临时状态，不保存到 Host；仅本次应用运行有效", "Like desktop, this is temporary client state, not a Host setting; applies only to this app instance"), value = collapseText(collapse), onClick = { sheet = "collapse" })
+        GeneralPreferenceRow(L.layout(), st("宽屏（≥${WideLayoutMinDp}dp）时侧栏常显", "Keep the sidebar visible on screens ≥${WideLayoutMinDp}dp"), value = when (layout) {
+            LayoutMode.Auto -> L.layoutAuto(); LayoutMode.Phone -> L.layoutPhone(); LayoutMode.Desktop -> L.layoutDesktop()
+        }, onClick = { sheet = "layout" })
+        GeneralPreferenceRow(st("代码自动换行", "Wrap code"), st("适用于会话代码与文件代码预览，不改变文件内容", "Wrap conversation code and file previews without changing file contents"), divider = false, trailing = {
+            Switch(codeWrap, { codeWrap = it; Pocket.prefs.codeWordWrap = it }, colors = SwitchDefaults.colors(checkedTrackColor = T.PrimaryButton, checkedThumbColor = T.OnPrimary))
+        })
+        Text(st("移动端布局、代码换行与过程收起时机仅作用于本设备；其余通用设置由当前 Host 管理。", "Mobile layout, code wrapping, and collapse timing apply only to this device; other general settings are managed by the current Host."), fontSize = 12.sp, color = T.Caption, modifier = Modifier.padding(horizontal = 22.dp, vertical = 12.dp))
+        Text(st("移动端版本：", "Mobile version: ") + BuildConfig.VERSION_NAME, fontSize = 12.sp, color = T.Caption, textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth().padding(16.dp))
     }
     when (sheet) {
         "perm" -> PermissionPickerSheet(
@@ -1463,7 +1476,7 @@ fun GeneralSettingsScreen(onBack: () -> Unit) {
         )
         "lang" -> PocketSheet({ sheet = null }) {
             SheetTitle(L.language())
-            AppLanguage.entries.forEach { o -> OptionRow(o.label, selected = lang == o, enabled = shared.writable(SharedSetting.Language)) { save(SharedSetting.Language, o.name.lowercase()) } }
+            AppLanguage.entries.forEach { o -> OptionRow(o.label, selected = lang == o) { save(SharedSetting.Language, o.name.lowercase()) } }
         }
         "layout" -> PocketSheet({ sheet = null }) {
             SheetTitle(L.layout())
@@ -1473,7 +1486,7 @@ fun GeneralSettingsScreen(onBack: () -> Unit) {
         }
         "transcript" -> PocketSheet({ sheet = null }) {
             SheetTitle(st("工作步骤展示", "Work step detail"))
-            TranscriptView.entries.forEach { o -> OptionRow(transcriptText(o), selected = transcript == o, enabled = shared.writable(SharedSetting.Transcript)) { save(SharedSetting.Transcript, o.name.lowercase()) } }
+            TranscriptView.entries.forEach { o -> OptionRow(transcriptText(o), selected = transcript == o) { save(SharedSetting.Transcript, o.name.lowercase()) } }
         }
         "collapse" -> PocketSheet({ sheet = null }) {
             SheetTitle(st("工作步骤收起时机", "Collapse work steps"))
@@ -1481,12 +1494,12 @@ fun GeneralSettingsScreen(onBack: () -> Unit) {
         }
         "busy" -> PocketSheet({ sheet = null }) {
             SheetTitle(st("繁忙时的发送行为", "Send while busy"))
-            OptionRow(L.queueSend(), st("本轮结束后再发送", "Send after the current turn"), selected = busy == BusySend.Queue, enabled = shared.writable(SharedSetting.BusySend)) { save(SharedSetting.BusySend, "queue") }
-            OptionRow(L.steerSend(), st("插入当前轮次，引导智能体", "Guide the Agent during the current turn"), selected = busy == BusySend.Steer, enabled = shared.writable(SharedSetting.BusySend)) { save(SharedSetting.BusySend, "steer") }
+            OptionRow(L.queueSend(), st("本轮结束后再发送", "Send after the current turn"), selected = busy == BusySend.Queue) { save(SharedSetting.BusySend, "queue") }
+            OptionRow(L.steerSend(), st("插入当前轮次，引导智能体", "Guide the Agent during the current turn"), selected = busy == BusySend.Steer) { save(SharedSetting.BusySend, "steer") }
         }
         "perf" -> PocketSheet({ sheet = null }) {
             SheetTitle(st("性能与用量", "Performance and usage"))
-            PerformanceUsage.entries.forEach { o -> OptionRow(if (o == PerformanceUsage.Compact) st("简洁", "Compact") else st("详细", "Detailed"), selected = perf == o, enabled = shared.writable(SharedSetting.Performance)) { save(SharedSetting.Performance, o.name.lowercase()) } }
+            PerformanceUsage.entries.forEach { o -> OptionRow(if (o == PerformanceUsage.Compact) st("简洁", "Compact") else st("详细", "Detailed"), selected = perf == o) { save(SharedSetting.Performance, o.name.lowercase()) } }
         }
     }
     if (shared.error != null && sheet != null) AlertDialog(
@@ -1496,5 +1509,3 @@ fun GeneralSettingsScreen(onBack: () -> Unit) {
         confirmButton = { TextButton(onClick = shared::dismissError) { Text(st("确定", "OK")) } },
     )
 }
-
-@Composable private fun DownArrow() = Icon(D.chevronDown, null, tint = T.Text2, modifier = Modifier.padding(start = 2.dp).size(18.dp))

@@ -27,6 +27,7 @@ object D {
     val chevronDown @Composable get() = v(R.drawable.dsh_chevron_down)
     val chevronRight @Composable get() = v(R.drawable.dsh_chevron_right)
     val chevronLeft @Composable get() = v(R.drawable.dsh_chevron_left)
+    val close @Composable get() = v(R.drawable.dsh_close)
     val newChat @Composable get() = v(R.drawable.dsh_new_chat)
     /** Sidebar Plugins panel glyph (ui-plugin-manager PluginsPanelIcon). */
     val pluginPinwheel @Composable get() = v(R.drawable.dsh_plugin_pinwheel)
@@ -71,9 +72,9 @@ object D {
     val globe @Composable get() = v(R.drawable.dsh_globe)
     val rightUp @Composable get() = v(R.drawable.dsh_right_up)
     val chat @Composable get() = v(R.drawable.dsh_chat_lines)
-    val question @Composable get() = v(R.drawable.dsh_question)
     val inspect @Composable get() = v(R.drawable.dsh_inspect)
     val think @Composable get() = v(R.drawable.dsh_think)
+    val question @Composable get() = v(R.drawable.dsh_question)
     val sparkle @Composable get() = v(R.drawable.dsh_sparkle)
     val checklist @Composable get() = v(R.drawable.dsh_checklist)
     val code @Composable get() = v(R.drawable.dsh_code)

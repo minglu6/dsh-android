@@ -31,6 +31,7 @@ class SessionInspectorPanelTest {
         rule.onNodeWithTag("rightPanel").assertDoesNotExist()
         rule.runOnIdle { Pocket.chat.value = state("A", "custom/first") }
         rule.onNodeWithText("custom/first").assertIsDisplayed()
+        rule.onNodeWithTag("inspectorFilterButton").performClick()
         rule.onNodeWithTag("inspectorFilter").performTextInput("first")
         rule.onNodeWithTag("inspectorApplyFilter").performClick()
         rule.runOnIdle { Pocket.chat.value = state("B", "custom/second") }
@@ -43,6 +44,7 @@ class SessionInspectorPanelTest {
     @Test fun confirmedFilterAppliesToSubsequentChatUpdatesAndDetailsRemainLocal() {
         Pocket.chat.value = state("A", "custom/first")
         rule.setContent { PocketTheme { SessionInspectorSheet("A", onDismiss = {}) } }
+        rule.onNodeWithTag("inspectorFilterButton").performClick()
         rule.onNodeWithTag("inspectorFilter").performTextInput("DELTA")
         rule.onNodeWithText("custom/first").assertIsDisplayed() // draft is not the active filter
         rule.onNodeWithTag("inspectorApplyFilter").performClick()
@@ -50,7 +52,38 @@ class SessionInspectorPanelTest {
         rule.runOnIdle { Pocket.chat.value = state("A", "custom/delta") }
         rule.onNodeWithText("custom/delta").assertIsDisplayed().performClick()
         rule.onNodeWithTag("inspectorDetail").assertIsDisplayed()
-        rule.onNodeWithTag("inspectorCopy").assertIsDisplayed()
-        rule.onNodeWithTag("inspectorLoadEarlier").assertIsNotEnabled()
+        rule.onNodeWithTag("inspectorCloseDetail").performClick()
+        rule.onNodeWithTag("inspectorDetail").assertDoesNotExist()
+    }
+
+    @Test fun cancelledDraftDoesNotChangeConfirmedFilterAndSuggestionsCommitImmediately() {
+        Pocket.chat.value = state("A", "custom/first")
+        rule.setContent { PocketTheme { SessionInspectorSheet("A", onDismiss = {}) } }
+        rule.onNodeWithTag("inspectorFilterButton").performClick()
+        rule.onNodeWithTag("inspectorFilter").performTextInput("missing")
+        rule.onNodeWithTag("inspectorCancelFilter").performClick()
+        rule.onNodeWithText("custom/first").assertIsDisplayed()
+        rule.onNodeWithTag("inspectorFilterButton").performClick()
+        rule.onNodeWithTag("inspectorFilter").performTextInput("first")
+        rule.onAllNodesWithText("custom/first").onLast().performClick()
+        rule.onNodeWithTag("inspectorFilterPopup").assertDoesNotExist()
+        rule.runOnIdle { Pocket.chat.value = state("A", "custom/second") }
+        rule.onNodeWithText("custom/second").assertDoesNotExist()
+    }
+
+    @Test fun switchingPresentationClearsSelectionAndConfirmedFilter() {
+        Pocket.chat.value = state("A", "custom/first")
+        rule.setContent { PocketTheme { SessionInspectorSheet("A", onDismiss = {}) } }
+        rule.onNodeWithText("custom/first").performClick()
+        rule.onNodeWithTag("inspectorDetail").assertIsDisplayed()
+        rule.onNodeWithTag("inspectorPresentation").performClick()
+        rule.onNodeWithTag("inspectorGroups").performClick()
+        rule.onNodeWithTag("inspectorDetail").assertDoesNotExist()
+        rule.onNodeWithTag("inspectorFilterButton").performClick()
+        rule.onNodeWithTag("inspectorFilter").performTextInput("missing")
+        rule.onNodeWithTag("inspectorApplyFilter").performClick()
+        rule.onNodeWithTag("inspectorPresentation").performClick()
+        rule.onNodeWithTag("inspectorRaw").performClick()
+        rule.onNodeWithText("custom/first").assertIsDisplayed()
     }
 }

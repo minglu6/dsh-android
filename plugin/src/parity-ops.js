@@ -52,9 +52,17 @@ export function workspaceOps(workspaceController) {
 /** Only advertise browse when the composed Host picker actually serves it. */
 export function directoryOps(controller, directoryPicker) {
   if (directoryPicker.capability().kind !== 'browse') return {}
-  return {
+  const ops = {
     'workspace.directoryList': (a, signal) => controller.list(str(a.path) ? a.path : undefined, signal),
   }
+  if (typeof controller.createDirectory === 'function') {
+    ops['workspace.directoryCreate'] = async (a) => {
+      if (!str(a?.path) || !a.path.trim()) throw bad('path required')
+      if (!str(a?.name) || !a.name.trim()) throw bad('name required')
+      return controller.createDirectory(a.path, a.name)
+    }
+  }
+  return ops
 }
 
 /** Goal refs are the official id/revision CAS fence, never inferred from an objective. */

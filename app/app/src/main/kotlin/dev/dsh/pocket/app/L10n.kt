@@ -157,7 +157,7 @@ object L {
     fun pairSheetTitle() = if (en) "Pair" else "配对"
     fun addressField() = if (en) "Address" else "地址"
     fun nameField() = if (en) "Name" else "名称"
-    fun nameHint() = if (en) "Name" else "名称"
+    fun nameHint() = if (en) "Defaults to remote host IP" else "默认远程主机 IP"
     /** Desktop `pair` — primary action on the phone pair sheet. */
     fun pairAction() = if (en) "Start pairing" else "开始配对"
     fun pairingBusy() = if (en) "Pairing…" else "配对中…"

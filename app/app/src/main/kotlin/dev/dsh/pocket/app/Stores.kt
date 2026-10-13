@@ -163,6 +163,14 @@ enum class SessionGroupBy { Workspace, WorkspaceTree, Flat }
 enum class SessionOrderBy { Manual, Updated }
 enum class ArchivedFilter { Default, Show, Only }
 
+/** Identities are discovery hints only; the Host remains authoritative for process lifetime. */
+@Serializable
+internal data class SavedTerminalOwner(
+    val sessionId: String,
+    val ids: List<String> = emptyList(),
+    val selectedId: String? = null,
+)
+
 class AppPrefs(ctx: Context) {
     internal val hostSettings = HostSettings(CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate))
     private val storage = ctx.getSharedPreferences("app", Context.MODE_PRIVATE)
@@ -278,5 +286,70 @@ class AppPrefs(ctx: Context) {
 
     fun setManualSessionOrder(hostId: String, value: List<String>) {
         p.edit().putString("manualSessionOrder:$hostId", json.encodeToString(ListSerializer(String.serializer()), value.distinct())).apply()
+    }
+
+    private fun terminalOwners(hostId: String): List<SavedTerminalOwner> =
+        p.getString("terminalOwners:$hostId", null)?.let {
+            runCatching { json.decodeFromString(ListSerializer(SavedTerminalOwner.serializer()), it) }.getOrNull()
+        }.orEmpty()
+
+    private fun saveTerminalOwners(hostId: String, owners: List<SavedTerminalOwner>) {
+        p.edit().putString("terminalOwners:$hostId",
+            json.encodeToString(ListSerializer(SavedTerminalOwner.serializer()), owners)).apply()
+    }
+
+    @Synchronized
+    fun terminalOwnerIds(hostId: String): List<String> = terminalOwners(hostId).map { it.sessionId }
+
+    @Synchronized
+    fun selectedTerminalId(hostId: String, sessionId: String): String? =
+        terminalOwners(hostId).firstOrNull { it.sessionId == sessionId }?.selectedId
+
+    /** Discovery hint for a create request; only the Host roster can confirm process existence. */
+    @Synchronized
+    fun discoverTerminal(hostId: String, sessionId: String, terminalId: String) =
+        recordTerminal(hostId, sessionId, terminalId, selected = false)
+
+    /** Only a received snapshot proves the follow actually attached successfully. */
+    @Synchronized
+    fun rememberTerminal(hostId: String, sessionId: String, terminalId: String) =
+        recordTerminal(hostId, sessionId, terminalId, selected = true)
+
+    private fun recordTerminal(hostId: String, sessionId: String, terminalId: String, selected: Boolean) {
+        val owners = terminalOwners(hostId)
+        val owner = owners.firstOrNull { it.sessionId == sessionId } ?: SavedTerminalOwner(sessionId)
+        saveTerminalOwners(hostId, owners.filterNot { it.sessionId == sessionId } +
+            owner.copy(ids = (owner.ids + terminalId).distinct(), selectedId = if (selected) terminalId else owner.selectedId))
+    }
+
+    /** Call only after a successful, validated authoritative list, never on transport failure. */
+    @Synchronized
+    fun reconcileTerminals(hostId: String, sessionId: String, ids: List<String>) {
+        val owners = terminalOwners(hostId)
+        val selected = owners.firstOrNull { it.sessionId == sessionId }?.selectedId?.takeIf { it in ids }
+        saveTerminalOwners(hostId, owners.filterNot { it.sessionId == sessionId } +
+            if (ids.isEmpty()) emptyList() else listOf(SavedTerminalOwner(sessionId, ids.distinct(), selected)))
+        if (ids.isEmpty()) {
+            val prefix = terminalPanelOwnerPrefix(hostId)
+            val editor = p.edit()
+            p.all.filter { (key, value) -> key.startsWith(prefix) && value == sessionId }
+                .keys.forEach(editor::remove)
+            editor.apply()
+        }
+    }
+
+    @Synchronized
+    fun forgetTerminal(hostId: String, sessionId: String, terminalId: String) {
+        val owner = terminalOwners(hostId).firstOrNull { it.sessionId == sessionId } ?: return
+        reconcileTerminals(hostId, sessionId, owner.ids.filterNot { it == terminalId })
+    }
+
+    private fun terminalPanelOwnerPrefix(hostId: String) = "terminalPanelOwner:${hostId.length}:$hostId:"
+
+    fun terminalPanelOwner(hostId: String, contextSessionId: String): String? =
+        p.getString(terminalPanelOwnerPrefix(hostId) + contextSessionId, null)
+
+    fun setTerminalPanelOwner(hostId: String, contextSessionId: String, ownerSessionId: String?) {
+        p.edit().putString(terminalPanelOwnerPrefix(hostId) + contextSessionId, ownerSessionId).apply()
     }
 }

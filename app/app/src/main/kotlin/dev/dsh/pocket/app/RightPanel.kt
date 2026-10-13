@@ -131,7 +131,7 @@ fun PanelSheet(
                     Image(painterResource(R.drawable.dsh_guide_browser), contentDescription = null, modifier = Modifier.size(26.dp))
                 }
                 Spacer(Modifier.height(14.dp))
-                GuideEntry(panelText("会话数据诊断", "Session data inspector"),
+                GuideEntry(panelText("会话数据诊断", "Session Log"),
                     panelText("在侧边栏分析当前会话原始日志和聊天分组数据", "Analyze raw logs and grouped chat messages for the current session in the sidebar."), onInspector) {
                     Icon(D.inspect, null, tint = T.Text2, modifier = Modifier.size(26.dp))
                 }

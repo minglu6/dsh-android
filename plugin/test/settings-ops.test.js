@@ -75,7 +75,7 @@ test('model settings reject unfenced writes and never fall back to raw settings 
 })
 
 
-test('model API-key writes expose only metadata and never enumerate or delete credential records', async () => {
+test('credential reads and writes expose only metadata and never enumerate or delete credential records', async () => {
   const store = new Map([['OPENAI_API_KEY', 'sk-secret']])
   const ops = credentialsOps({
     credentials: {
@@ -89,7 +89,10 @@ test('model API-key writes expose only metadata and never enumerate or delete cr
       deleteRecord: async () => { throw new Error('must not delete records') },
     },
   })
-  assert.deepEqual(Object.keys(ops).sort(), ['credentials.set', 'credentials.unset'])
+  const described = await ops['credentials.describe']({ ref: 'OPENAI_API_KEY' })
+  assert.deepEqual(described, { ref: 'OPENAI_API_KEY', configured: true, source: 'file', writable: true })
+  await assert.rejects(ops['credentials.describe']({}), /ref required/)
+  assert.equal(JSON.stringify(described).includes('sk-secret'), false)
   const stored = await ops['credentials.set']({ ref: 'ANTHROPIC_API_KEY', value: 'sk-ant' })
   assert.equal(store.get('ANTHROPIC_API_KEY'), 'sk-ant')
   assert.deepEqual(stored, { ref: 'ANTHROPIC_API_KEY', configured: true, source: 'file', writable: true })

@@ -6,6 +6,15 @@
 #   dataDir: <path>
 #   iroh: true                  opt-in legacy desktop sidecar (not used for phone pairing)
 #   hostBinary: <path>          override path to pocket-host (only with iroh: true)
+# Phone and desktop share the official in-app browser. Disable the auto owner
+# before mounting both browse halves; it would otherwise also mount native on macOS.
+- id: directory-picker
+  disabled: true
+
 - insert:
     - id: dsh-pocket
       name: dsh-plugin-pocket
+    - id: directory-picker-browse
+      name: '@deepseek-ai/dsh-host-directory-picker-browse'
+    - id: ui-directory-picker-browse
+      name: '@deepseek-ai/dsh-client-ui-directory-picker-browse'

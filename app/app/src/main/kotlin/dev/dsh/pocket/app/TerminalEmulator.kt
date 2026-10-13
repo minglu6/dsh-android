@@ -78,6 +78,14 @@ class AnsiTerminal(cols: Int = 80, rows: Int = 24) {
     var revision: Long = 0L; private set
 
     private var cells = Array(this.rows) { Array(this.cols) { TermCell() } }
+    /** Zero for hard lines, otherwise the content boundary before an automatic wrap. */
+    private var wrapped = IntArray(this.rows)
+    var alternateScreen = false; private set
+    private var primaryScreen: TerminalGrid? = null
+    private var primaryX = 0
+    private var primaryY = 0
+    private var mouseMode = 0
+    private var sgrMouse = false
     var cursorX = 0; private set
     var cursorY = 0; private set
     private var savedX = 0
@@ -109,6 +117,57 @@ class AnsiTerminal(cols: Int = 80, rows: Int = 24) {
 
     fun isCursorVisible(): Boolean = cursorVisible
 
+    internal fun snapshot() = TerminalGrid(
+        Array(rows) { cells[it].copyOf() }, wrapped.copyOf(),
+    )
+
+    /** A tap is a click in mouse-aware apps, otherwise horizontal movement on this row only. */
+    internal fun tapInput(row: Int, column: Int): String? {
+        if (row !in 0 until rows || column !in 0 until cols) return null
+        if (mouseMode != 0) {
+            val x = column + 1
+            val y = row + 1
+            if (sgrMouse) return "\u001b[<0;$x;${y}M" +
+                if (mouseMode == 9) "" else "\u001b[<0;$x;${y}m"
+            // The transport writes UTF-8 strings: legacy mouse bytes must remain ASCII.
+            if (x > 95 || y > 95) return null
+            val position = "${(x + 32).toChar()}${(y + 32).toChar()}"
+            return "\u001b[M $position" + if (mouseMode == 9) "" else "\u001b[M#$position"
+        }
+        if (alternateScreen || row != cursorY) return null
+        val end = (cells[row].indexOfLast { !it.spacer && it.ch != " " } + 1)
+            .let { if (it > 0 && cells[row][it - 1].wide) it + 1 else it }
+            .coerceAtLeast(cursorX).coerceAtMost(cols)
+        var target = column.coerceAtMost(end)
+        if (target < cols && cells[row][target].spacer) target--
+        val start = cursorX.coerceIn(0, cols)
+        val distance = (minOf(start, target) until maxOf(start, target)).count { !cells[row][it].spacer }
+        if (distance == 0) return null
+        return (if (target < start) "\u001b[D" else "\u001b[C").repeat(distance)
+    }
+
+    private fun setAlternateScreen(active: Boolean) {
+        if (alternateScreen == active) return
+        if (active) {
+            primaryScreen = snapshot()
+            primaryX = cursorX
+            primaryY = cursorY
+            cells = Array(rows) { Array(cols) { TermCell() } }
+            wrapped = IntArray(rows)
+            cursorX = 0
+            cursorY = 0
+        } else {
+            primaryScreen?.let { saved ->
+                cells = Array(rows) { r -> Array(cols) { c -> saved.cell(r, c) } }
+                wrapped = IntArray(rows) { saved.wrapped.getOrElse(it) { 0 }.coerceAtMost(cols) }
+            }
+            cursorX = primaryX.coerceIn(0, cols - 1)
+            cursorY = primaryY.coerceIn(0, rows - 1)
+            primaryScreen = null
+        }
+        alternateScreen = active
+    }
+
     /** Visible lines as plain text (for tests / accessibility). */
     fun plainText(): String = buildString {
         for (r in 0 until rows) {
@@ -135,6 +194,7 @@ class AnsiTerminal(cols: Int = 80, rows: Int = 24) {
             }
         }
         cells = next
+        wrapped = wrapped.copyOf(nr)
         cols = nc
         rows = nr
         scrollTop = 0
@@ -146,6 +206,14 @@ class AnsiTerminal(cols: Int = 80, rows: Int = 24) {
 
     fun clear() {
         cells = Array(rows) { Array(cols) { TermCell() } }
+        wrapped = IntArray(rows)
+        alternateScreen = false
+        primaryScreen = null
+        mouseMode = 0
+        sgrMouse = false
+        savedX = 0; savedY = 0
+        originMode = false; autoWrap = true; insertMode = false; cursorVisible = true
+        skipCharset = false
         cursorX = 0
         cursorY = 0
         fg = -1; bg = -1; bold = false; dim = false; underline = false; inverse = false
@@ -248,10 +316,17 @@ class AnsiTerminal(cols: Int = 80, rows: Int = 24) {
 
     private fun putChar(s: String) {
         val w = charWidth(s)
-        if (w <= 0) return
+        if (w <= 0) {
+            if (s.codePointAt(0) >= 0x20 && cursorX > 0) {
+                val previous = (cursorX - 1).coerceAtMost(cols - 1).let { if (cells[cursorY][it].spacer) it - 1 else it }
+                if (previous >= 0) cells[cursorY][previous] = cells[cursorY][previous].let { it.copy(ch = it.ch + s) }
+            }
+            return
+        }
         if (autoWrap && cursorX + w > cols) {
+            wrapped[cursorY] = cursorX
             carriageReturn()
-            lineFeed()
+            lineFeed(softWrap = true)
         }
         if (cursorX >= cols) cursorX = cols - 1
         if (insertMode) insertBlanks(w)
@@ -276,7 +351,8 @@ class AnsiTerminal(cols: Int = 80, rows: Int = 24) {
 
     private fun carriageReturn() { cursorX = 0 }
 
-    private fun lineFeed() {
+    private fun lineFeed(softWrap: Boolean = false) {
+        if (!softWrap) wrapped[cursorY] = 0
         if (cursorY == scrollBottom) scrollUp(1)
         else if (cursorY < rows - 1) cursorY++
     }
@@ -288,10 +364,12 @@ class AnsiTerminal(cols: Int = 80, rows: Int = 24) {
 
     private fun copyRow(from: Int, to: Int) {
         for (c in 0 until cols) cells[to][c] = cells[from][c]
+        wrapped[to] = wrapped[from]
     }
 
     private fun clearRow(r: Int) {
         for (c in 0 until cols) cells[r][c] = TermCell()
+        wrapped[r] = 0
     }
 
     private fun scrollUp(n: Int) {
@@ -325,10 +403,16 @@ class AnsiTerminal(cols: Int = 80, rows: Int = 24) {
                 'h' -> paramsList().forEach { when (it) {
                     7 -> autoWrap = true
                     25 -> cursorVisible = true
+                    9, 1000, 1002, 1003 -> mouseMode = it
+                    1006 -> sgrMouse = true
+                    47, 1047, 1049 -> setAlternateScreen(true)
                 } }
                 'l' -> paramsList().forEach { when (it) {
                     7 -> autoWrap = false
                     25 -> cursorVisible = false
+                    9, 1000, 1002, 1003 -> if (mouseMode == it) mouseMode = 0
+                    1006 -> sgrMouse = false
+                    47, 1047, 1049 -> setAlternateScreen(false)
                 } }
             }
             return
@@ -467,13 +551,57 @@ class AnsiTerminal(cols: Int = 80, rows: Int = 24) {
     }
 }
 
+/** Immutable selection snapshot: output arriving during a drag cannot change copied text. */
+internal class TerminalGrid(val cells: Array<Array<TermCell>>, val wrapped: IntArray) {
+    val rows get() = cells.size
+    val cols get() = cells[0].size
+    fun cell(row: Int, col: Int) = cells.getOrNull(row)?.getOrNull(col) ?: TermCell()
+    fun position(row: Int, col: Int): Int {
+        val r = row.coerceIn(0, rows - 1)
+        var c = col.coerceIn(0, cols - 1)
+        if (cells[r][c].spacer && c > 0) c--
+        return r * cols + c
+    }
+    fun wordAt(position: Int): IntRange {
+        val row = position / cols
+        var start = position % cols
+        var end = start
+        fun word(c: Int): Boolean {
+            val index = if (cells[row][c].spacer && c > 0) c - 1 else c
+            return cells[row][index].ch.any { it.isLetterOrDigit() || it == '_' }
+        }
+        if (word(start)) {
+            while (start > 0 && word(start - 1)) start--
+            while (end + 1 < cols && word(end + 1)) end++
+        }
+        return row * cols + start..row * cols + end
+    }
+    fun selectedText(anchor: Int, end: Int): String = buildString {
+        val first = minOf(anchor, end)
+        val last = maxOf(anchor, end)
+        for (r in first / cols..last / cols) {
+            val left = if (r == first / cols) first % cols else 0
+            val right = if (r == last / cols) last % cols else cols - 1
+            val line = buildString {
+                val contentEnd = if (wrapped[r] > 0) minOf(right, wrapped[r] - 1) else right
+                for (c in left..contentEnd) if (!cells[r][c].spacer) append(cells[r][c].ch)
+            }
+            append(if (right == cols - 1 && wrapped[r] == 0) line.trimEnd() else line)
+            if (r < last / cols && wrapped[r] == 0) append('\n')
+        }
+    }
+}
+
 /** East-Asian / emoji width for a single terminal grapheme (BMP-oriented). */
 internal fun charWidth(s: String): Int {
     if (s.isEmpty()) return 0
     val cp = s.codePointAt(0)
     if (cp < 0x20 || cp == 0x7F) return 0
     // Combining marks
-    if (cp in 0x0300..0x036F) return 0
+    when (Character.getType(cp)) {
+        Character.NON_SPACING_MARK.toInt(), Character.COMBINING_SPACING_MARK.toInt(),
+        Character.ENCLOSING_MARK.toInt() -> return 0
+    }
     // Surrogate / emoji / CJK wide ranges
     if (s.length >= 2 && s[0].isHighSurrogate()) return 2
     if (cp in 0x1100..0x115F || cp in 0x2E80..0xA4CF || cp in 0xAC00..0xD7A3 ||

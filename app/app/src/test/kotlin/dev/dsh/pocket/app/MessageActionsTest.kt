@@ -5,7 +5,14 @@ import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.ClipboardManager
+import androidx.activity.compose.LocalOnBackPressedDispatcherOwner
+import androidx.activity.OnBackPressedDispatcher
+import androidx.compose.foundation.layout.*
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 import dev.dsh.pocket.protocol.Item
 import dev.dsh.pocket.protocol.StepRecord
@@ -13,6 +20,9 @@ import dev.dsh.pocket.protocol.StepUsage
 import dev.dsh.pocket.protocol.ToolStatus
 import dev.dsh.pocket.protocol.TurnRecord
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
+import org.junit.After
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Rule
@@ -34,6 +44,7 @@ class MessageActionsTest {
     @get:Rule val rule = createComposeRule()
 
     @Before fun state() {
+        InspectorNavigation.reset()
         Pocket.init(RuntimeEnvironment.getApplication())
         installHostSettingsFixture()
         Pocket.prefs.language = AppLanguage.Zh
@@ -57,6 +68,101 @@ class MessageActionsTest {
         )
         Pocket.approvals.value = emptyList()
         Pocket.feedback.value = emptyMap()
+    }
+
+    @After fun clearInspectorNavigation() { InspectorNavigation.reset() }
+
+    @Test fun inspectorPickerConsumesActualMessageActionsAndOutsideButtons() {
+        var like: String? = null
+        var outsideClicks = 0
+        rule.setContent {
+            PocketTheme {
+                InspectorChatSurface("s1") {
+                    Column(Modifier.fillMaxSize()) {
+                        TextButton({ outsideClicks++ }, Modifier.testTag("outsideAction")) { Text("action") }
+                        Box(Modifier.weight(1f)) {
+                            Transcript(Pocket.chat.value!!, {}, onLike = { like = it })
+                        }
+                    }
+                }
+            }
+        }
+        rule.runOnIdle { InspectorNavigation.begin("s1") }
+        rule.onNodeWithTag("outsideAction").performTouchInput { click() }
+        rule.runOnIdle {
+            assertEquals(0, outsideClicks)
+            assertTrue(InspectorNavigation.picking)
+            assertNull(InspectorNavigation.pickedItemKey)
+        }
+        rule.onNodeWithTag("messageLike").performTouchInput { click() }
+        rule.runOnIdle {
+            assertEquals("a1", InspectorNavigation.pickedItemKey)
+            assertFalse(InspectorNavigation.picking)
+            assertNull(like)
+        }
+    }
+
+    @Test fun inspectorBackCancelsWithoutPickingOrClearingSession() {
+        lateinit var back: OnBackPressedDispatcher
+        rule.setContent {
+            back = LocalOnBackPressedDispatcherOwner.current!!.onBackPressedDispatcher
+            PocketTheme { InspectorChatSurface("s1") { Transcript(Pocket.chat.value!!, {}) } }
+        }
+        rule.runOnIdle { InspectorNavigation.begin("s1") }
+        rule.runOnIdle { back.onBackPressed() }
+        rule.runOnIdle {
+            assertFalse(InspectorNavigation.picking)
+            assertNull(InspectorNavigation.pickedItemKey)
+            assertEquals("s1", InspectorNavigation.sessionId)
+        }
+    }
+
+    @Test fun inspectorRevealScrollsActualTranscriptToOffscreenItem() {
+        val state = Pocket.chat.value!!.copy(items = (0..35).map { Item.User("u$it", "Message $it") })
+        rule.setContent { PocketTheme { InspectorChatSurface("s1") { Transcript(state, {}) } } }
+        rule.onNodeWithText("Message 35").assertIsDisplayed()
+        rule.onNodeWithText("Message 0").assertDoesNotExist()
+        rule.runOnIdle { InspectorNavigation.reveal("s1", "u0") }
+        rule.onNodeWithText("Message 0").assertIsDisplayed()
+    }
+
+    @Test fun inspectorRevealOpensCollapsedProcessAndPicksExactMemberWithoutOpeningTool() {
+        val first = Item.Tool("t1", "c1", "read", "{}", ToolStatus.Ok, turn = 1, step = 1)
+        val second = Item.Tool("t2", "c2", "edit", "{}", ToolStatus.Ok, turn = 1, step = 2)
+        val state = Pocket.chat.value!!.copy(
+            items = listOf(Item.User("u1", "question"), first, second, Item.Text("a1", "answer", false, turn = 1, step = 2)),
+            turns = listOf(TurnRecord(1, 1, 8, 1000, 5000, "completed")),
+        )
+        var opened: Item.Tool? = null
+        rule.setContent { PocketTheme { InspectorChatSurface("s1") { Transcript(state, { opened = it }) } } }
+        rule.onNodeWithTag("processTool:t2").assertDoesNotExist()
+        rule.runOnIdle { InspectorNavigation.reveal("s1", "t2") }
+        rule.onNodeWithTag("processTool:t2").assertIsDisplayed()
+        rule.runOnIdle { InspectorNavigation.begin("s1") }
+        rule.onNodeWithTag("processTool:t2").performTouchInput { click() }
+        rule.runOnIdle {
+            assertEquals("t2", InspectorNavigation.pickedItemKey)
+            assertFalse(InspectorNavigation.picking)
+            assertNull(opened)
+        }
+    }
+
+    @Test fun inspectorSessionSwitchDiscardsPickerAndReveal() {
+        val state = mutableStateOf(Pocket.chat.value!!)
+        rule.setContent {
+            PocketTheme { InspectorChatSurface(state.value.sessionId) { Transcript(state.value, {}) } }
+        }
+        rule.runOnIdle {
+            InspectorNavigation.begin("s1")
+            InspectorNavigation.revealItemKey = "a1"
+            state.value = state.value.copy(sessionId = "s2")
+        }
+        rule.runOnIdle {
+            assertNull(InspectorNavigation.sessionId)
+            assertNull(InspectorNavigation.pickedItemKey)
+            assertNull(InspectorNavigation.revealItemKey)
+            assertFalse(InspectorNavigation.picking)
+        }
     }
 
     @Test fun assistantRowUsesIconContentDescriptionsNotVisibleLabels() {

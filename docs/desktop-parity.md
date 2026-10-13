@@ -78,7 +78,7 @@ The reported greeting was replayed from its original journal: `1791882640048 - 1
 
 The whole-Turn running status stays visible during reasoning and tool execution. Its clock uses the current open Host Turn's start, not the phone connection time; missing start data shows “深度求索中” without an invented duration. The official 60-frame whale artwork, blue theme tokens, shared text shimmer and output divider are rendered natively; disabling system animations uses the official static whale.
 
-Renderer evidence from deterministic Host-event replay through the reducer and Compose UI: [standard/light](screenshots/controller-status-light.png), [standard/dark](screenshots/controller-status-dark.png), [detailed/dark](screenshots/controller-status-detailed.png). This is rendering evidence, not a live-model run. Independent real-Host verification exercised phone-protocol writes updating the official Web settings page, Web UI writes pushing back to the phone protocol, and stale-revision rejection.
+Renderer evidence from deterministic Host-event replay through the actual reducer and Compose UI: [standard/light](screenshots/controller-status-light.png), [standard/dark](screenshots/controller-status-dark.png), [detailed/dark](screenshots/controller-status-detailed.png). This is a rendering smoke, not a live-model run. Independent real-Host verification exercised phone-protocol writes updating the open official Web settings page, Web UI writes pushing back to the phone protocol, and stale-revision rejection.
 
 
 ### 1.5 Approvals & permission prompts
@@ -126,7 +126,7 @@ Slash menu pick consumes the typed `/` (desktop `slash/input-consume-token`) the
 
 Retry is **display** of Host `llm/retry` chains (`message.retry.*`), not a user button.
 
-Assistant completion actions wait for the Host Turn to close and belong to its last answer, not every durable intermediate reply.
+Assistant completion actions wait for the Host Turn to close and belong to its last answer, not every durable intermediate reply. The running process therefore does not gain a copy/time/action row merely because one assistant step has committed.
 
 **Icon chrome (desktop MessageIconActions / MessageFeedbackActions):** Android uses the official ui-primitives Regular SVG paths. User messages show clock → copy, without a branch control. Assistant messages show copy → like/dislike → branch → clock; copy/branch are 17dp and feedback icons 15dp, with tertiary `T.Text3` tint. Feedback selection swaps outline/fill rather than inventing blue/red colors. Controls occupy 36dp horizontally with no extra inter-button gap, retain a 48dp-high touch area, and leave 8dp before/after the clock; unavailable branch actions retain their disabled state and reason. Locale strings remain accessibility labels/tooltips, not visible text buttons. No standalone “本轮用量” row is appended below answers; composer statistics and trajectory usage details remain available. Process/reasoning chevrons use vector artwork and rotate on expansion instead of text glyphs.
 
@@ -216,7 +216,7 @@ Packages: `ui-sidebar`, `ui-workspace`, `ui-plugin-manager`, `ui-schedule`.
 | 工作区 section | `section.workspaces` 工作区 | session cwd groups | keep |
 | Group / order / filter | `groupBy.*`, `orderBy.*`, `viewOptions.*` | workspace registry | **done** — drawer sliders menu + prefs |
 | Search | `search.placeholder` 搜索会话名称 | `sessionController.search` | **done** — header search expands; `sessions.search` |
-| Add workspace | `workspace.add` 添加工作区 | Host directory + `workspaces.create` | **done** (path sheet / known cwds; OS picker **hide**) |
+| Add workspace | `workspace.add` 添加工作区 | Official directory browser + `workspace.create` | **done** — desktop-style modal, editable breadcrumbs, two directory panes, hidden toggle, new folder and Cancel/Open; narrow screens scroll panes and wrap footer actions. Native-only Hosts retain path entry. |
 | Rename / delete workspace | `rename.*`, `delete.workspace` | workspace controller | delete workspace **hide**/limited; rename session **feasible** |
 | Session row menu: fork / archive / pin | `menu.fork`, `menu.archiveSession`, `menu.pinSession` | `fork`; `workspace/{un,}archiveSession`; `workspace/{un,}pinSession` | **done** |
 | 插件 | plugin-manager `panel` 插件 | pinwheel → native Plugins | **done** (drawer panellist under 新会话) |
@@ -240,10 +240,14 @@ Guide artwork is selected from the owning feature's registry, not from generic c
 | 工作区文件 | `guide.title` 工作区文件 | `files.list` / `files.read` | feasible (done) |
 | 终端 | `title` 终端 / guide `新建终端` | `terminal.*` | feasible (done) |
 | 浏览器 | `guide.title` 浏览器 | Android WebView | **done** — desktop toolbar, navigation and explicit URL/title restore; no additional explanatory UI |
-| 会话数据诊断 | `tab.title` 会话数据诊断 | Original follow/history records + Android chat projection | **done** — raw/grouped views, filtering, paging and JSON details; no desktop DOM picking |
+| 会话数据诊断 | `tab.title` 会话数据诊断 | Original follow/history records + Android chat projection | **done** — desktop presentation selector/count, table columns, type-filter popover, hierarchy, resizable JSON details and native Chat element picking |
 | 文档预览 | documentpreview locales | Host file bytes + preview (opened via `openResource`, not a guide capsule) | **done** — `files.read` text paging + `files.readBytes` (base64) for image/PDF; `FilePreviewSheet` |
 | Dock split / float | `dock.*` | desktop layout | **hide** (single adaptive end panel) |
 | Deliverable / changes-review tabs | `deliverables.*` | events / turn payloads | feasible once events parsed |
+
+Session diagnostics follows `experimental/session-inspector`'s `View.tsx`, `InspectorTable.tsx`, `TypeFilter.tsx`, `InspectorDetails.tsx` and locales. The compact toolbar contains the presentation selector, original crosshair, count, conditional earlier-history action and follow action. The horizontally scrollable table retains the 660dp minimum width and 64/190/65/100dp identity/type/T/S/UTC-time columns; Chat Group omits time. Filtering is explicitly confirmed, offers candidates, and preserves parent context. Detail trees use the desktop Object/Array labels, with raw JSON expanded and group children loaded on demand; the divider resizes the detail area within 15–80%. There are no added Copy/JSON/Tree controls, row-count suffix or explanatory banners.
+
+Phone picking temporarily exposes the actual conversation, intercepts the pick without activating message actions or sending prompts, then returns to the selected diagnostic record. Back cancels picking. Selecting a diagnostic record positions its corresponding loaded Chat row. The inspected group objects remain the real Android projection, not fabricated desktop JavaScript objects: desktop runtime-object reference navigation and DOM hover overlays do not exist on Android. Raw stream chunks preserve their original indices and Turn/Step/block ancestry; live records that settle may change identity to the durable event.
 
 **Not right-panel guide entries (desktop placement):**
 
@@ -258,23 +262,21 @@ Guide artwork is selected from the owning feature's registry, not from generic c
 
 | Page | Locale | Decision |
 |---|---|---|
-| 通用设置 | `general.nav` 通用设置; language / appearance / font / transcript / collapse / busy-send / performance | Shared Host preferences with revision-fenced writes, effective-value readback and live updates; only device-specific and client-lifetime options remain local. |
-| 模型 | settings-models | **done** — provider rows with API-key status and one inline editor; collapsed customized settings; native model fields/input types, restore defaults, catalog/custom creation and discovery selection. Revision-fenced writes preserve drafts on failure. No standalone credential page or JSON model editor. |
-| 内置插件 / 插件 | plugin-manager + inventory | **done with native limits** — official groups, bundle/component controls, inspect/install/cancel/uninstall, diagnostics, registry and revision-fenced configuration. Host directory specs work; Android OS directory picker does not. Custom React slots remain Web-only. |
+| 通用设置 | `general.nav` 通用设置; language / appearance / fonts / transcript / collapse / busy-send / performance | **done with platform limits** — browser-verified separator rows; font-size pill with stacked arrows, external px and inline disclosure. Text/code/terminal family inputs commit on blur/Enter and resolve installed Android fonts with ordered fallback; expanded controls reset on remount. Host log uploads retain CAS/readback. Mobile-only preferences stay separate. |
+| 模型 | settings-models | **done** — browser-verified trailing dashed add-provider entry and horizontal creation tabs, compact provider editor and ID/name/options/delete model rows. Per-model options expand in place; custom API field order and save/create actions match desktop. Revision-fenced writes retain drafts and confirm readback; key retry does not recreate configuration. No standalone credential page. |
+| 内置插件 / 侧栏插件 | plugin-manager + inventory | **done with native limits** — Settings → Built-in plugins opens the independently loaded read-only inventory; sidebar Plugins retains native management. “Plugin interfaces” opens the original Host Web client, including installed custom React sections and other Web contributions without per-plugin APK adaptation. Host directory specs work; Android device file picking and desktop-native APIs remain unavailable. |
 | 自动化任务 | ui-schedule | **done** — new conversation for creation; searchable catalog, precise rule/title/instruction editing, conflict-safe delete/history. No pause toggle (`inactive` = ended). |
-| Agent 预设 | agent-preset | keep roster info |
+| Agent 预设 | agent-preset | **done** — browser-verified built-in/custom cards, single-column phone and two-column wide layout, immediate default selection with CAS/readback, independent mode/usage guides and read-only YAML viewer. Creator entry stages a new Cordis draft without sending. Coding Tools visibility and custom display names follow official rules. |
 | 打开配置文件 | `openDocument` | **hide** (local desktop editor) |
 | Shell / 终端 limits | settings-shell | native fields over `plugins.settingsDescribe/settingsMutate` |
-| Web search / subagent / agent-loop | respective settings namespaces | native configuration; additional namespaces use secret-safe advanced path editing |
+| Web search / subagent / agent-loop | respective settings namespaces | native configuration; bundle component settings retain secret-safe schema editing without an extra namespace directory |
 | 连接 / 审批通知 | phone Connections + notify pref | keep |
 
 Appearance values from `ui-theme` locales. Performance: `settings.performance.{compact,detailed}`.
 
-Android is a controller of the same Host, not an independent settings store. Shared fields use the official namespaces (`ui-chat`, `ui-theme`, `locale`, `ui-conversation`, `ui-settings`, and `permission`) through `plugins.settingsDescribe/settingsMutate`. Desktop changes push `settings.changed` and update mobile consumers. Conflicting, offline, read-only and overridden writes remain failures; old local preferences never overwrite Host settings, and responses from a previous Host cannot replace the current mirror.
+Android is a controller of the same Host, not an independent settings store. Shared fields read the official namespaces: `ui-chat` (transcript/performance), `ui-theme` (appearance/fonts/sizes), `locale.preference`, `ui-conversation.busyEnter`, `ui-settings.enabled`, `permission.defaultPreset`, and `session-log-deepseek.enabled`. Writes use the observed namespace revision through `plugins.settingsMutate`, then read back the effective value. Desktop changes push `settings.changed` and update open mobile pages and renderers. Read-only/offline/conflicting or overridden writes remain failures; they do not save a phone-local value or replay onto another Host. Old phone preferences never upload over Host settings.
 
-The exposed `session-log-deepseek.enabled` toggle uses the same mirror and version-fenced write path.
-
-The missing-value transcript default follows Desktop (`standard`). Collapse timing remains explicitly client-local and in-memory because the official desktop policy has no Host setting for it.
+The missing-value transcript default follows Desktop (`standard`). Layout, code wrapping and connection preferences remain device-specific. Collapse timing remains explicitly client-local and in-memory because the official desktop policy has no Host setting for it. Font names synchronize, but each device resolves its own installed fonts.
 
 Model settings use the desktop UI, not the mere existence of Host APIs, as their feature boundary. API keys stay write-only inside provider editors. Opening a card and applying changes refresh its Host snapshot; external configuration changes require reopening the card. Saving settings never changes the current session model.
 
@@ -358,7 +360,7 @@ Model settings use the desktop UI, not the mere existence of Host APIs, as their
 
 **Added in this pass (parity-ops):** `sessions.search`, `workspace.state` / `archiveSession` / `unarchiveSession` / `pinSession` / `unpinSession`, `feedback.get` / `feedback.set`, `references.files` / `references.sessions`, `session.attachment`, `attachments.upload`, `userQuestions.answer` (+ push `user-question` / `user-question.closed`).
 
-**Settings ops:** `models.providers` / `models.providerGet` / `models.settingsMutate` / `models.discover`; `plugins.list` / `plugins.setEnabled` / `plugins.install` / `plugins.inventory`; `schedule.catalog` / `list` / `create` / `update` / `delete` / `history`; `credentials.set` / `unset` only for API keys in model provider settings. Host injects: `llm`, `settings`/`settingsController`, `credentials`, `pluginManager`, `schedule`. There is no standalone credential-management page or enumeration/record-deletion RPC.
+**Settings ops:** `models.providers` / `models.providerGet` / `models.settingsMutate` / `models.discover`; `plugins.list` / `plugins.setEnabled` / `plugins.install` / `plugins.inventory`; `schedule.catalog` / `list` / `create` / `update` / `delete` / `history`; `credentials.describe` / `set` / `unset` for model connection credentials. Describe returns metadata only. Native settings retain revision checks and draft handling. `ui.open` / `ui.close` provide a device/connection-bound short Web session through the bridge's own port; the original Host client renders installed settings sections, model footer/provider-card slots and other Web contributions. No Qoder-specific native card or arbitrary React execution inside Compose remains. Host process tokens/cookies stay server-side; explicit path/Origin gates and CSP protect the HTTP/WS proxy.
 
 **Still limited / unfinished:**
 

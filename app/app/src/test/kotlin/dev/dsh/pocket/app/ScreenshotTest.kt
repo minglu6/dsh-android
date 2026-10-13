@@ -63,8 +63,8 @@ class ScreenshotTest {
     private val permissions = PermissionCatalog(permissionOptions, permissionOptions.take(3), "workspace-write")
 
     @Before fun state() {
-        // Skip NEARBY_WIFI in-panel CTA so connection screenshots show empty/nearby chrome.
         installHostSettingsFixture()
+        // Skip NEARBY_WIFI in-panel CTA so connection screenshots show empty/nearby chrome.
         runCatching { Pocket.prefs.nearbyWifiDeclined = true }
         runCatching { Pocket.prefs.appearance = Appearance.Light }
         val p = Profile("p1", "Mac mini", host = "100.106.128.87", port = 7690)

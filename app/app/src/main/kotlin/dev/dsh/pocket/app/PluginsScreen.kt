@@ -58,6 +58,26 @@ private val primaryOptionalBundles = listOf(
     "@deepseek-ai/dsh-experimental-auto-review",
     "@deepseek-ai/dsh-experimental-inspector-profile",
 )
+private val moreOptionalBundles = listOf(
+    "@deepseek-ai/dsh-experimental-tool-worktree",
+    "@deepseek-ai/dsh-experimental-cot-translation-bundle",
+    "@deepseek-ai/dsh-experimental-terminal-bundle",
+    "@deepseek-ai/dsh-experimental-session-search",
+    "@deepseek-ai/dsh-experimental-session-titles-bundle",
+    "@deepseek-ai/dsh-experimental-badge-skill-bundle",
+    "@deepseek-ai/dsh-experimental-ralph-bundle",
+    "@deepseek-ai/dsh-subagent-codex",
+    "@deepseek-ai/dsh-subagent-claude-code",
+)
+
+internal fun pluginOptionalVisible(name: String?, expanded: Boolean): Boolean =
+    expanded || name !in moreOptionalBundles
+
+internal fun pluginOptionalRank(name: String?): Int = when (name) {
+    in primaryOptionalBundles -> primaryOptionalBundles.indexOf(name)
+    in moreOptionalBundles -> primaryOptionalBundles.size + 1 + moreOptionalBundles.indexOf(name)
+    else -> primaryOptionalBundles.size
+}
 private fun configurationDescription(ns: String) = when (ns) {
     "subagent" -> pt("设置子智能体的递归层级、数量和模型。", "Set Subagent recursion depth, count, and models.")
     "web-search-deepseek" -> pt("设置 DeepSeek 的搜索提供方。", "Set up the DeepSeek search provider.")
@@ -144,19 +164,23 @@ private fun PluginsPage(profile: String?, onBack: () -> Unit) {
     val catalogRevision by Pocket.pluginCatalogRevision.collectAsState()
     val online = profile != null && status[profile] == Dot.Online
     val scope = rememberCoroutineScope()
+    var hostUi by remember { mutableStateOf(false) }
+    if (hostUi) {
+        HostUiScreen(pt("插件自定义界面", "Plugin interfaces")) { hostUi = false }
+        return
+    }
     var bundles by remember { mutableStateOf<List<JsonElement>>(emptyList()) }
     var plugins by remember { mutableStateOf<List<JsonElement>>(emptyList()) }
     var namespaces by remember { mutableStateOf<List<JsonElement>>(emptyList()) }
+    var managementAvailable by remember { mutableStateOf(false) }
     var writable by remember { mutableStateOf(false) }
     var loading by remember { mutableStateOf(false) }
     var loaded by remember { mutableStateOf(false) }
     var busy by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
-    var advancedConfigurations by remember { mutableStateOf(false) }
     var moreOptional by remember { mutableStateOf(false) }
     var configError by remember { mutableStateOf<String?>(null) }
     var outcome by remember { mutableStateOf<JsonElement?>(null) }
-    var query by remember { mutableStateOf("") }
     var detail by remember { mutableStateOf<String?>(null) }
     var partsQuery by remember(detail) { mutableStateOf("") }
     var config by remember { mutableStateOf<JsonElement?>(null) }
@@ -186,10 +210,11 @@ private fun PluginsPage(profile: String?, onBack: () -> Unit) {
         loading = true
         error = null
         try {
-            check("plugins.list" in ops) { pt("本部署没有可管理的 profile", "This deployment has no manageable profile") }
+            if ("plugins.list" !in ops) return
             val c = client()
             val data = c.pluginsList()
-            check(data["managementAvailable"].bool() != false) { pt("插件管理不可用", "Plugin management unavailable") }
+            managementAvailable = data["managementAvailable"].bool() != false
+            check(managementAvailable) { pt("本部署没有可管理的 profile，无法安装或启停插件。", "This deployment runs without a manageable profile, so plugins cannot be installed or switched here.") }
             bundles = data["bundles"].arr().orEmpty().filter { it["name"].str() !in hiddenProfileBundles }
             plugins = data["plugins"].arr().orEmpty()
             loaded = true
@@ -271,6 +296,7 @@ private fun PluginsPage(profile: String?, onBack: () -> Unit) {
             config != null -> config = null
             detail != null -> detail = null
             installRequest != null || installing -> installOpen = true
+            moreOptional -> moreOptional = false
             else -> onBack()
         }
     }
@@ -290,10 +316,10 @@ private fun PluginsPage(profile: String?, onBack: () -> Unit) {
         }
     } else {
         val selected = bundles.firstOrNull { it["name"].str() == detail }
-        SettingsScaffold(selected?.let(::pluginTitle) ?: pt("插件", "Plugins"), ::back, actions = {
+        SettingsScaffold(selected?.let(::pluginTitle) ?: if (moreOptional) pt("实验性插件", "Experimental plugins") else pt("插件", "Plugins"), ::back, actions = {
             IconButton(::reload, enabled = online && !locked) { Icon(D.refresh, pt("刷新", "Refresh")) }
-            if (selected == null || installRequest != null) {
-                Button({ openInstall() }, enabled = online && (installRequest != null || !busy),
+            if ((selected == null && !moreOptional && managementAvailable && "plugins.install" in ops) || installRequest != null) {
+                Button({ openInstall() }, enabled = online && (installRequest != null || !locked),
                     shape = T.R8, contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp)) {
                     Text(if (installRequest != null) pt("安装任务", "Installation") else pt("添加插件", "Add plugin"), fontSize = 13.sp)
                 }
@@ -303,39 +329,37 @@ private fun PluginsPage(profile: String?, onBack: () -> Unit) {
             error?.let { PluginMessage(it, true) }
             outcome?.let { PluginOutcome(it) }
             if (loading || busy) LinearProgressIndicator(Modifier.fillMaxWidth().padding(horizontal = 18.dp))
+            if ("ui.open" in ops) SettingsCard {
+                SettingsNavRow(pt("打开插件自定义界面", "Open plugin interfaces"), D.pluginPinwheel,
+                    value = pt("与桌面共用", "Shared with desktop"), divider = false,
+                    onClick = { if (!locked && online) hostUi = true })
+            }
             if (selected == null) {
-                PluginMessage(pt("安装、启用和配置插件", "Install, enable and configure plugins"))
-                OutlinedTextField(query, { query = it }, label = { Text(pt("搜索插件或配置", "Search plugins or configuration")) }, singleLine = true, modifier = Modifier.fillMaxWidth().padding(horizontal = 18.dp))
-                val matchingNamespaces = namespaces.filter { (it["ns"].str().orEmpty() + " " + configurationTitle(it["ns"].str().orEmpty(), plugins)).contains(query, true) }
-                PluginSection(pt("内置插件配置", "Official configuration") + " · " + matchingNamespaces.count { it["ns"].str() in officialConfigurations })
-                configError?.let { PluginMessage(it, true) }
-                matchingNamespaces.filter { it["ns"].str() in officialConfigurations }
-                    .sortedBy { officialConfigurations.indexOf(it["ns"].str()) }.forEach { ns ->
+                if (!moreOptional) {
+                    PluginMessage(pt("安装、启用和配置插件", "Install, enable and configure plugins"))
+                    val configurations = namespaces.filter { it["ns"].str() in officialConfigurations }
+                    if (configurations.isNotEmpty()) PluginSection(pt("内置插件配置", "Built-in plugin settings"))
+                    configError?.let { PluginMessage(it, true) }
+                    configurations.sortedBy { officialConfigurations.indexOf(it["ns"].str()) }.forEach { ns ->
                         val nsId = ns["ns"].str().orEmpty()
                         PluginCard(configurationTitle(nsId, plugins), configurationDescription(nsId), "", { config = ns }, artwork = configurationArtwork(nsId))
                     }
-                val extra = matchingNamespaces.filter { it["ns"].str() !in officialConfigurations }
-                if (extra.isNotEmpty()) {
-                    TextButton({ advancedConfigurations = !advancedConfigurations }, modifier = Modifier.padding(horizontal = 18.dp)) {
-                        Text(if (advancedConfigurations) pt("收起其他配置", "Hide other configuration") else pt("其他配置 / 高级", "Other configuration / advanced"))
-                    }
-                    if (advancedConfigurations || query.isNotBlank()) extra.forEach { ns ->
-                        val nsId = ns["ns"].str().orEmpty()
-                        PluginCard(configurationTitle(nsId, plugins), pt("主机提供的配置参数", "Configuration exposed by the host"), "", { config = ns }, icon = D.settings)
-                    }
                 }
                 val visible = bundles.filter {
-                    (it["installed"].bool() == true || it["official"].bool() == true || it["error"] != null) &&
-                        (pluginTitle(it) + " " + pluginDescription(it) + " " + it["name"].str()).contains(query, true)
+                    it["installed"].bool() == true || it["official"].bool() == true || it["error"] != null
                 }
-                listOf(true, false).forEach { official ->
-                    Row(Modifier.fillMaxWidth().padding(end = 18.dp), verticalAlignment = Alignment.CenterVertically) {
-                        Box(Modifier.weight(1f)) { PluginSection((if (official) pt("实验性插件", "Experimental plugins") else pt("已安装插件", "Installed plugins")) + " · " + visible.count { (it["official"].bool() == true) == official }) }
-                        if (official) TextButton({ moreOptional = !moreOptional }) { Text(if (moreOptional) pt("收起", "Less") else pt("更多", "More")) }
+                (if (moreOptional) listOf(true) else listOf(true, false)).forEach { official ->
+                    val all = visible.filter { (it["official"].bool() == true) == official }
+                    if (all.isEmpty()) return@forEach
+                    if (!moreOptional) Row(Modifier.fillMaxWidth().padding(end = 18.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Box(Modifier.weight(1f)) { PluginSection(if (official) pt("实验性插件", "Experimental plugins") else pt("已安装插件", "Installed plugins")) }
+                        if (official) TextButton({ moreOptional = true }) {
+                            Text(pt("更多", "More"))
+                            Icon(D.chevronRight, null, Modifier.size(14.dp))
+                        }
                     }
-                    val group = visible.filter { (it["official"].bool() == true) == official }
-                        .filter { !official || moreOptional || query.isNotBlank() || it["name"].str() in primaryOptionalBundles }
-                        .sortedBy { primaryOptionalBundles.indexOf(it["name"].str()).let { rank -> if (rank < 0) Int.MAX_VALUE else rank } }
+                    val group = all.filter { !official || pluginOptionalVisible(it["name"].str(), moreOptional) }
+                        .sortedBy { if (official) pluginOptionalRank(it["name"].str()) else 0 }
                     if (group.isEmpty() && loaded && !loading && error == null) PluginMessage(pt("没有匹配的插件", "No matching plugins"))
                     group.forEach { bundle ->
                         val name = bundle["name"].str().orEmpty()
@@ -417,7 +441,7 @@ private fun PluginsPage(profile: String?, onBack: () -> Unit) {
                         }
                     }
                 }
-                PluginMessage(pt("专属 React 插件界面无法在原生 Android 中执行；可用配置通过主机 schema 编辑。", "Plugin-specific React interfaces cannot run in native Android; exposed settings use the host schema editor."))
+                if ("ui.open" !in ops) PluginMessage(pt("更新桌面端手机连接插件后，可在此加载插件原有的 Web 界面。", "Update the Host phone-connection plugin to load installed plugin Web interfaces here."))
             }
             Spacer(Modifier.height(24.dp))
         }
@@ -570,7 +594,7 @@ private fun PluginInstallDialog(
                 if (guideOpen) {
                     Text(pt("填入插件 npm 包名：社区插件 README 安装命令中 dsh plugin add 或 pnpm add 之后的部分，例如 dsh-xxx 或 @作者/插件名。", "Enter the npm package name: the part after dsh plugin add or pnpm add in the community plugin README, such as dsh-xxx or @author/plugin."), fontSize = 13.sp)
                     TextButton({ onSpec("dsh-plugin-whale-pet") }, enabled = !busy && !unresolved) { Text(pt("填入示例：", "Use example: ") + "dsh-plugin-whale-pet") }
-                    Text(pt("按需安装的官方插件提供更新；其他插件请先卸载再安装新版。原生 Android 无法运行第三方 React 自定义页面，只能编辑主机公开的配置。", "On-demand official plugins offer updates. Uninstall other plugins before installing a newer version. Native Android cannot execute third-party React pages; only host-exposed settings are editable."), fontSize = 12.sp)
+                    Text(pt("按需安装的官方插件提供更新；其他插件请先卸载再安装新版。插件的 Web 页面可从「插件自定义界面」打开，无需逐插件适配 APK。", "On-demand official plugins offer updates. Uninstall other plugins before installing a newer version. Open installed Web pages through Plugin interfaces; no per-plugin APK adaptation is needed."), fontSize = 12.sp)
                 }
                 TextButton({ registryOpen = !registryOpen }) { Text(pt("安装源", "Registry")) }
                 if (registryOpen) {
@@ -790,7 +814,7 @@ private fun PluginConfiguration(initial: JsonElement, writable: Boolean, onBack:
                 }
             }
         }
-        if (fields.isEmpty()) PluginMessage(pt("该配置包含专用数据结构，请使用高级编辑；React 专属界面请在主机 Web 打开。", "This configuration uses specialized data structures. Use advanced editing, or host Web for custom React interfaces."))
+        if (fields.isEmpty()) PluginMessage(pt("该配置包含专用数据结构，请使用高级编辑，或返回插件页打开「插件自定义界面」。", "This configuration uses specialized data structures. Use advanced editing, or return to Plugins and open Plugin interfaces."))
         Row(Modifier.padding(18.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Button(::commit, enabled = writable && !busy && (drafts.isNotEmpty() || resets.isNotEmpty())) { Text(pt("保存", "Save")) }
             TextButton({
@@ -843,7 +867,7 @@ private fun PluginAdvancedConfiguration(initial: JsonElement, writable: Boolean,
         }
     }
     SettingsScaffold(snapshot["ns"].str().orEmpty(), onBack) {
-        PluginMessage(pt("基于主机 schema 的结构化编辑。每次只修改指定路径，并携带修订号；未知专属 React 界面请在主机 Web 打开。", "Structured editing from the host schema. Each write changes only the selected path with a revision fence. Use host Web for custom React interfaces."))
+        PluginMessage(pt("基于主机 schema 的结构化编辑。每次只修改指定路径，并携带修订号；插件专用页面可从「插件自定义界面」打开。", "Structured editing from the host schema. Each write changes only the selected path with a revision fence. Plugin-specific pages are available through Plugin interfaces."))
         if (!writable) PluginMessage(pt("配置当前只读或主机断线", "Settings are read-only or the host is disconnected"), true)
         if (busy) LinearProgressIndicator(Modifier.fillMaxWidth().padding(horizontal = 18.dp))
         message?.let { PluginMessage(it, failed) }

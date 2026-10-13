@@ -7,6 +7,8 @@ import dev.dsh.pocket.protocol.*
 import kotlinx.coroutines.*
 import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.flow.*
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonNull
@@ -105,6 +107,7 @@ object Pocket {
     val goalActivation = MutableStateFlow<String?>(null)
     val pluginCatalogRevision = MutableStateFlow(0L)
     val scheduleCatalogRevision = MutableStateFlow(0L)
+    val modelSettingsRevision = MutableStateFlow(0L)
     private var goalProjectionSeq = -1L
     private var goalActivationEpoch = 0L
     private var presetProjectionSeq = -1L
@@ -135,6 +138,8 @@ object Pocket {
     /** Bumps whenever [terminal] mutates so Compose can redraw. */
     val terminalRevision = MutableStateFlow(0L)
     val terminalMeta = MutableStateFlow<TerminalMeta?>(null)
+    private val _terminalPlatform = MutableStateFlow<String?>(null)
+    val terminalPlatform: StateFlow<String?> = _terminalPlatform.asStateFlow()
     /** attachmentId → decoded bytes cache for transcript image bubbles. */
     private val attachmentCache = ConcurrentHashMap<String, ByteArray>()
     /** Last archived session for snackbar 撤销. */
@@ -151,6 +156,10 @@ object Pocket {
     private var terminalSubId: String? = null
     private val terminalOpenEpoch = AtomicLong()
     private var terminalOpening = false
+    private var terminalHostId: String? = null
+    private var terminalReady: CompletableDeferred<Unit>? = null
+    private val terminalRosterRevisions = ConcurrentHashMap<Pair<String, String>, AtomicLong>()
+    private val terminalOwnerLocks = ConcurrentHashMap<Pair<String, String>, Mutex>()
     private val terminalStray = HashMap<String, MutableList<JsonObject>>()
     /** Last panel grid size from [TerminalView]; used when creating / attaching a PTY. */
     private var wantCols = 80
@@ -241,6 +250,7 @@ object Pocket {
         userQuestions.value = emptyList(); archivedIds.value = emptySet(); pinnedIds.value = emptySet()
         workspaces.value = emptyList(); presetRoster.value = emptyList(); ops.value = emptySet()
         closeTerminalFollow()
+        _terminalPlatform.value = null
         feedback.value = emptyMap(); attachmentCache.clear()
         invalidatePermissionCatalog()
         invalidateModelCatalog()
@@ -363,6 +373,7 @@ object Pocket {
         }
         pluginCatalogRevision.value++
         scheduleCatalogRevision.value++
+        modelSettingsRevision.value++
         if ("workspace.state" in ops.value) runCatching { refreshWorkspaceState(c) }
         chat.value?.let { st ->
             refollow(c, st.sessionId, reducer.cursor.takeIf { s -> s >= 0 })
@@ -489,7 +500,11 @@ object Pocket {
     private fun onPush(m: JsonObject) {
         when (m["ev"].str()) {
             "ops.changed" -> ops.value = m["ops"].arr().orEmpty().mapNotNull { it.str() }.toSet()
-            "plugins.changed" -> pluginCatalogRevision.value++
+            "plugins.changed" -> {
+                pluginCatalogRevision.value++
+                modelSettingsRevision.value++
+            }
+            "models.changed", "credentials.changed" -> modelSettingsRevision.value++
             "workspace.changed" -> {
                 val frame = m["frame"]
                 when (frame["type"].str()) {
@@ -513,7 +528,10 @@ object Pocket {
                 }
             }
             "schedule.changed" -> scheduleCatalogRevision.value++
-            "settings.changed" -> prefs.hostSettings.refresh()
+            "settings.changed" -> {
+                prefs.hostSettings.refresh()
+                modelSettingsRevision.value++
+            }
             "goal.activation" -> if (m["sessionId"].str() == chat.value?.sessionId) {
                 goalActivationEpoch++
                 goalActivation.value = m["goal"]["activation"].str()
@@ -568,8 +586,11 @@ object Pocket {
                 if (id == terminalSubId) {
                     if (m["ev"].str() == "terminal") applyTerminalFrame(m["frame"])
                     else {
-                        m["error"]["message"].str()?.let { errors.tryEmit(it) }
+                        val message = m["error"]["message"].str() ?: "终端连接已结束"
+                        terminalReady?.completeExceptionally(PocketError("terminal/unavailable", message))
+                        if (m["ev"].str() == "terminal.error") errors.tryEmit(message)
                         terminalSubId = null
+                        terminalMeta.value = null
                     }
                 } else if (terminalOpening) terminalStray.getOrPut(id) { mutableListOf() }.add(m)
             }
@@ -585,7 +606,16 @@ object Pocket {
                     terminalMeta.value = terminalMeta.value?.copy(
                         title = info["title"].str() ?: terminalMeta.value?.title,
                         state = info["state"].str() ?: terminalMeta.value?.state,
+                        cwd = info["cwd"].str() ?: terminalMeta.value?.cwd,
                     )
+                }
+                val meta = terminalMeta.value
+                val hostId = terminalHostId
+                if (meta != null && hostId != null && active.value == hostId) {
+                    val key = hostId to meta.sessionId
+                    terminalRosterRevisions.getOrPut(key) { AtomicLong() }.incrementAndGet()
+                    prefs.rememberTerminal(hostId, meta.sessionId, meta.id)
+                    terminalReady?.complete(Unit)
                 }
             }
             "output" -> {
@@ -596,6 +626,7 @@ object Pocket {
                 terminalMeta.value = terminalMeta.value?.copy(
                     title = info["title"].str() ?: terminalMeta.value?.title,
                     state = info["state"].str() ?: terminalMeta.value?.state,
+                    cwd = info["cwd"].str() ?: terminalMeta.value?.cwd,
                 )
             }
         }
@@ -1050,6 +1081,10 @@ object Pocket {
     suspend fun listWorkspaceDirectories(path: String? = null): JsonElement =
         requireClient().call("workspace.directoryList", jsonOf("path" to path))
 
+    suspend fun createWorkspaceDirectory(path: String, name: String): String =
+        requireClient().call("workspace.directoryCreate", jsonOf("path" to path, "name" to name)).str()
+            ?: throw PocketError("bad-reply", "missing directory path")
+
     suspend fun startWorkspaceSession(workspaceId: String): String {
         val c = requireClient()
         val id = c.createSession(workspaceId = workspaceId)
@@ -1091,11 +1126,22 @@ object Pocket {
     fun followJob(sessionId: String, jobId: String, from: Long? = null): Flow<JsonObject> =
         flow { emitAll(requireClient().followJob(sessionId, jobId, from)) }
 
-    suspend fun terminateTerminal(sessionId: String) {
+    suspend fun terminateTerminal(sessionId: String, terminalId: String? = null) = withContext(main.coroutineContext) {
+        val c = requireClient()
+        val hostId = active.value ?: throw PocketError("transport", "未连接")
         val meta = terminalMeta.value?.takeIf { it.sessionId == sessionId }
+        val id = terminalId ?: meta?.id
             ?: throw PocketError("terminal/not-attached", "没有已连接的终端")
-        requireClient().closeTerminal(sessionId, meta.id)
-        closeTerminalFollow().join()
+        val epoch = terminalOpenEpoch.get()
+        c.closeTerminal(sessionId, id)
+        if (client === c && active.value == hostId) {
+            val key = hostId to sessionId
+            terminalRosterRevisions.getOrPut(key) { AtomicLong() }.incrementAndGet()
+            prefs.forgetTerminal(hostId, sessionId, id)
+            if (terminalOpenEpoch.get() == epoch && terminalMeta.value?.let {
+                    it.sessionId == sessionId && it.id == id && it.attachmentId == meta?.attachmentId
+                } == true) closeTerminalFollow().join()
+        }
     }
 
     /** Live pocket client while connected; null when idle/disconnected. */
@@ -1285,65 +1331,134 @@ object Pocket {
         c.killJob(sessionId, jobId)
     }
 
-    /** Open (or reuse) a host PTY for [sessionId] and start following its screen. */
-    fun openTerminal(sessionId: String, forceNew: Boolean = false) = main.launch(start = CoroutineStart.UNDISPATCHED) {
-        val epoch = terminalOpenEpoch.incrementAndGet()
-        terminalOpening = true
-        terminalStray.clear()
-        terminalMeta.value = null
-        val c = client ?: run { terminalOpening = false; errors.tryEmit("未连接"); return@launch }
-        if (!hasOp("terminal.create") || !hasOp("terminal.follow")) {
-            terminalOpening = false
-            errors.tryEmit("桌面端未提供终端"); return@launch
-        }
-        val cols = wantCols
-        val rows = wantRows
-        runCatching {
-            val old = terminalSubId
-            terminalSubId = null
-            if (old != null) {
-                try { c.unfollow(old) }
-                catch (e: CancellationException) { throw e }
-                catch (_: Exception) { /* Already detached locally. */ }
+    /** Host-authoritative roster across this profile's current and previously attached owners. */
+    suspend fun terminalSessions(sessionId: String): TerminalSessionCatalog = withContext(main.coroutineContext) {
+        val c = requireClient()
+        val hostId = active.value ?: throw PocketError("transport", "未连接")
+        val owners = (listOf(sessionId) + prefs.terminalOwnerIds(hostId)).distinct()
+        val entries = owners.flatMap { owner ->
+            terminalOwnerLocks.getOrPut(hostId to owner) { Mutex() }.withLock {
+                listTerminalOwner(c, hostId, owner)
             }
-            terminal.resize(cols, rows)
-            terminal.clear()
-            terminalRevision.value = terminal.revision
-            val existing = if (forceNew) null else c.listTerminals(sessionId)["terminals"].arr().orEmpty()
-                .firstOrNull { it["state"].str() == "running" }
-            val info = existing ?: c.createTerminal(sessionId, cols = cols, rows = rows)["terminal"]
-            if (client !== c || terminalOpenEpoch.get() != epoch) return@launch
-            val id = info["id"].str() ?: error("no terminal id")
-            val follow = c.followTerminal(sessionId, id)
-            val attachmentId = follow["attachmentId"].str() ?: error("no attachmentId")
-            val newSubId = follow["subId"].str() ?: error("no terminal subscription")
-            if (client !== c || terminalOpenEpoch.get() != epoch) {
-                runCatching { c.unfollow(newSubId) }
-                return@launch
-            }
-            terminalSubId = newSubId
-            terminalMeta.value = TerminalMeta(sessionId, id, attachmentId, info["title"].str(), info["state"].str())
-            terminalOpening = false
-            val buffered = terminalStray.remove(newSubId)
-            terminalStray.clear()
-            buffered?.forEach(::onPush)
-            // Align PTY to the latest panel grid (view may have measured while we were attaching).
-            val cCols = wantCols
-            val cRows = wantRows
-            if (cCols != cols || cRows != rows || existing != null) {
-                terminal.resize(cCols, cRows)
-                terminalRevision.value = terminal.revision
-                runCatching { c.resizeTerminal(sessionId, id, attachmentId, cCols, cRows) }
-            }
-        }.onFailure {
-            if (it is CancellationException) throw it
-            errors.tryEmit(it.message ?: "打开终端失败")
         }
-        if (terminalOpenEpoch.get() == epoch) {
-            terminalOpening = false
-            terminalStray.clear()
-        }
+        TerminalSessionCatalog(entries, _terminalPlatform.value)
     }
+
+    private suspend fun listTerminalOwner(c: PocketClient, hostId: String, sessionId: String): List<TerminalSessionEntry> {
+        val key = hostId to sessionId
+        val revision = terminalRosterRevisions.getOrPut(key) { AtomicLong() }.get()
+        val result = c.listTerminals(sessionId)
+        if (client !== c || active.value != hostId)
+            throw CancellationException("Terminal connection superseded")
+        val rows = result["terminals"].arr() ?: throw PocketError("bad-reply", "未返回终端列表")
+        val entries = rows.map { TerminalSessionEntry.parse(sessionId, it) }
+        _terminalPlatform.value = result["platform"].str()
+        if (terminalRosterRevisions[key]?.get() == revision)
+            prefs.reconcileTerminals(hostId, sessionId, entries.map { it.id })
+        return entries
+    }
+
+    /** Attach an existing identity; only a fresh owner or explicit New allocates a shell. */
+    fun openTerminal(sessionId: String, forceNew: Boolean = false, terminalId: String? = null): Job =
+        main.launch(start = CoroutineStart.UNDISPATCHED) {
+            val epoch = terminalOpenEpoch.incrementAndGet()
+            val c = client
+            val hostId = active.value
+            val oldSubId = terminalSubId
+            terminalSubId = null
+            terminalReady?.cancel()
+            val ready = CompletableDeferred<Unit>()
+            terminalReady = ready
+            terminalOpening = true
+            terminalStray.clear()
+            terminalMeta.value = null
+            terminalHostId = hostId
+            terminal.clear()
+            terminal.resize(wantCols, wantRows)
+            terminalRevision.value = terminal.revision
+            var followed: String? = null
+            var attached = false
+            fun current() = client === c && active.value == hostId && terminalOpenEpoch.get() == epoch
+            try {
+                if (c == null || hostId == null) throw PocketError("transport", "未连接")
+                if (!hasOp("terminal.list") || !hasOp("terminal.follow"))
+                    throw PocketError("unsupported", "桌面端未提供终端")
+                if (oldSubId != null) {
+                    try { c.unfollow(oldSubId) }
+                    catch (e: CancellationException) { throw e }
+                    catch (_: Exception) { /* Already detached locally. */ }
+                }
+                if (!current()) return@launch
+                val key = hostId to sessionId
+                val info = terminalOwnerLocks.getOrPut(key) { Mutex() }.withLock {
+                    currentCoroutineContext().ensureActive()
+                    if (!current()) throw CancellationException("Terminal attachment superseded")
+                    val saved = prefs.selectedTerminalId(hostId, sessionId)
+                    val existing = if (forceNew) null else selectTerminal(
+                        listTerminalOwner(c, hostId, sessionId), saved, terminalId)
+                    if (!current()) throw CancellationException("Terminal attachment superseded")
+                    existing ?: run {
+                        if (!hasOp("terminal.create")) throw PocketError("unsupported", "桌面端未提供新建终端")
+                        // Keep a discovery hint for ambiguous transport outcomes. It is not a
+                        // selected/restored process; the next Host list decides whether it exists.
+                        val requestedId = UUID.randomUUID().toString()
+                        terminalRosterRevisions.getOrPut(key) { AtomicLong() }.incrementAndGet()
+                        prefs.discoverTerminal(hostId, sessionId, requestedId)
+                        withContext(NonCancellable) {
+                            val result = c.createTerminal(sessionId, cols = wantCols, rows = wantRows, id = requestedId)
+                            TerminalSessionEntry.parse(sessionId, result["terminal"]).also {
+                                terminalRosterRevisions.getOrPut(key) { AtomicLong() }.incrementAndGet()
+                                prefs.discoverTerminal(hostId, sessionId, it.id)
+                                if (current()) _terminalPlatform.value = result["platform"].str()
+                            }
+                        }
+                    }
+                }
+                // NonCancellable RPC blocks keep the same dispatcher, so leaving them does not
+                // necessarily check the cancelled caller before the next non-cancellable RPC.
+                currentCoroutineContext().ensureActive()
+                if (!current()) return@launch
+                // Finish obtaining the receipt even if this panel is disposed during the request,
+                // so its subscription can always be unfollowed on the captured client.
+                var attachmentId: String? = null
+                withContext(NonCancellable) {
+                    val follow = c.followTerminal(sessionId, info.id)
+                    followed = follow["subId"].str() ?: throw PocketError("bad-reply", "no terminal subscription")
+                    attachmentId = follow["attachmentId"].str() ?: throw PocketError("bad-reply", "no attachmentId")
+                }
+                currentCoroutineContext().ensureActive()
+                if (!current()) return@launch
+                terminalSubId = followed
+                terminalMeta.value = TerminalMeta(sessionId, info.id, attachmentId!!, info.title, info.state, info.cwd)
+                terminalOpening = false
+                val buffered = terminalStray.remove(followed)
+                terminalStray.clear()
+                buffered?.forEach(::onPush)
+                withTimeout(60_000) { ready.await() }
+                if (!current()) return@launch
+                attached = true
+                terminal.resize(wantCols, wantRows)
+                terminalRevision.value = terminal.revision
+                if (terminalMeta.value?.state == "running")
+                    c.resizeTerminal(sessionId, info.id, attachmentId!!, wantCols, wantRows)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                if (current()) errors.tryEmit(e.message ?: "打开终端失败")
+            } finally {
+                if (current()) {
+                    terminalOpening = false
+                    terminalStray.clear()
+                    if (!attached) {
+                        terminalSubId = null
+                        terminalMeta.value = null
+                        terminalHostId = null
+                    }
+                }
+                if (!attached && followed != null && c != null)
+                    withContext(NonCancellable) { runCatching { c.unfollow(followed!!) } }
+            }
+        }
 
     fun writeTerminal(data: String) = main.launch {
         val c = client ?: return@launch
@@ -1373,7 +1488,11 @@ object Pocket {
         val c = client
         val old = terminalSubId
         terminalSubId = null
+        terminalReady?.cancel()
+        terminalReady = null
+        terminalHostId = null
         terminalMeta.value = null
+        // Keep the last screen copyable while offline. The next open clears it before attaching.
         return main.launch {
             if (c != null && old != null) runCatching { c.unfollow(old) }
         }
@@ -1466,6 +1585,7 @@ object Pocket {
             approvals.value = emptyList(); userQuestions.value = emptyList()
             archivedIds.value = emptySet(); pinnedIds.value = emptySet()
             closeTerminalFollow()
+            _terminalPlatform.value = null
             invalidatePermissionCatalog()
             invalidateModelCatalog()
             permission.value = emptyMap()
@@ -1560,4 +1680,34 @@ object Pocket {
     }
 }
 
-data class TerminalMeta(val sessionId: String, val id: String, val attachmentId: String, val title: String? = null, val state: String? = null)
+data class TerminalMeta(val sessionId: String, val id: String, val attachmentId: String, val title: String? = null, val state: String? = null, val cwd: String? = null)
+
+data class TerminalSessionCatalog(val entries: List<TerminalSessionEntry>, val platform: String? = null)
+
+data class TerminalSessionEntry(
+    val sessionId: String,
+    val id: String,
+    val title: String? = null,
+    val state: String? = null,
+    val cwd: String? = null,
+) {
+    companion object {
+        internal fun parse(sessionId: String, value: JsonElement?): TerminalSessionEntry = TerminalSessionEntry(
+            sessionId, value["id"].str()?.takeIf { it.isNotBlank() }
+                ?: throw PocketError("bad-reply", "no terminal id"),
+            value["title"].str(), value["state"].str(), value["cwd"].str(),
+        )
+    }
+}
+
+/** Missing explicit/saved identities never silently become a different shell. */
+internal fun selectTerminal(
+    entries: List<TerminalSessionEntry>,
+    savedId: String?,
+    explicitId: String?,
+): TerminalSessionEntry? {
+    val preferred = explicitId ?: savedId
+    if (preferred != null) return entries.firstOrNull { it.id == preferred }
+        ?: throw PocketError("terminal/unavailable", "终端已退出或已由主机回收，请选择其他会话或新建")
+    return entries.firstOrNull { it.state == "running" } ?: entries.firstOrNull()
+}

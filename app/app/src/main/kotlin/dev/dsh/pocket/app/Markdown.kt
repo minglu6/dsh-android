@@ -305,15 +305,14 @@ private fun plainText(node: Node): String = buildString {
 // region Compose
 
 @Composable
-fun MarkdownView(text: String, streaming: Boolean = false, modifier: Modifier = Modifier, bodyColor: Color = T.Ink) {
+fun MarkdownView(text: String, streaming: Boolean = false, modifier: Modifier = Modifier, bodyColor: Color = T.Ink, bodyFontSize: TextUnit = Pocket.prefs.fontSize.sp) {
     val blocks = remember(text, streaming) { parseMarkdown(text, streaming) }
-    val bodySp = Pocket.prefs.fontSize.sp
     // One SelectionContainer for the whole message: paragraphs, lists, tables, fences.
     SelectableOutput(modifier.fillMaxWidth()) {
         Column(Modifier.fillMaxWidth()) {
             blocks.forEachIndexed { i, block ->
                 if (i > 0) Spacer(Modifier.height(blockGap(blocks[i - 1], block)))
-                MdBlockView(block, bodySp, bodyColor)
+                MdBlockView(block, bodyFontSize, bodyColor)
             }
         }
     }
@@ -399,7 +398,7 @@ private fun FencedCode(language: String?, literal: String, incomplete: Boolean) 
         ) {
             Text(
                 language?.takeIf { it.isNotBlank() } ?: "code",
-                style = T.Mono.copy(color = TokyoNight.Ansi[8], fontFamily = MesloNerdFamily, fontSize = 11.sp),
+                style = T.Mono.copy(color = TokyoNight.Ansi[8], fontSize = 11.sp),
                 modifier = Modifier.weight(1f),
             )
             NonSelectable {
@@ -425,7 +424,7 @@ private fun FencedCode(language: String?, literal: String, incomplete: Boolean) 
         Text(
             highlighted,
             style = TextStyle(
-                fontFamily = MesloNerdFamily,
+                fontFamily = LocalFonts.code,
                 fontSize = Pocket.prefs.codeFontSize.sp,
                 lineHeight = (Pocket.prefs.codeFontSize + 7).sp,
                 color = TokyoNight.Fg,
@@ -435,7 +434,7 @@ private fun FencedCode(language: String?, literal: String, incomplete: Boolean) 
         )
         if (incomplete) {
             Spacer(Modifier.height(4.dp))
-            Text("…", color = TokyoNight.Ansi[8], fontFamily = MesloNerdFamily, fontSize = 13.sp)
+            Text("…", color = TokyoNight.Ansi[8], fontFamily = LocalFonts.code, fontSize = Pocket.prefs.codeFontSize.sp)
         }
     }
 }
@@ -496,8 +495,8 @@ private fun TableRowView(cells: List<List<MdSpan>>, header: Boolean, bodyColor: 
                 InlineRichText(
                     cell,
                     TextStyle(
-                        fontSize = 14.sp,
-                        lineHeight = 22.sp,
+                        fontSize = Pocket.prefs.fontSize.sp,
+                        lineHeight = (Pocket.prefs.fontSize + 8).sp,
                         fontWeight = if (header) FontWeight.SemiBold else FontWeight.Normal,
                         color = bodyColor,
                     ),
@@ -521,6 +520,7 @@ private fun InlineRichText(spans: List<MdSpan>, style: TextStyle) {
             is MdSpan.Text -> Text(
                 s.text,
                 style = style.copy(
+                    fontFamily = LocalFonts.text,
                     fontWeight = if (s.bold) FontWeight.SemiBold else style.fontWeight,
                     fontStyle = if (s.italic) FontStyle.Italic else FontStyle.Normal,
                 ),
@@ -529,7 +529,7 @@ private fun InlineRichText(spans: List<MdSpan>, style: TextStyle) {
             is MdSpan.FileChip -> FileLinkChip(s.path, s.label)
             is MdSpan.Link -> Text(
                 s.text,
-                style = style.copy(color = T.Accent, fontWeight = FontWeight.Medium),
+                style = style.copy(fontFamily = LocalFonts.text, color = T.Accent, fontWeight = FontWeight.Medium),
                 modifier = Modifier.clickable {
                     runCatching { uri.openUri(s.dest) }.recoverCatching {
                         ctx.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(s.dest)))
@@ -545,8 +545,8 @@ private fun InlineCodeChip(text: String) {
     Text(
         text,
         style = TextStyle(
-            fontFamily = MesloNerdFamily,
-            fontSize = Pocket.prefs.codeFontSize.sp,
+            fontFamily = LocalFonts.code,
+            fontSize = (Pocket.prefs.codeFontSize + 1).sp,
             color = T.Ink,
         ),
         modifier = Modifier
@@ -569,7 +569,7 @@ fun FileLinkChip(path: String, label: String = path.substringAfterLast('/').subs
             .then(if (open != null) Modifier.clickable { open(path) } else Modifier)
             .padding(horizontal = 8.dp, vertical = 2.dp),
     ) {
-        Text("</>", color = T.Link, fontFamily = MesloNerdFamily, fontSize = 12.sp, fontWeight = FontWeight.Medium)
+        Text("</>", color = T.Link, fontFamily = LocalFonts.code, fontSize = 12.sp, fontWeight = FontWeight.Medium)
         Spacer(Modifier.width(5.dp))
         Text(label, color = T.Link, fontSize = 13.sp, fontWeight = FontWeight.Medium, maxLines = 1)
     }

@@ -37,10 +37,10 @@ class MarkdownInteractionTest {
     @Test fun directoryCodeIsInertInDarkTheme() = checkDirectoryCode(Appearance.Dark)
 
     private fun checkDirectoryCode(appearance: Appearance) {
+        installHostSettingsFixture()
         val previousAppearance = Pocket.prefs.appearance
         val opened = mutableListOf<String>()
         val directory = "/Users/felix/Documents"
-        installHostSettingsFixture()
         try {
             Pocket.prefs.appearance = appearance
             rule.setContent {

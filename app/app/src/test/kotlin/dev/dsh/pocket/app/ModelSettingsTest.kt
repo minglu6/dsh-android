@@ -59,6 +59,8 @@ class ModelSettingsTest {
         assertEquals(model["reasoning"], textOnly["reasoning"])
         assertEquals(listOf("text"), modelInputSelection(textOnly, true, listOf("text", "image")))
         assertEquals(listOf("image"), modelInputSelection(json("""{"id":"x"}"""), false, listOf("image")))
+        assertEquals(listOf("text", "image"), modelInputSelection(json("""{"id":"x","input":[]}"""), false, listOf("text", "image")))
+        assertEquals(listOf("text"), modelInputSelection(json("""{"id":"x","inputModalities":[]}"""), true, emptyList()))
     }
 
     @Test fun capacitiesUseDecimalSuffixesAndRejectInvalidValuesAndTrimmedDuplicates() {
@@ -72,14 +74,50 @@ class ModelSettingsTest {
         assertNotNull(validateProviderModels(json("""[{"id":"x","name":""}]""") as JsonArray))
     }
 
+    @Test fun capacitiesUseDesktopCompactSpelling() {
+        assertEquals("1M", modelCapacitySpelling(JsonPrimitive(1_000_000)))
+        assertEquals("256K", modelCapacitySpelling(JsonPrimitive(256_000)))
+        assertEquals("2.3M", modelCapacitySpelling(JsonPrimitive(2_300_000)))
+        assertEquals("777", modelCapacitySpelling(JsonPrimitive(777)))
+        assertEquals("", modelCapacitySpelling(null))
+    }
+
+    @Test fun catalogUsesCompactRowsAndOnlyShowsModelOptionsWhenExpanded() {
+        var models by mutableStateOf(json("""[{"id":"deepseek-flash","name":"DeepSeek-V4.1-Flash"},{"id":"deepseek-v4-pro","name":"DeepSeek-V4-Pro"}]""") as JsonArray)
+        mount { NativeModelList(models, true, false, true, emptyList(), null, { models = it }, null) }
+        rule.onNodeWithText("模型目录").assertExists()
+        rule.onNodeWithText("正在使用适配器默认模型").assertExists()
+        rule.onNodeWithText("模型 1").assertDoesNotExist()
+        rule.onNodeWithText("自定义模型").assertDoesNotExist()
+        rule.onNodeWithContentDescription("上下文窗口 1").assertDoesNotExist()
+        rule.onNodeWithContentDescription("模型选项 1").performClick()
+        rule.onNodeWithContentDescription("上下文窗口 1").assertExists()
+        rule.onNodeWithText("文本").assertExists()
+        rule.onNodeWithContentDescription("删除模型 1").performClick()
+        rule.runOnIdle { assertEquals(listOf("deepseek-v4-pro"), models.map { it["id"].str() }) }
+        rule.onNodeWithContentDescription("上下文窗口 1").assertDoesNotExist()
+    }
+
+    @Test fun customCreationUsesDesktopFieldOrderAndCreateAction() {
+        mount { ProviderSettingsEditor(null, namespace, protocols, emptyList(), true, onBusy = {}, onClose = {}) }
+        val fields = rule.onAllNodes(hasSetTextAction()).fetchSemanticsNodes()
+        assertEquals(listOf("Provider ID", "显示名称", "API 地址", "API 密钥"),
+            fields.map { it.config[androidx.compose.ui.semantics.SemanticsProperties.ContentDescription].single() })
+        rule.onNodeWithText("创建提供商").performScrollTo().assertIsNotEnabled()
+        rule.onNodeWithText("自定义设置").assertDoesNotExist()
+        rule.onNodeWithText("自定义模型").assertDoesNotExist()
+        rule.onNodeWithText("获取可用模型").assertExists()
+        rule.onNodeWithText("应用").assertDoesNotExist()
+    }
+
     @Test fun modelFormEditsNativeFieldsWithoutLosingUnknownMetadataAndResets() {
         val initial = json("""{"id":"vision","name":"Vision","inputModalities":["text","image"],"imagePixelBudget":100,"future":true}""")
         var models by mutableStateOf(JsonArray(listOf(initial)))
         var reset = false
         mount { NativeModelList(models, true, true, true, emptyList(), null, { models = it }, { reset = true }) }
-        rule.onNodeWithText("显示名称（可选）").performTextReplacement("Updated")
-        rule.onNodeWithText("容量与输入类型").performScrollTo().performClick()
-        rule.onNodeWithText("上下文窗口").performScrollTo().performTextInput("1M")
+        rule.onNodeWithContentDescription("显示名称 1").performTextReplacement("Updated")
+        rule.onNodeWithContentDescription("模型选项 1").performScrollTo().performClick()
+        rule.onNodeWithContentDescription("上下文窗口 1").performScrollTo().performTextInput("1M")
         rule.onNodeWithText("图片").performScrollTo().performClick()
         rule.runOnIdle {
             assertEquals("Updated", models[0]["name"].str())
@@ -112,14 +150,14 @@ class ModelSettingsTest {
         mount { ProviderSettingsEditor(snapshot, null, emptyList(), emptyList(), false, onBusy = {}, onClose = {}) }
         rule.onNodeWithText("API 密钥").assertDoesNotExist()
         rule.onNodeWithText("API 地址").assertDoesNotExist()
-        rule.onNodeWithText("模型 ID").assertIsNotEnabled()
-        rule.onNodeWithText("应用").performScrollTo().assertIsNotEnabled()
+        rule.onNodeWithContentDescription("模型 ID 1").assertIsNotEnabled()
+        rule.onNodeWithText("保存").performScrollTo().assertIsNotEnabled()
     }
 
     @Test fun addModesPreserveDraftAndProtocolUsesProductNames() {
         mount { AddModelProvider(listOf(json("""{"provider":"openai"}""")), namespace, protocols, emptyList(), true, {}, {}) }
         rule.onNodeWithText("自定义模型 API").performClick()
-        rule.onAllNodes(hasSetTextAction())[0].performTextInput("my-gateway")
+        rule.onNodeWithContentDescription("Provider ID").performTextInput("my-gateway")
         rule.onNodeWithText("OpenAI Chat Completions").assertExists()
         rule.onNodeWithText("第三方模型提供商").performScrollTo().performClick()
         rule.onNodeWithText("Provider ID").assertDoesNotExist()
@@ -194,13 +232,13 @@ class ModelSettingsTest {
         try {
             mount { ProviderSettingsEditor(snapshot, null, protocols, emptyList(), true, onBusy = {}, onClose = { closed = true }) }
             rule.onNode(hasSetTextAction()).performTextInput("test-key")
-            rule.onNodeWithText("应用").performClick()
+            rule.onNodeWithText("保存").performClick()
             rule.waitForIdle()
             assertFalse(closed)
-            rule.onNodeWithText("应用").performClick()
+            rule.onNodeWithText("保存").performClick()
             rule.waitForIdle()
             assertFalse(closed)
-            rule.onNodeWithText("应用").performClick()
+            rule.onNodeWithText("保存").performClick()
             rule.waitForIdle()
             assertTrue(closed)
             assertEquals(2, mutations)

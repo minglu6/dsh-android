@@ -20,12 +20,14 @@ test('sessions.search forwards query to sessionController.search', async () => {
   await assert.rejects(() => ops['sessions.search']({}), /query required/)
 })
 
-test('native and unknown picker capabilities do not advertise directory browsing', () => {
+test('native and unknown picker capabilities do not advertise directory browsing or creation', () => {
   let invoked = false
-  const controller = { list: () => { invoked = true; throw new Error('native picker has no browse capability') } }
+  const unavailable = () => { invoked = true; throw new Error('native picker has no browse capability') }
+  const controller = { list: unavailable, createDirectory: unavailable }
   for (const kind of ['native', 'external-picker']) {
     const ops = directoryOps(controller, { capability: () => ({ kind }) })
     assert.equal(Object.hasOwn(ops, 'workspace.directoryList'), false)
+    assert.equal(Object.hasOwn(ops, 'workspace.directoryCreate'), false)
     assert.deepEqual(Object.keys(ops), [])
   }
   assert.equal(invoked, false)
@@ -45,6 +47,76 @@ test('browse capability exposes the official controller and preserves its cancel
   }, { capability: () => ({ kind: 'browse' }) })
   assert.equal(await ops['workspace.directoryList']({}, signal), listing)
   await assert.rejects(ops['workspace.directoryList']({ path: '/denied' }, signal), (error) => error === refused)
+})
+
+test('browse without an official creation method retains listing but never advertises creation', () => {
+  for (const createDirectory of [undefined, null, true]) {
+    const ops = directoryOps({ list() {}, createDirectory }, { capability: () => ({ kind: 'browse' }) })
+    assert.deepEqual(Object.keys(ops), ['workspace.directoryList'])
+  }
+})
+
+test('directory creation preserves name bytes, controller state and duplicate refusal', async () => {
+  const entries = new Set()
+  const exists = Object.assign(new Error('directory already exists'), {
+    code: 'directory-picker/exists', details: { path: '/workspace/ 项目 ' },
+  })
+  const controller = {
+    entries,
+    async createDirectory(path, name) {
+      assert.equal(path, '/workspace')
+      const child = `${path}/${name}`
+      if (this.entries.has(child)) throw exists
+      this.entries.add(child)
+      return child
+    },
+    async list() { return { path: '/workspace', entries: [...this.entries] } },
+  }
+  const ops = directoryOps(controller, { capability: () => ({ kind: 'browse' }) })
+  const request = { path: '/workspace', name: ' 项目 ' }
+  assert.equal(await ops['workspace.directoryCreate'](request), '/workspace/ 项目 ')
+  assert.deepEqual((await ops['workspace.directoryList']({})).entries, ['/workspace/ 项目 '])
+  await assert.rejects(ops['workspace.directoryCreate'](request), (error) => error === exists)
+  assert.equal(entries.size, 1)
+})
+
+test('directory creation rejects empty or non-string inputs before invoking the Host', async () => {
+  let writes = 0
+  const ops = directoryOps({
+    createDirectory() { writes++; throw new Error('invalid request reached Host') },
+  }, { capability: () => ({ kind: 'browse' }) })
+  for (const value of [undefined, null, '', ' \t\n', 1, {}, []]) {
+    for (const field of ['path', 'name']) {
+      await assert.rejects(
+        ops['workspace.directoryCreate']({ path: '/workspace', name: 'project', [field]: value }),
+        (error) => error.code === 'bad-request' && error.message === `${field} required`,
+      )
+    }
+  }
+  for (const request of [undefined, null]) {
+    await assert.rejects(ops['workspace.directoryCreate'](request), { code: 'bad-request' })
+  }
+  assert.equal(writes, 0)
+})
+
+test('directory creation leaves Host validation and business errors intact', async () => {
+  for (const code of ['gateway/bad-request', 'directory-picker/unreadable',
+    'directory-picker/create-failed', 'directory-picker/unavailable']) {
+    const refusal = Object.assign(new Error('official directory refusal'), {
+      code, details: { path: '/workspace', issues: [{ message: 'invalid segment' }] },
+    })
+    const ops = directoryOps({
+      createDirectory(path, name) {
+        assert.equal(path, '/workspace')
+        assert.equal(name, '../child')
+        throw refusal
+      },
+    }, { capability: () => ({ kind: 'browse' }) })
+    await assert.rejects(
+      ops['workspace.directoryCreate']({ path: '/workspace', name: '../child' }),
+      (error) => error === refusal,
+    )
+  }
 })
 
 test('workspace baseline retains entity identity/order and closes the source after reading', async () => {

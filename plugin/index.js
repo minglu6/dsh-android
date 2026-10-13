@@ -216,6 +216,9 @@ export function apply(ctx, config = {}) {
   ctx.on('goal/activation-changed', (payload) => server.broadcastEvent('goal.activation', payload))
   ctx.on('schedule/changed', () => server.broadcastEvent('schedule.changed'))
   ctx.on('settings/document-updated', (ns, revision) => server.broadcastEvent('settings.changed', { ns, revision }))
+  ctx.on('credentials/reference-updated', () => server.broadcastEvent('credentials.changed'))
+  ctx.on('credentials/record-updated', () => server.broadcastEvent('credentials.changed'))
+  ctx.on('llm/adapters-updated', () => server.broadcastEvent('models.changed'))
   ctx.on('plugin-manager/changed', () => server.broadcastEvent('plugins.changed'))
   ctx.on('agent-preset/selected', (sessionId) => server.broadcastEvent('presets.changed', { sessionId }))
   ctx.inject(['messageFeedback'], (c) => {
@@ -257,12 +260,10 @@ export function apply(ctx, config = {}) {
     })
   })
   ctx.inject(['pluginManager'], (c) => {
-    c.effect(() => {
-      const removePlugins = server.registerOps(pluginsOps(c.pluginManager))
-      const inventory = c.get?.('pluginInventory') ?? null
-      const removeInventory = server.registerOps(pluginInventoryOps(inventory, c.pluginManager))
-      return () => { removePlugins(); removeInventory() }
-    })
+    c.effect(() => server.registerOps(pluginsOps(c.pluginManager)))
+  })
+  ctx.inject(['pluginInventory'], (c) => {
+    c.effect(() => server.registerOps(pluginInventoryOps(c.pluginInventory)))
   })
   ctx.inject(['settingsController'], (c) => {
     c.effect(() => server.registerOps(pluginSettingsOps(c.settingsController)))
@@ -274,6 +275,12 @@ export function apply(ctx, config = {}) {
     c.effect(() => server.registerOps(credentialsOps({ credentials: c.credentials })))
   })
   ctx.inject(['webServer'], (webCtx) => registerPairRoute(webCtx, manage))
+  ctx.inject(['webServer', 'connection'], (webCtx) => {
+    webCtx.effect(() => server.installHostUi({
+      webServer: webCtx.webServer,
+      connection: webCtx.connection,
+    }))
+  })
 
   ctx.effect(() => {
     const start = async () => {

@@ -185,6 +185,15 @@ class ChatProcessTest {
         assertEquals(rows.map { it.key }.size, rows.map { it.key }.toSet().size)
     }
 
+    @Test fun inspectorTargetsRealMembersRatherThanEmptyTurnControl() {
+        val rows = foldChatItems(listOf(thought(), tool(), answer()), presentationPolicyFor(), false, listOf(completed()))
+        val group = rows.groups().single()
+        assertEquals(rows.indexOf(group), inspectorRowIndex(rows, "r"))
+        assertEquals(rows.indexOf(group), inspectorRowIndex(rows, "t"))
+        assertEquals("r", inspectorPickKey(group))
+        assertEquals(-1, inspectorRowIndex(rows, "absent"))
+    }
+
     @Test fun liveActivityUsesLatestRunningToolThenCurrentReasoningAndNeverCompletedTitle() {
         val first = tool("first", status = ToolStatus.Running).copy(startedAt = 9000,
             name = "bash", arguments = """{"command":"  echo   hello\nworld "}""")

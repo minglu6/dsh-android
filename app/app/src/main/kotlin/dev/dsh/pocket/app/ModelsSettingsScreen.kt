@@ -1,6 +1,8 @@
 package dev.dsh.pocket.app
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
@@ -8,6 +10,11 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.graphics.PathEffect
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
@@ -24,6 +31,7 @@ import kotlinx.serialization.json.*
 fun ModelsSettingsScreen(onBack: () -> Unit) {
     val ops by Pocket.ops.collectAsState()
     val host by Pocket.active.collectAsState()
+    val settingsRevision by Pocket.modelSettingsRevision.collectAsState()
     val scope = rememberCoroutineScope()
     var rows by remember(host) { mutableStateOf<List<JsonElement>>(emptyList()) }
     var namespaces by remember(host) { mutableStateOf<List<JsonElement>>(emptyList()) }
@@ -36,6 +44,11 @@ fun ModelsSettingsScreen(onBack: () -> Unit) {
     var adding by remember(host) { mutableStateOf(false) }
     var busy by remember(host) { mutableStateOf(false) }
     var setupConsidered by remember(host) { mutableStateOf(false) }
+    var hostUi by remember(host) { mutableStateOf(false) }
+    if (hostUi) {
+        HostUiScreen(st("模型插件界面", "Model plugin interfaces"), section = "models") { hostUi = false }
+        return
+    }
     suspend fun load() {
         val result = checkNotNull(Pocket.clientOrNull()) { L.unavailable() }.modelsProviders()
         rows = result["rows"].arr().orEmpty()
@@ -51,11 +64,12 @@ fun ModelsSettingsScreen(onBack: () -> Unit) {
             finally { loading = false }
         }
     }
-    LaunchedEffect(host, ops) {
+    LaunchedEffect(host, ops, settingsRevision) {
         loading = true
         try {
             check("models.providers" in ops) { L.unavailable() }
             load()
+            error = null
             if (!setupConsidered) {
                 setupConsidered = true
                 val anyUsable = rows.any {
@@ -81,11 +95,12 @@ fun ModelsSettingsScreen(onBack: () -> Unit) {
             try {
                 load()
                 editor = checkNotNull(Pocket.clientOrNull()) { L.unavailable() }.modelsProviderGet(row["provider"].str().orEmpty())
-                adding = false; message = null; error = null
+                message = null; error = null
             } catch (t: Throwable) { error = settingsFailure(t) }
             finally { loading = false }
         }
     }
+    val addOptions = providerAddOptions(rows, namespaces)
     SettingsScaffold(L.modelsTitle(), { if (!busy) onBack() }) {
         SettingsMessage(L.modelsIntro())
         if (!writable && !loading) SettingsMessage(st("主机配置为只读", "Host settings are read-only"))
@@ -95,87 +110,146 @@ fun ModelsSettingsScreen(onBack: () -> Unit) {
         if (error != null) TextButton(::reload, enabled = !busy && !loading) { Text(L.retry()) }
         rows.filter { it["configured"].bool() == true }.forEach { row ->
             val route = row["provider"].str().orEmpty()
-            SettingsCard {
-                val expanded = editor["provider"]["provider"].str() == route
-                Row(Modifier.fillMaxWidth().heightIn(min = 56.dp).padding(horizontal = 16.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+            val expanded = editor["provider"]["provider"].str() == route
+            ModelProviderCard(expanded) {
+                Row(Modifier.fillMaxWidth().heightIn(min = 28.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     Column(Modifier.weight(1f)) {
-                        Text(row["displayName"].str() ?: route, color = T.Ink, fontSize = 16.sp)
+                        if (expanded) {
+                            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                Text(row["displayName"].str() ?: route, color = T.Ink, fontSize = 14.sp)
+                                Text(route, color = T.Text3, fontSize = 12.sp, modifier = Modifier.weight(1f))
+                            }
+                        } else {
+                            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                Text(row["displayName"].str() ?: route, color = T.Ink, fontSize = 14.sp)
+                                if (row["declared"].bool() == true) Text(st("自定义", "Custom"), color = T.Text2, fontSize = 11.sp,
+                                    modifier = Modifier.border(0.5.dp, ThemeState.colors.BorderL3, T.R4).padding(horizontal = 6.dp, vertical = 1.dp))
+                                if (route != "deepseek-account") {
+                                    val credential = if (row["apiKeyEnv"].str() != null) row["credential"] else row["derivedCredential"]
+                                    val configured = credential["configured"].bool()
+                                    if (configured == true || (row["apiKeyEnv"].str() != null && configured == false)) {
+                                        val status = if (configured == true) L.credentialConfigured() else L.credentialMissing()
+                                        Box(Modifier.size(8.dp).background(if (configured == true) T.Ok else T.Err, CircleShape).semantics { contentDescription = status })
+                                    }
+                                }
+                            }
+                        }
                         row["error"].str()?.let { Text(it, color = T.Err, fontSize = 12.sp) }
                     }
-                    if (row["declared"].bool() == true) {
-                        Text(st("自定义", "Custom"), color = T.Text3, fontSize = 11.sp, modifier = Modifier.padding(horizontal = 8.dp))
-                    }
-                    if (route != "deepseek-account") {
-                        val credential = if (row["apiKeyEnv"].str() != null) row["credential"] else row["derivedCredential"]
-                        val configured = credential["configured"].bool()
-                        if (configured == true || (row["apiKeyEnv"].str() != null && configured == false)) {
-                            val status = if (configured == true) L.credentialConfigured() else L.credentialMissing()
-                            Box(Modifier.size(7.dp).background(if (configured == true) T.Ok else T.Err, CircleShape).semantics { contentDescription = status })
-                            Spacer(Modifier.width(8.dp))
-                        }
-                    }
-                    TextButton({
-                        if (expanded) editor = null else open(row)
-                    }, enabled = !busy && !loading, colors = ButtonDefaults.textButtonColors(contentColor = T.Ink)) { Text(st("编辑", "Edit")) }
+                    if (!expanded) ModelFormButton(st("编辑", "Edit"), { open(row) }, enabled = !busy && !loading, compact = true)
                 }
                 if (editor["provider"]["provider"].str() == route) key(route) {
-                    ProviderSettingsEditor(editor, null, protocols, emptyList(), writable, onBusy = { busy = it }, onClose = { changed ->
+                    ProviderSettingsEditor(editor, null, protocols, emptyList(), writable, interactionEnabled = !busy, onBusy = { busy = it }, onClose = { changed ->
                         editor = null
                         if (changed) { message = st("已保存；以提供商状态确认是否生效", "Saved; check provider status for activation"); reload() }
                     })
                 }
             }
         }
-        val customNamespace = namespaces.find { it["ns"].str() == "llm-pi-ai" }
-        val dormant = rows.filter { it["configured"].bool() == false && it["settingsNs"].str() == "llm-pi-ai" }
-        if (customNamespace != null) {
-            if (!adding) TextButton({ adding = true; editor = null; message = null }, enabled = !busy && !loading && (dormant.isNotEmpty() || protocols.isNotEmpty()), modifier = Modifier.padding(horizontal = 18.dp)) {
-                Text(st("添加模型提供商", "Add model provider"))
-            } else SettingsCard {
-                AddModelProvider(dormant, customNamespace, protocols, rows.mapNotNull { it["provider"].str() }, writable,
-                    onBusy = { busy = it }, onClose = { changed -> adding = false; if (changed) { message = st("已保存；以提供商状态确认是否生效", "Saved; check provider status for activation"); reload() } })
+        if (!adding) {
+            val borderColor = ThemeState.colors.BorderL3
+            Row(
+                Modifier.padding(horizontal = 18.dp, vertical = 6.dp).fillMaxWidth()
+                    .drawBehind {
+                        drawRoundRect(borderColor, cornerRadius = CornerRadius(12.dp.toPx()),
+                            style = Stroke(width = 1.dp.toPx(), pathEffect = PathEffect.dashPathEffect(floatArrayOf(3.dp.toPx(), 3.dp.toPx()))))
+                    }
+                    .clickable(enabled = !busy && !loading && writable && "models.settingsMutate" in ops && addOptions.enabled(protocols)) {
+                        adding = true; message = null
+                    }
+                    .heightIn(min = 44.dp).padding(8.dp),
+                horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Icon(D.plus, null, Modifier.size(16.dp), tint = T.Ink)
+                Spacer(Modifier.width(6.dp))
+                Text(st("添加模型提供商", "Add model provider"), color = T.Ink, fontSize = 14.sp)
             }
+            if (!loading && !addOptions.offered) SettingsMessage(st("主机未提供可新增的模型提供商配置。", "The Host has not exposed an add-provider configuration."))
+            else if (!loading && !addOptions.enabled(protocols)) SettingsMessage(st("当前没有可添加的目录提供商或自定义 API 协议。", "No catalog providers or custom API protocols are available to add."))
+        } else ModelProviderCard(true) {
+            AddModelProvider(addOptions.catalog, addOptions.customNamespace, protocols,
+                providerTakenRoutes(rows, addOptions.customNamespace).toList(), writable, interactionEnabled = !busy,
+                onBusy = { busy = it }, onClose = { changed ->
+                    adding = false
+                    if (changed) { message = st("已保存；以提供商状态确认是否生效", "Saved; check provider status for activation"); reload() }
+                })
+        }
+        if ("ui.open" in ops) SettingsCard {
+            SettingsNavRow(st("插件自定义界面", "Plugin interfaces"), D.pluginPinwheel,
+                value = st("与桌面共用", "Shared with desktop"), divider = false,
+                onClick = { if (!busy) hostUi = true })
         }
         Spacer(Modifier.height(20.dp))
     }
 }
 
 @Composable
-internal fun AddModelProvider(rows: List<JsonElement>, namespace: JsonElement, protocols: List<String>, taken: List<String>, writable: Boolean, onBusy: (Boolean) -> Unit, onClose: (Boolean) -> Unit) {
+private fun ModelProviderCard(editing: Boolean, content: @Composable ColumnScope.() -> Unit) {
+    Column(
+        Modifier.padding(horizontal = 18.dp, vertical = 6.dp).fillMaxWidth()
+            .background(if (editing) T.Fill2 else T.SettingsCard, T.R12)
+            .then(if (editing) Modifier else Modifier.border(0.5.dp, T.SettingsCardStroke, T.R12))
+            .padding(horizontal = 16.dp, vertical = 14.dp),
+        content = content,
+    )
+}
+
+@Composable
+internal fun AddModelProvider(rows: List<JsonElement>, namespace: JsonElement?, protocols: List<String>, taken: List<String>, writable: Boolean, onBusy: (Boolean) -> Unit, onClose: (Boolean) -> Unit, interactionEnabled: Boolean = true) {
     val scope = rememberCoroutineScope()
     var custom by remember { mutableStateOf(rows.isEmpty()) }
     var target by remember { mutableStateOf<JsonElement?>(null) }
     var busy by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
     fun setBusy(value: Boolean) { busy = value; onBusy(value) }
-    Row(Modifier.padding(12.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        FilterChip(!custom, { custom = false }, label = { Text(st("第三方模型提供商", "Third-party provider")) }, enabled = !busy && rows.isNotEmpty())
-        FilterChip(custom, { custom = true }, label = { Text(st("自定义模型 API", "Custom model API")) }, enabled = !busy && protocols.isNotEmpty())
+    fun select(route: String) {
+        setBusy(true)
+        scope.launch {
+            try { target = checkNotNull(Pocket.clientOrNull()) { L.unavailable() }.modelsProviderGet(route); error = null }
+            catch (t: Throwable) { error = settingsFailure(t) }
+            finally { setBusy(false) }
+        }
     }
-    SettingsMessage(if (custom) st("连接中转站、自部署服务或兼容 OpenAI / Anthropic 的 API。", "Connect a gateway, self-hosted service, or OpenAI / Anthropic-compatible API.") else st("从已安装的提供商目录中选择。", "Choose from the installed provider catalog."))
-    SettingsMessage(error, true)
-    if (!custom) LabeledField(st("模型提供商", "Model provider")) {
-        ModelSettingsSelect(target["provider"]["provider"].str().orEmpty(), rows.mapNotNull { it["provider"].str() }, !busy) { route ->
-            setBusy(true)
-            scope.launch {
-                try { target = checkNotNull(Pocket.clientOrNull()) { L.unavailable() }.modelsProviderGet(route); error = null }
-                catch (t: Throwable) { error = settingsFailure(t) }
-                finally { setBusy(false) }
+    LaunchedEffect(Unit) {
+        rows.firstOrNull()?.get("provider").str()?.let(::select)
+    }
+    if (rows.isNotEmpty() && namespace != null) {
+        Row(Modifier.background(T.Fill, T.R12).padding(3.dp)) {
+            listOf(false to st("第三方模型提供商", "Third-party provider"), true to st("自定义模型 API", "Custom model API")).forEach { (mode, title) ->
+                Box(
+                    Modifier.weight(1f)
+                        .background(if (custom == mode) T.Input else androidx.compose.ui.graphics.Color.Transparent, T.R8)
+                        .then(if (custom == mode) Modifier.border(0.5.dp, ThemeState.colors.BorderL3, T.R8) else Modifier)
+                        .selectable(selected = custom == mode, enabled = interactionEnabled && !busy && (!mode || protocols.isNotEmpty()), role = Role.Tab) { custom = mode }
+                        .heightIn(min = 32.dp).padding(horizontal = 8.dp, vertical = 6.dp),
+                    contentAlignment = Alignment.Center,
+                ) { Text(title, fontSize = 13.sp, color = if (custom == mode) T.Ink else T.Text2) }
             }
         }
     }
+    Text(
+        if (custom) st("连接中转站、自部署服务或其他兼容 OpenAI / Anthropic 协议的接口，需填写 API 地址、协议和模型。", "Connect a gateway, self-hosted service, or another OpenAI / Anthropic-compatible endpoint; provide its URL, protocol, and models.")
+        else st("从内置目录中选择模型提供商，填入其 API 密钥即可使用。", "Choose a model provider from the installed catalog and enter its API key."),
+        color = T.Text3, fontSize = 12.sp, modifier = Modifier.padding(vertical = 10.dp),
+    )
+    SettingsMessage(error, true)
+    if (!custom) ModelFormField(st("模型提供商", "Model provider")) {
+        ModelSettingsSelect(target["provider"]["provider"].str().orEmpty(), rows.mapNotNull { it["provider"].str() }, interactionEnabled && !busy,
+            label = { route -> providerOptionLabel(rows.firstOrNull { it["provider"].str() == route }, route) },
+            onChange = ::select)
+    }
     // Both panels stay composed so switching modes retains their write-only drafts.
-    ProviderSettingsEditor(null, namespace, protocols, taken, writable, visible = custom, onBusy = ::setBusy, onClose = onClose)
+    if (namespace != null) ProviderSettingsEditor(null, namespace, protocols, taken, writable, visible = custom, interactionEnabled = interactionEnabled, onBusy = ::setBusy, onClose = onClose)
     target?.let { snapshot -> key(snapshot["provider"]["provider"].str()) {
-        ProviderSettingsEditor(snapshot, null, protocols, taken, writable, visible = !custom, onBusy = ::setBusy, onClose = onClose)
+        ProviderSettingsEditor(snapshot, null, protocols, taken, writable, visible = !custom, interactionEnabled = interactionEnabled, onBusy = ::setBusy, onClose = onClose)
     } }
-    if (!custom && target == null) TextButton({ onClose(false) }, enabled = !busy) { Text(st("取消", "Cancel")) }
+    if (!custom && target == null) ModelFormButton(st("取消", "Cancel"), { onClose(false) }, enabled = interactionEnabled && !busy)
 }
 
 @Composable
 internal fun ProviderSettingsEditor(
     initial: JsonElement?, customNamespace: JsonElement?, protocols: List<String>, taken: List<String>, writable: Boolean,
-    visible: Boolean = true, onBusy: (Boolean) -> Unit, onClose: (Boolean) -> Unit,
+    visible: Boolean = true, onBusy: (Boolean) -> Unit, onClose: (Boolean) -> Unit, interactionEnabled: Boolean = true,
 ) {
     val ops by Pocket.ops.collectAsState()
     val scope = rememberCoroutineScope()
@@ -213,11 +287,14 @@ internal fun ProviderSettingsEditor(
     var credential by remember { mutableStateOf(row["credential"] ?: row["derivedCredential"]) }
     val ref = effective["apiKeyEnv"].str() ?: row["apiKeyEnv"].str() ?: providerKeyRef(route)
     val knownLayout = deepseek || ns == "llm-pi-ai"
-    val editable = writable && knownLayout && namespace != null && "models.settingsMutate" in ops && !busy && !removalWritten
+    val editable = writable && interactionEnabled && knownLayout && namespace != null && "models.settingsMutate" in ops && !busy && !removalWritten
     val profileEditable = editable && !(initial == null && committed)
     val keyWritable = writable && credential["writable"].bool() != false && "credentials.set" in ops && !removalWritten
     val keyFailure = providerKeyFailure(keyDraft)
     val modelFailure = if (overridden || initial == null) validateProviderModels(models) else null
+    val routeFailure = if (initial == null && !committed) providerRouteFailure(route, takenRoutes) else null
+    val endpointFailure = if (baseURL.isNotBlank() && !account && !providerEndpointValid(baseURL)) st("请输入有效的 HTTP(S) 地址", "Enter a valid HTTP(S) endpoint") else null
+    val creationReady = initial != null || committed || (routeFailure == null && baseURL.isNotBlank() && api in protocols && models.isNotEmpty())
     fun mutate(action: suspend () -> Unit) {
         if (busy) return
         busy = true; onBusy(true); error = null
@@ -233,13 +310,10 @@ internal fun ProviderSettingsEditor(
         val key = keyDraft.trim()
         val creating = initial == null && !committed
         if (creating) {
-            check(Regex("^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$").matches(route) && route !in takenRoutes) { st("Provider ID 需唯一，以字母开头，仅含小写字母、数字与连字符", "Use a unique lowercase Provider ID beginning with a letter") }
+            routeFailure?.let { error(it) }
             check(baseURL.isNotBlank() && api in protocols && models.isNotEmpty()) { st("请填写端点、协议和至少一个模型", "Provide an endpoint, protocol, and at least one model") }
         }
-        if (baseURL.isNotBlank() && !account) {
-            val uri = runCatching { java.net.URI(baseURL.trim()) }.getOrNull()
-            check(uri?.scheme in listOf("http", "https") && !uri?.host.isNullOrBlank()) { st("请输入有效的 HTTP(S) 地址", "Enter a valid HTTP(S) endpoint") }
-        }
+        endpointFailure?.let { error(it) }
         if (!(initial == null && committed)) {
             val fields = buildJsonObject {
                 if (!account) put("baseURL", baseURL.trim().takeIf { it.isNotEmpty() }?.let(::JsonPrimitive) ?: JsonNull)
@@ -271,6 +345,11 @@ internal fun ProviderSettingsEditor(
             requireSettingsSuccess(client.credentialsSet(ref, key))
         }
         val confirmed = client.modelsProviderGet(route)
+        if (initial == null || row["configured"].bool() == false) {
+            check(confirmed["provider"]["provider"].str() == route && confirmed["provider"]["configured"].bool() == true) {
+                st("配置已写入，但尚未回读确认提供商；草稿已保留", "Configuration written, but provider is not confirmed; draft retained")
+            }
+        }
         if (!account && key.isNotEmpty()) {
             val keyState = confirmed["provider"]["credential"] ?: confirmed["provider"]["derivedCredential"]
             check(keyState["configured"].bool() == true) { st("写入已返回，但尚未回读确认密钥；草稿已保留", "Write returned, but key is not confirmed; draft retained") }
@@ -291,6 +370,7 @@ internal fun ProviderSettingsEditor(
     if (!visible) return
     SettingsMessage(row["error"].str(), true)
     SettingsMessage(error, true)
+    if (committed && error != null) SettingsMessage(st("提供商配置已写入；密钥或回读确认失败。草稿已保留，可继续重试。", "Provider configuration was written; key storage or confirmation failed. The draft is retained for retry."))
     if (error != null && !removalWritten) TextButton({
         mutate {
             val client = checkNotNull(Pocket.clientOrNull()) { L.unavailable() }
@@ -309,32 +389,59 @@ internal fun ProviderSettingsEditor(
                 namespace = view
                 revision = (view["revision"] as? JsonPrimitive)?.longOrNull
                 baseline = settingsPathValue(view["user"], path)
+                credential = refreshed["provider"]["credential"] ?: refreshed["provider"]["derivedCredential"]
             }
         }
     }, enabled = !busy, modifier = Modifier.padding(horizontal = 8.dp)) { Text(st("回读最新配置并保留草稿", "Refresh configuration and keep draft")) }
     if (!knownLayout) SettingsMessage(st("此提供商由主机配置管理。", "This provider is managed in Host configuration."))
     if (initial == null) {
-        LabeledField("Provider ID") { SettingsTextField(route, { route = it }, "acme-gateway", enabled = profileEditable) }
-        LabeledField(st("显示名称", "Display name")) { SettingsTextField(displayName, { displayName = it }, route, enabled = profileEditable) }
+        ModelFormField("Provider ID") {
+            ModelFormInput(route, { route = it }, "Provider ID", "acme-gateway", enabled = profileEditable)
+            Text(st("以小写字母开头，仅含小写字母、数字和连字符。", "Start with a lowercase letter; use lowercase letters, numbers, and hyphens."), color = T.Text3, fontSize = 12.sp)
+            if (route.isNotEmpty() && routeFailure != null) Text(routeFailure, color = T.Err, fontSize = 12.sp)
+        }
+        ModelFormField(st("显示名称", "Display name")) {
+            ModelFormInput(displayName, { displayName = it }, st("显示名称", "Display name"), route, enabled = profileEditable)
+        }
+        ModelFormField(st("API 地址", "Base URL")) {
+            ModelFormInput(baseURL, { baseURL = it }, st("API 地址", "Base URL"),
+                if (api == "anthropic-messages") "https://gateway.example" else "https://gateway.example/v1", enabled = profileEditable)
+            if (endpointFailure != null) Text(endpointFailure, color = T.Err, fontSize = 12.sp)
+        }
+        ModelFormField(st("API 协议", "API protocol")) { ModelSettingsSelect(api, protocols, profileEditable, ::protocolLabel) { api = it } }
     }
-    if (!account && knownLayout) LabeledField(st("API 密钥", "API key")) {
-        SettingsTextField(keyDraft, { keyDraft = it }, if (credential["configured"].bool() == true) st("已配置；留空保留现有密钥", "Configured; leave blank to keep") else st("输入 API 密钥（可选）", "Enter API key (optional)"), secret = true, enabled = keyWritable && !busy)
+    if (!account && knownLayout) ModelFormField(st("API 密钥", "API key")) {
+        ModelFormInput(keyDraft, { keyDraft = it }, st("API 密钥", "API key"),
+            if (credential["configured"].bool() == true) st("已配置；留空保留现有密钥", "Configured; leave blank to keep") else st("输入 API 密钥", "Enter API key"),
+            secret = true, enabled = keyWritable && interactionEnabled && !busy)
         if (!keyWritable) Text(st("密钥由只读来源管理", "API key is managed by a read-only source"), color = T.Text3, fontSize = 12.sp)
         if (keyFailure != null) Text(st("请输入密钥本身，不要包含引号、环境变量赋值或非 ASCII 字符。", "Enter the key alone, without quotes, environment assignments, or non-ASCII characters."), color = T.Err, fontSize = 12.sp)
     }
-    if (initial != null && !account && knownLayout) TextButton({ expanded = !expanded }, modifier = Modifier.padding(horizontal = 8.dp)) {
-        Text(st("自定义设置", "Custom settings")); Icon(if (expanded) D.chevronDown else D.chevronRight, null)
+    if (initial != null && !account && knownLayout) {
+        HorizontalDivider(color = T.Border, thickness = 0.5.dp, modifier = Modifier.padding(top = 8.dp))
+        Row(Modifier.clickable { expanded = !expanded }.heightIn(min = 36.dp), verticalAlignment = Alignment.CenterVertically) {
+            Icon(if (expanded) D.chevronDown else D.chevronRight, null, Modifier.size(12.dp), tint = T.Text2)
+            Spacer(Modifier.width(6.dp))
+            Text(st("自定义设置", "Custom settings"), color = T.Text2, fontSize = 12.sp)
+        }
     }
     if (expanded && knownLayout) {
-        if (custom && initial != null) LabeledField(st("显示名称", "Display name")) { SettingsTextField(displayName, { displayName = it }, route, enabled = profileEditable) }
-        if (!account) LabeledField(st("API 地址", "Base URL")) {
-            SettingsTextField(baseURL, { baseURL = it }, if (deepseek) "https://api.deepseek.com/anthropic" else effective["baseURL"].str() ?: if (api == "anthropic-messages") "https://gateway.example" else "https://gateway.example/v1", enabled = profileEditable)
+        if (initial != null) {
+            if (custom) ModelFormField(st("显示名称", "Display name")) {
+                ModelFormInput(displayName, { displayName = it }, st("显示名称", "Display name"), route, enabled = profileEditable)
+            }
+            if (!account) ModelFormField(st("API 地址", "Base URL")) {
+                ModelFormInput(baseURL, { baseURL = it }, st("API 地址", "Base URL"),
+                    if (deepseek) "https://api.deepseek.com/anthropic" else effective["baseURL"].str() ?: if (api == "anthropic-messages") "https://gateway.example" else "https://gateway.example/v1", enabled = profileEditable)
+                if (endpointFailure != null) Text(endpointFailure, color = T.Err, fontSize = 12.sp)
+                if (deepseek) Text(st("请填写兼容 Anthropic Messages 协议的 API 地址。", "Enter an API endpoint compatible with the Anthropic Messages protocol."), color = T.Text3, fontSize = 12.sp)
+            }
+            if (custom) ModelFormField(st("API 协议", "API protocol")) { ModelSettingsSelect(api, protocols, profileEditable, ::protocolLabel) { api = it } }
         }
-        if (custom) LabeledField(st("API 协议", "API protocol")) { ModelSettingsSelect(api, protocols, profileEditable, ::protocolLabel) { api = it } }
-        NativeModelList(models, deepseek, overridden, profileEditable, catalog, effective,
+        NativeModelList(models, deepseek, overridden || initial == null, profileEditable, catalog, effective,
             onChange = { models = it; overridden = true; modelsTouched = true },
-            onReset = if (initial == null) null else ({ models = JsonArray(inherited); overridden = false; modelsTouched = true }))
-        if (!deepseek) TextButton({ mutate {
+            onReset = if (initial == null) null else ({ models = JsonArray(inherited); overridden = false; modelsTouched = true }),
+            onDiscover = if (deepseek) null else ({ mutate {
             check(keyFailure == null) { st("请先修正 API 密钥", "Correct the API key first") }
             val result = checkNotNull(Pocket.clientOrNull()).modelsDiscover(ns, buildJsonObject {
                 if (initial != null) put("provider", route)
@@ -346,13 +453,25 @@ internal fun ProviderSettingsEditor(
             val found = result["models"].arr().orEmpty()
             check(found.isNotEmpty()) { st("未发现可用模型，可手动添加。", "No models found; add them manually.") }
             candidates = found
-        } }, enabled = profileEditable && keyFailure == null && "models.discover" in ops, modifier = Modifier.padding(horizontal = 8.dp)) { Text(st("获取可用模型", "Get available models")) }
+            } }), discoverEnabled = profileEditable && keyFailure == null && "models.discover" in ops)
     }
     SettingsMessage(modelFailure, true)
-    Row(Modifier.fillMaxWidth().padding(16.dp), horizontalArrangement = Arrangement.End) {
-        TextButton({ onClose(committed) }, enabled = !busy) { Text(st("取消", "Cancel")) }
+    if (initial == null && !committed && routeFailure == null && endpointFailure == null && modelFailure == null) {
+        SettingsMessage(when {
+            baseURL.isBlank() -> st("请填写 API 地址", "Enter an API endpoint")
+            api !in protocols -> st("请选择主机支持的 API 协议", "Choose an API protocol supported by the Host")
+            models.isEmpty() -> st("请至少添加一个模型", "Add at least one model")
+            else -> null
+        })
+    }
+    Row(Modifier.fillMaxWidth().padding(top = 14.dp), horizontalArrangement = Arrangement.End) {
+        ModelFormButton(st("取消", "Cancel"), { onClose(committed) }, enabled = interactionEnabled && !busy)
         Spacer(Modifier.width(8.dp))
-        Button(::save, enabled = editable && modelFailure == null && keyFailure == null, shape = T.R12, colors = ButtonDefaults.buttonColors(containerColor = T.PrimaryButton, contentColor = T.OnPrimary)) { Text(if (busy) st("应用中", "Applying") else st("应用", "Apply")) }
+        ModelFormButton(
+            if (initial == null) { if (busy) st("创建中", "Creating") else st("创建提供商", "Create provider") }
+            else { if (busy) st("保存中", "Saving") else st("保存", "Save") },
+            ::save, enabled = editable && creationReady && endpointFailure == null && modelFailure == null && keyFailure == null, primary = true,
+        )
     }
     if (row["removable"].bool() == true) TextButton({ confirmation = true }, enabled = !busy && (editable || removalWritten), modifier = Modifier.padding(horizontal = 8.dp)) { Text(if (removalWritten) st("重试删除收尾", "Retry removal cleanup") else st("删除提供商", "Remove provider"), color = T.Err) }
     if (confirmation) AlertDialog(onDismissRequest = { if (!busy) confirmation = false }, title = { Text(st("删除提供商？", "Remove provider?")) }, text = { Column {
