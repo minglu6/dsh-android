@@ -1,5 +1,14 @@
 package dev.dsh.pocket.app
 
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.toArgb
+import com.github.takahirom.roborazzi.captureRoboImage
+import com.github.takahirom.roborazzi.RoborazziOptions
+import com.github.takahirom.roborazzi.RoborazziTaskType
+import java.nio.file.Files
+import android.graphics.BitmapFactory
+import androidx.compose.ui.test.assertWidthIsEqualTo
+import androidx.compose.ui.unit.dp
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
@@ -65,11 +74,57 @@ class DrawerSidebarParityTest {
         val footer = rule.onNodeWithTag("drawerFooter").fetchSemanticsNode().boundsInRoot
         val settings = rule.onNodeWithTag("drawerSettings").assertIsDisplayed().fetchSemanticsNode().boundsInRoot
         val connection = rule.onNodeWithTag("drawerConnection").assertIsDisplayed().fetchSemanticsNode().boundsInRoot
-        val address = rule.onNodeWithText("100.106.128.87:7690", useUnmergedTree = true).assertIsDisplayed().fetchSemanticsNode().boundsInRoot
+        val dot = rule.onNodeWithTag("drawerConnectionStatus", useUnmergedTree = true)
+            .assertIsDisplayed().assertWidthIsEqualTo(8.dp).fetchSemanticsNode().boundsInRoot
+        assertTrue(dot.left >= connection.left && dot.right <= connection.right)
+        assertTrue(kotlin.math.abs(dot.center.y - connection.center.y) < 1f)
         assertTrue(connection.left >= settings.right)
         assertTrue(connection.right <= footer.right)
-        assertTrue(address.left >= connection.left && address.right <= connection.right)
         assertTrue(kotlin.math.abs(settings.center.y - connection.center.y) < 1f)
+    }
+
+    @Test
+    @OptIn(com.github.takahirom.roborazzi.ExperimentalRoborazziApi::class)
+    fun connectionDotTracksLiveStatus() {
+        var online = Color.Unspecified
+        var connecting = Color.Unspecified
+        var offline = Color.Unspecified
+        var unauthorized = Color.Unspecified
+        rule.setContent {
+            PocketTheme {
+                online = T.Ok
+                connecting = T.WarnBorder
+                offline = T.Caption
+                unauthorized = T.Err
+                SessionDrawer({}, {}, {}, {})
+            }
+        }
+        rule.waitForIdle()
+        for ((status, expected) in listOf(
+            Dot.Online to online,
+            Dot.Connecting to connecting,
+            Dot.Offline to offline,
+            Dot.Unauthorized to unauthorized,
+            null to offline,
+            Dot.Online to online,
+        )) {
+            rule.runOnIdle { Pocket.status.value = status?.let { mapOf("p1" to it) } ?: emptyMap() }
+            rule.waitForIdle()
+            val image = Files.createTempFile("connection-dot-", ".png").toFile()
+            try {
+                rule.onNodeWithTag("drawerConnectionStatus", useUnmergedTree = true)
+                    .assertIsDisplayed().captureRoboImage(image.absolutePath,
+                        roborazziOptions = RoborazziOptions(taskType = RoborazziTaskType.Record))
+                val pixels = requireNotNull(BitmapFactory.decodeFile(image.absolutePath))
+                try {
+                    assertEquals("Rendered status: $status", expected.toArgb(), pixels.getPixel(pixels.width / 2, pixels.height / 2))
+                } finally {
+                    pixels.recycle()
+                }
+            } finally {
+                image.delete()
+            }
+        }
     }
 
     @Test

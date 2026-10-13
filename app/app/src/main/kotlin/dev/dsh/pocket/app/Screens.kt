@@ -644,23 +644,18 @@ internal fun DrawerConnectionFooter(
         }
         Spacer(Modifier.width(4.dp))
         val connectionName = profile?.name ?: if (Pocket.prefs.language == AppLanguage.En) "Not connected" else "未连接"
-        Column(
+        Row(
             Modifier.weight(1f).clip(T.R8).clickable(role = Role.Button, onClick = onConnections)
                 .heightIn(min = 48.dp).padding(horizontal = 8.dp, vertical = 5.dp)
                 .testTag("drawerConnection")
-                .semantics { contentDescription = listOfNotNull(connectionName, profile?.subtitle, dotLabel(status)).joinToString("，") },
-            horizontalAlignment = Alignment.End,
-            verticalArrangement = Arrangement.Center,
+                .semantics { contentDescription = listOfNotNull(connectionName, dotLabel(status)).joinToString("，") },
+            horizontalArrangement = Arrangement.End,
+            verticalAlignment = Alignment.CenterVertically,
         ) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                StatusDot(status)
-                Spacer(Modifier.width(6.dp))
-                Text(connectionName, fontSize = 12.sp, color = T.Text2, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            }
-            profile?.let {
-                Text(it.subtitle, style = T.Mono.copy(fontSize = 11.sp, color = T.Text3),
-                    maxLines = 1, overflow = TextOverflow.Ellipsis)
-            }
+            StatusDot(status, Modifier.testTag("drawerConnectionStatus"))
+            Spacer(Modifier.width(6.dp))
+            Text(connectionName, modifier = Modifier.weight(1f, fill = false),
+                fontSize = 12.sp, color = T.Text2, maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
     }
 }
