@@ -47,6 +47,8 @@ class ScreenshotTest {
         {"id":"deepseek-v4-pro","name":"DeepSeek-V4-Pro","description":"Stronger agentic coding, knowledge, and difficult reasoning; suited to complex or quality-critical tasks at higher cost."}]}]}"""))
 
     @Before fun state() {
+        // Skip NEARBY_WIFI in-panel CTA so connection screenshots show empty/nearby chrome.
+        runCatching { Pocket.prefs.nearbyWifiDeclined = true }
         val p = Profile("p1", "Mac mini", host = "100.106.128.87", port = 7690)
         Pocket.profiles.value = listOf(p, Profile("p2", "书房 NAS", host = "192.168.1.20", port = 7690))
         Pocket.active.value = "p1"
@@ -124,8 +126,6 @@ class ScreenshotTest {
     @Test fun s04_drawer() = show("04-drawer") { SessionDrawer({}, {}, {}, {}) }
     @Test fun s05_connections() = show("05-connections") { ConnectionsScreen(null, {}, true, {}, {}) }
     @Test fun s06_connectionsEmpty() { Pocket.profiles.value = emptyList(); Pocket.active.value = null; show("06-connections-empty") { ConnectionsScreen(null, {}, false, {}, {}) } }
-    @Test fun s06b_termuxHelp() = showWithDialogs("06b-termux-help") { TermuxHelpSheet({}) }
-    @Test fun s06c_termuxConnect() = showWithDialogs("06c-termux-connect") { TermuxConnectSheet(onDismiss = {}, onConnected = {}) }
     @Test fun s07_pairSheet() { Pocket.profiles.value = emptyList(); showWithDialogs("07-pair-sheet") { PairSheet(PairingLink("100.106.128.87", 7690, "752314"), onDismiss = {}, onPaired = {}) } }
     @Test fun s07b_cameraPermissionSheet() = showWithDialogs("07b-camera-permission") { CameraPermissionSheet({}, {}) }
     @Test fun s08_settings() = show("08-settings") {

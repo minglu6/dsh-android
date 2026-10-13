@@ -56,8 +56,60 @@ fun PocketSheet(onDismiss: () -> Unit, content: @Composable ColumnScope.() -> Un
     }
 }
 
+/**
+ * Tokyo Night themed bottom sheet for the connection / pairing surface.
+ * Same SecureOff / no-AlertDialog policy as [PocketSheet].
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun ConnSheet(onDismiss: () -> Unit, content: @Composable ColumnScope.() -> Unit) {
+    ModalBottomSheet(
+        onDismiss,
+        sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
+        shape = Conn.Sheet,
+        containerColor = Conn.Surface,
+        scrimColor = Conn.Scrim,
+        tonalElevation = 0.dp,
+        properties = ModalBottomSheetProperties(securePolicy = SecureFlagPolicy.SecureOff),
+        dragHandle = { Box(Modifier.padding(top = 10.dp, bottom = 14.dp).size(40.dp, 4.dp).clip(CircleShape).background(Conn.Border)) },
+    ) {
+        Column(
+            Modifier
+                .fillMaxWidth()
+                .navigationBarsPadding()
+                .verticalScroll(rememberScrollState())
+                .padding(bottom = 24.dp),
+            content = content,
+        )
+    }
+}
+
 @Composable fun SheetTitle(t: String) = Text(t, fontSize = 18.sp, fontWeight = FontWeight.SemiBold, color = T.Ink, modifier = Modifier.padding(horizontal = 22.dp, vertical = 6.dp))
+@Composable fun ConnSheetTitle(t: String) = Text(t, fontSize = 18.sp, fontWeight = FontWeight.SemiBold, color = Conn.Fg, modifier = Modifier.padding(horizontal = 22.dp, vertical = 6.dp))
 @Composable fun SectionLabel(t: String) = Text(t, fontSize = 13.sp, color = T.Text3, modifier = Modifier.padding(start = 22.dp, end = 22.dp, top = 14.dp, bottom = 6.dp))
+@Composable fun ConnSectionLabel(t: String) = Text(t, fontSize = 13.sp, color = Conn.FgMute, modifier = Modifier.padding(start = 22.dp, end = 22.dp, top = 14.dp, bottom = 6.dp))
+
+@Composable
+fun ConnOptionRow(
+    title: String,
+    desc: String? = null,
+    icon: ImageVector? = null,
+    enabled: Boolean = true,
+    onClick: () -> Unit = {},
+) {
+    val a = if (enabled) 1f else 0.45f
+    Row(
+        Modifier.padding(horizontal = 12.dp).fillMaxWidth().clip(Conn.R12)
+            .clickable(enabled = enabled, onClick = onClick).padding(horizontal = 10.dp, vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        icon?.let { Icon(it, null, tint = Conn.Fg.copy(alpha = a), modifier = Modifier.size(18.dp)); Spacer(Modifier.width(14.dp)) }
+        Column(Modifier.weight(1f)) {
+            Text(title, fontSize = 16.sp, color = Conn.Fg.copy(alpha = a))
+            desc?.let { Text(it, fontSize = 13.sp, color = Conn.FgMute.copy(alpha = a), lineHeight = 19.sp, modifier = Modifier.padding(top = 2.dp)) }
+        }
+    }
+}
 
 @Composable
 fun OptionRow(title: String, desc: String? = null, icon: ImageVector? = null, selected: Boolean = false, enabled: Boolean = true, trailing: String? = null, code: String? = null, onClick: () -> Unit = {}) {

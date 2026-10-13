@@ -24,10 +24,13 @@ import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import dev.dsh.pocket.protocol.classifyWsRoute
+import dev.dsh.pocket.protocol.Route
 import android.Manifest
 import android.content.pm.PackageManager
 import android.os.Build
@@ -626,7 +629,7 @@ private fun DrawerItem(icon: ImageVector, text: String, enabled: Boolean = true,
     }
 }
 
-// ---------- Connections ----------
+// ---------- Connections (Tokyo Night · compact LAN / Tailscale) ----------
 
 @Composable
 fun ConnectionsScreen(pairLink: PairingLink?, onPairLinkConsumed: () -> Unit, canBack: Boolean, onBack: () -> Unit, onConnected: () -> Unit) {
@@ -634,15 +637,19 @@ fun ConnectionsScreen(pairLink: PairingLink?, onPairLinkConsumed: () -> Unit, ca
     val status by Pocket.status.collectAsState()
     val active by Pocket.active.collectAsState()
     val ctx = LocalContext.current
+    val en = remember { runCatching { Pocket.prefs.language == AppLanguage.En }.getOrDefault(false) }
     var pairing by remember { mutableStateOf<PairingLink?>(null) }
+    var addressHintTab by remember { mutableStateOf(PeerTransport.Lan) }
     var showPair by remember { mutableStateOf(false) }
     var showScan by remember { mutableStateOf(false) }
-    var showTermux by remember { mutableStateOf(false) }
-    var termuxPaste by remember { mutableStateOf("") }
+    var showOverflow by remember { mutableStateOf(false) }
+    var showDiagnostics by remember { mutableStateOf(false) }
     var manageId by remember { mutableStateOf<String?>(null) }
     var repairTarget by remember { mutableStateOf<Profile?>(null) }
     var nearby by remember { mutableStateOf<List<DiscoveredHost>>(emptyList()) }
     var showNearbyPerm by remember { mutableStateOf(false) }
+    val tabs = remember { peerTransportTabs() }
+    var transport by remember { mutableStateOf(PeerTransport.Lan) }
     val manage = manageId?.let { id -> profiles.firstOrNull { it.id == id } }
     val routes by Pocket.routes.collectAsState()
     val sorted = remember(profiles) { Pocket.profilesSorted() }
@@ -669,16 +676,9 @@ fun ConnectionsScreen(pairLink: PairingLink?, onPairLinkConsumed: () -> Unit, ca
         if (!ok) Pocket.prefs.nearbyWifiDeclined = true
         showNearbyPerm = false
     }
+    val nearbyGranted = Build.VERSION.SDK_INT < 33 ||
+        ContextCompat.checkSelfPermission(ctx, Manifest.permission.NEARBY_WIFI_DEVICES) == PackageManager.PERMISSION_GRANTED
     LaunchedEffect(Unit) {
-        val needNearby = NearbyDiscoveryPermissionPolicy.shouldRequest(
-            apiLevel = Build.VERSION.SDK_INT,
-            granted = Build.VERSION.SDK_INT < 33 ||
-                ContextCompat.checkSelfPermission(ctx, Manifest.permission.NEARBY_WIFI_DEVICES) == PackageManager.PERMISSION_GRANTED,
-            previouslyDeclined = Pocket.prefs.nearbyWifiDeclined,
-        )
-        if (needNearby) {
-            showNearbyPerm = true
-        }
         while (true) {
             val canceled = AtomicBoolean(false)
             val found = withContext(Dispatchers.IO) { LanDiscovery.scan(ctx, canceled = canceled) }
@@ -688,118 +688,111 @@ fun ConnectionsScreen(pairLink: PairingLink?, onPairLinkConsumed: () -> Unit, ca
         }
     }
     LaunchedEffect(pairLink) {
-        val link = pairLink ?: return@LaunchedEffect
-        onPairLinkConsumed()
-        if (dev.dsh.pocket.protocol.isLoopbackHost(link.host)) {
-            termuxPaste = "dshpocket://pair?h=${link.host}:${link.port}&c=${link.code}"
-            showTermux = true
-        } else {
-            pairing = link
+        if (pairLink != null) {
+            pairing = pairLink
+            addressHintTab = when (classifyWsRoute(pairLink.host)) {
+                Route.WsTailscale -> PeerTransport.Tailscale
+                else -> PeerTransport.Lan
+            }
             showPair = true
+            onPairLinkConsumed()
         }
     }
 
-    Column(Modifier.fillMaxSize().background(T.Bg).systemBarsPadding().verticalScroll(rememberScrollState())) {
-        Header("连接", if (canBack) onBack else null)
-        Card {
-            Row(
-                Modifier.fillMaxWidth().clickable {
-                    termuxPaste = ""
-                    showTermux = true
-                }.padding(16.dp).testTag("termuxModeEntry"),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Box(Modifier.size(40.dp).clip(CircleShape).background(T.Fill2), contentAlignment = Alignment.Center) {
-                    Icon(Icons.Outlined.Terminal, null, tint = T.Ink, modifier = Modifier.size(20.dp))
-                }
-                Spacer(Modifier.width(14.dp))
-                Column(Modifier.weight(1f)) {
-                    Text(L.termuxMode(), fontSize = 16.sp, color = T.Ink)
-                    Text(L.termuxModeHint(), fontSize = 13.sp, color = T.Text3, modifier = Modifier.padding(top = 2.dp), maxLines = 2, overflow = TextOverflow.Ellipsis)
-                }
-                Icon(D.chevronRight, null, tint = T.Text3, modifier = Modifier.size(20.dp))
-            }
-        }
-        if (sorted.isEmpty()) {
-            Card {
-                Row(Modifier.fillMaxWidth().padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Box(Modifier.size(40.dp).clip(CircleShape).background(T.Fill2), contentAlignment = Alignment.Center) { Icon(Icons.Outlined.Devices, null, tint = T.Text3, modifier = Modifier.size(20.dp)) }
-                    Spacer(Modifier.width(14.dp))
-                    Column {
-                        Text("连接到桌面端 dsh", fontSize = 16.sp, color = T.Ink)
-                        Text("扫码或粘贴电脑「手机连接」里的配对信息（Tailscale / 局域网）", fontSize = 13.sp, color = T.Text3, modifier = Modifier.padding(top = 2.dp))
-                    }
-                }
-            }
-        } else {
-            Card {
+    fun openAddressSheet(seed: PairingLink? = null, tab: PeerTransport = transport) {
+        addressHintTab = tab
+        pairing = seed
+        showPair = true
+    }
+
+    Column(Modifier.fillMaxSize().background(Conn.Bg).systemBarsPadding().verticalScroll(rememberScrollState())) {
+        ConnHeader(
+            title = L.connections(),
+            onBack = if (canBack) onBack else null,
+            onOverflow = { showOverflow = true },
+        )
+        if (sorted.isNotEmpty()) {
+            Text(L.pairedDevices(), fontSize = 12.sp, color = Conn.FgMute, modifier = Modifier.padding(start = 22.dp, top = 2.dp, bottom = 4.dp))
+            ConnCard {
                 sorted.forEachIndexed { i, p ->
                     val d = status[p.id]
                     val route = routes[p.id]
-                    Row(verticalAlignment = Alignment.CenterVertically) { Spacer(Modifier.width(16.dp)); StatusDot(d); Box(Modifier.weight(1f)) {
-                    Row2(p.name + if (p.id == active) "  · 当前" else "", "${p.subtitle} · ${dotLabel(d)}", icon = null, divider = i < sorted.lastIndex, onClick = { manageId = p.id }, trailing = {
-                        Text(route?.label ?: p.kind, fontSize = 12.sp, color = if (p.needsRepair) T.WarnBorder else T.Text2, modifier = Modifier.border(1.dp, T.Border, T.R8).padding(horizontal = 8.dp, vertical = 4.dp))
-                        Icon(D.chevronRight, null, tint = T.Text3, modifier = Modifier.padding(start = 8.dp).size(20.dp))
-                    }) } }
-                }
-            }
-        }
-        if (nearby.isNotEmpty()) {
-            Text(L.nearbyComputers(), fontSize = 13.sp, color = T.Text3, modifier = Modifier.padding(start = 22.dp, top = 12.dp, bottom = 2.dp))
-            Card {
-                nearby.forEachIndexed { i, h ->
-                    Row2(
-                        h.deviceName,
-                        "${h.host}:${h.port}",
-                        icon = Icons.Outlined.Computer,
-                        divider = i < nearby.lastIndex,
-                        onClick = {
-                            pairing = PairingLink(h.host, h.port, "")
-                            showPair = true
-                        },
+                    ConnProfileRow(
+                        name = p.name + if (p.id == active) " · ${L.currentDevice()}" else "",
+                        subtitle = "${p.subtitle} · ${dotLabel(d)}",
+                        chip = route?.label ?: p.kind,
+                        warn = p.needsRepair,
+                        divider = i < sorted.lastIndex,
+                        onClick = { manageId = p.id },
+                        leading = { StatusDot(d) },
                     )
                 }
             }
         }
-        Row(Modifier.padding(18.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-            OutlinedButton({ pairing = null; showPair = true }, Modifier.weight(1f).height(52.dp), shape = T.R12, border = BorderStroke(1.dp, T.Border),
-                colors = ButtonDefaults.outlinedButtonColors(contentColor = T.Ink)) { Text("手动配对", fontSize = 15.sp) }
-            OutlinedButton({ showScan = true }, Modifier.weight(1f).height(52.dp), shape = T.R12, border = BorderStroke(1.dp, T.Border),
-                colors = ButtonDefaults.outlinedButtonColors(contentColor = T.Ink)) { Text("扫码配对", fontSize = 15.sp) }
+
+        PeerTransportTabs(tabs = tabs, selected = transport, en = en, onSelect = { transport = it })
+
+        when (transport) {
+            PeerTransport.Lan -> {
+                val needPerm = NearbyDiscoveryPermissionPolicy.shouldRequest(
+                    apiLevel = Build.VERSION.SDK_INT,
+                    granted = nearbyGranted,
+                    previouslyDeclined = Pocket.prefs.nearbyWifiDeclined,
+                )
+                if (needPerm || nearby.isNotEmpty()) {
+                    Text(L.nearbyComputers(), fontSize = 12.sp, color = Conn.FgMute, modifier = Modifier.padding(start = 22.dp, top = 2.dp, bottom = 4.dp))
+                    ConnCard {
+                        when {
+                            needPerm -> ConnOptionRow(L.allowNearby(), icon = D.link) { showNearbyPerm = true }
+                            else -> nearby.forEachIndexed { i, h ->
+                                ConnProfileRow(
+                                    name = h.deviceName,
+                                    subtitle = "${h.host}:${h.port}",
+                                    chip = "LAN",
+                                    warn = false,
+                                    divider = i < nearby.lastIndex,
+                                    onClick = { openAddressSheet(PairingLink(h.host, h.port, ""), PeerTransport.Lan) },
+                                    leading = { Icon(Icons.Outlined.Computer, null, tint = Conn.Accent, modifier = Modifier.size(18.dp)) },
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+            PeerTransport.Tailscale -> Unit
         }
-        Spacer(Modifier.height(24.dp))
+
+        Row(Modifier.padding(horizontal = 18.dp, vertical = 12.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            ConnActionButton(L.scanQr(), Modifier.weight(1f)) { showScan = true }
+            ConnActionButton(L.enterAddress(), Modifier.weight(1f)) { openAddressSheet() }
+        }
+        Spacer(Modifier.height(16.dp))
     }
+
     if (showNearbyPerm && Build.VERSION.SDK_INT >= 33) {
         NearbyWifiPermissionSheet(
             onDismiss = {
                 Pocket.prefs.nearbyWifiDeclined = true
                 showNearbyPerm = false
             },
-            onAllow = {
-                nearbyPermLauncher.launch(Manifest.permission.NEARBY_WIFI_DEVICES)
-            },
+            onAllow = { nearbyPermLauncher.launch(Manifest.permission.NEARBY_WIFI_DEVICES) },
         )
     }
+    if (showOverflow) {
+        ConnOverflowSheet(
+            onDismiss = { showOverflow = false },
+            onDiagnostics = { showOverflow = false; showDiagnostics = true },
+        )
+    }
+    if (showDiagnostics) DiagnosticsSheet(onDismiss = { showDiagnostics = false })
     if (showPair) PairSheet(
         link = pairing,
         prefName = repairTarget?.name.orEmpty(),
+        addressHint = peerAddressHint(addressHintTab, en),
         onDismiss = { showPair = false; repairTarget = null },
     ) { p -> showPair = false; repairTarget = null; Pocket.connect(p.id); onConnected() }
-    if (showTermux) TermuxConnectSheet(
-        initialPaste = termuxPaste,
-        onDismiss = { showTermux = false; termuxPaste = "" },
-    ) { p -> showTermux = false; termuxPaste = ""; Pocket.connect(p.id); onConnected() }
     if (showScan) ScanPairFlow(
-        onResult = { link ->
-            showScan = false
-            if (dev.dsh.pocket.protocol.isLoopbackHost(link.host)) {
-                termuxPaste = "dshpocket://pair?h=${link.host}:${link.port}&c=${link.code}"
-                showTermux = true
-            } else {
-                pairing = link
-                showPair = true
-            }
-        },
+        onResult = { link -> pairing = link; showScan = false; showPair = true },
         onDismiss = { showScan = false },
     )
     manage?.let { p ->
@@ -812,17 +805,125 @@ fun ConnectionsScreen(pairLink: PairingLink?, onPairLinkConsumed: () -> Unit, ca
             onRepair = {
                 manageId = null
                 repairTarget = p
-                if (!p.needsRepair && TermuxSidecar.isTermuxProfile(p.host)) {
-                    termuxPaste = "${p.host}:${p.port}"
-                    showTermux = true
-                } else {
-                    pairing = if (!p.needsRepair) PairingLink(p.host, p.port, "") else null
-                    showPair = true
-                }
+                pairing = if (!p.needsRepair) PairingLink(p.host, p.port, "") else null
+                addressHintTab = if (PeerTransport.Tailscale.matchesProfile(p)) PeerTransport.Tailscale else PeerTransport.Lan
+                showPair = true
             },
         )
     }
 }
+
+@Composable
+private fun ConnHeader(title: String, onBack: (() -> Unit)?, onOverflow: () -> Unit) {
+    Row(Modifier.fillMaxWidth().height(52.dp).padding(horizontal = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+        if (onBack != null) IconButton(onBack) { Icon(D.chevronLeft, null, tint = Conn.Fg) } else Spacer(Modifier.width(16.dp))
+        Text(title, fontSize = 18.sp, fontWeight = FontWeight.SemiBold, color = Conn.Fg, modifier = Modifier.weight(1f))
+        IconButton(onOverflow) { Icon(D.ellipsis, L.moreActions(), tint = Conn.FgDim, modifier = Modifier.size(18.dp)) }
+    }
+}
+
+@Composable
+private fun ConnCard(content: @Composable ColumnScope.() -> Unit) =
+    Column(
+        Modifier.padding(horizontal = 18.dp, vertical = 4.dp).fillMaxWidth()
+            .clip(Conn.R12).border(1.dp, Conn.Border, Conn.R12).background(Conn.Surface),
+        content = content,
+    )
+
+@Composable
+private fun ConnActionButton(label: String, modifier: Modifier = Modifier, onClick: () -> Unit) {
+    OutlinedButton(
+        onClick,
+        modifier.height(48.dp),
+        shape = Conn.R12,
+        border = BorderStroke(1.dp, Conn.Border),
+        colors = ButtonDefaults.outlinedButtonColors(contentColor = Conn.Fg, containerColor = Conn.Elevated),
+        contentPadding = PaddingValues(horizontal = 10.dp),
+    ) { Text(label, fontSize = 14.sp, maxLines = 1, overflow = TextOverflow.Ellipsis) }
+}
+
+@Composable
+private fun PeerTransportTabs(
+    tabs: List<PeerTransport>,
+    selected: PeerTransport,
+    en: Boolean,
+    onSelect: (PeerTransport) -> Unit,
+) {
+    Row(
+        Modifier.padding(horizontal = 18.dp, vertical = 8.dp).fillMaxWidth()
+            .clip(Conn.R12).background(Conn.Elevated).padding(3.dp),
+        horizontalArrangement = Arrangement.spacedBy(3.dp),
+    ) {
+        tabs.forEach { tab ->
+            val on = tab == selected
+            Box(
+                Modifier.weight(1f).height(36.dp).clip(Conn.R12)
+                    .background(if (on) Conn.Accent.copy(alpha = 0.2f) else Color.Transparent)
+                    .clickable { onSelect(tab) },
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(
+                    tab.label(en),
+                    fontSize = 13.sp,
+                    fontWeight = if (on) FontWeight.SemiBold else FontWeight.Normal,
+                    color = if (on) Conn.Accent else Conn.FgDim,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun ConnProfileRow(
+    name: String,
+    subtitle: String,
+    chip: String,
+    warn: Boolean,
+    divider: Boolean,
+    onClick: () -> Unit,
+    leading: @Composable () -> Unit,
+) {
+    Row(
+        Modifier.fillMaxWidth().clickable(onClick = onClick).padding(horizontal = 14.dp, vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        leading(); Spacer(Modifier.width(10.dp))
+        Column(Modifier.weight(1f)) {
+            Text(name, fontSize = 15.sp, color = Conn.Fg, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(
+                subtitle,
+                style = Conn.Mono.copy(fontSize = 11.sp, color = Conn.FgMute, lineHeight = 15.sp),
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.padding(top = 1.dp),
+            )
+        }
+        Text(
+            chip,
+            fontSize = 11.sp,
+            color = if (warn) Conn.Warn else Conn.FgDim,
+            modifier = Modifier.border(1.dp, Conn.Border, T.R8).padding(horizontal = 6.dp, vertical = 2.dp),
+        )
+        Icon(D.chevronRight, null, tint = Conn.FgMute, modifier = Modifier.padding(start = 6.dp).size(18.dp))
+    }
+    if (divider) HorizontalDivider(Modifier.padding(horizontal = 14.dp), color = Conn.Border.copy(alpha = 0.4f))
+}
+
+@Composable
+fun ConnOverflowSheet(onDismiss: () -> Unit, onDiagnostics: () -> Unit) {
+    ConnSheet(onDismiss) {
+        ConnSheetTitle(L.moreActions())
+        ConnOptionRow(L.diagnostics(), icon = D.inspect, onClick = onDiagnostics)
+    }
+}
+
+@Composable
+fun ConnPrimaryColors() = ButtonDefaults.buttonColors(
+    containerColor = Conn.Accent,
+    contentColor = Conn.Bg,
+    disabledContainerColor = Conn.Border,
+    disabledContentColor = Conn.FgMute,
+)
 
 /** Device manage sheet: 重命名 / 重新配对 / 删除, matching desktop ManagePanel. */
 @Composable
@@ -835,89 +936,102 @@ fun ProfileManageSheet(
     onRepair: () -> Unit = {},
 ) {
     var renaming by remember(profile.id) { mutableStateOf(false) }
-    PocketSheet(onDismiss) {
+    ConnSheet(onDismiss) {
         if (renaming) {
             var editName by remember(profile.id, profile.name) { mutableStateOf(profile.name) }
-            SheetTitle("重命名")
+            ConnSheetTitle(L.rename())
             OutlinedTextField(
                 editName,
                 { editName = it.take(64) },
                 singleLine = true,
-                shape = T.R12,
-                textStyle = T.Mono.copy(fontSize = 15.sp),
+                shape = Conn.R12,
+                textStyle = Conn.Mono.copy(fontSize = 15.sp, color = Conn.Fg),
+                colors = connFieldColors(),
                 modifier = Modifier.padding(horizontal = 22.dp).fillMaxWidth().testTag("profileRenameInput"),
             )
             Row(Modifier.padding(horizontal = 22.dp, vertical = 16.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                 OutlinedButton(
                     { renaming = false },
-                    Modifier.weight(1f).height(50.dp),
-                    shape = T.R12,
-                    border = BorderStroke(1.dp, T.Border),
-                    colors = ButtonDefaults.outlinedButtonColors(contentColor = T.Ink),
-                ) { Text("取消") }
+                    Modifier.weight(1f).height(48.dp),
+                    shape = Conn.R12,
+                    border = BorderStroke(1.dp, Conn.Border),
+                    colors = ButtonDefaults.outlinedButtonColors(contentColor = Conn.Fg),
+                ) { Text(L.cancel()) }
                 Button(
                     {
                         val trimmed = editName.trim()
                         if (trimmed.isNotEmpty() && trimmed != profile.name) Pocket.renameProfile(profile.id, trimmed)
                         renaming = false
                     },
-                    Modifier.weight(1f).height(50.dp),
+                    Modifier.weight(1f).height(48.dp),
                     enabled = editName.trim().isNotEmpty(),
-                    shape = T.R12,
-                    colors = PrimaryColors(),
-                ) { Text("保存") }
+                    shape = Conn.R12,
+                    colors = ConnPrimaryColors(),
+                ) { Text(L.save()) }
             }
-            return@PocketSheet
+            return@ConnSheet
         }
         Row(Modifier.padding(horizontal = 22.dp), verticalAlignment = Alignment.CenterVertically) {
-            StatusDot(status); Spacer(Modifier.width(10.dp)); SheetTitle(profile.name)
-            if (isActive) Text("当前", fontSize = 12.sp, color = T.Accent, modifier = Modifier.background(T.Tint, T.R4).padding(horizontal = 6.dp, vertical = 2.dp))
+            StatusDot(status); Spacer(Modifier.width(10.dp)); ConnSheetTitle(profile.name)
+            if (isActive) {
+                Text(
+                    L.currentDevice(),
+                    fontSize = 12.sp,
+                    color = Conn.Accent,
+                    modifier = Modifier.background(Conn.Accent.copy(alpha = 0.15f), T.R4).padding(horizontal = 6.dp, vertical = 2.dp),
+                )
+            }
         }
-        Text("${profile.subtitle} · ${dotLabel(status)}", style = T.Mono.copy(color = T.Text3), modifier = Modifier.padding(horizontal = 22.dp, vertical = 4.dp))
+        Text(
+            "${profile.subtitle} · ${dotLabel(status)}",
+            style = Conn.Mono.copy(color = Conn.FgMute),
+            modifier = Modifier.padding(horizontal = 22.dp, vertical = 4.dp),
+        )
         Spacer(Modifier.height(8.dp))
         if (profile.needsRepair) {
-            Text("连接信息不完整，请重新配对。", fontSize = 13.sp, color = T.Text3, modifier = Modifier.padding(start = 22.dp, end = 22.dp, bottom = 8.dp))
+            Text(L.repairNeeded(), fontSize = 13.sp, color = Conn.FgMute, modifier = Modifier.padding(start = 22.dp, end = 22.dp, bottom = 8.dp))
         } else if (!isActive || status != Dot.Online) {
-            OptionRow("连接", icon = D.link) { onConnect() }
+            ConnOptionRow(L.connectAction(), icon = D.link) { onConnect() }
         }
-        OptionRow(L.repairPair(), icon = D.link) { onRepair() }
-        OptionRow("重命名", icon = D.edit) { renaming = true }
-        OptionRow("删除", icon = D.trash) { Pocket.removeProfile(profile.id); onDismiss() }
+        ConnOptionRow(L.repairPair(), icon = D.link) { onRepair() }
+        ConnOptionRow(L.rename(), icon = D.edit) { renaming = true }
+        ConnOptionRow(L.delete(), icon = D.trash) { Pocket.removeProfile(profile.id); onDismiss() }
     }
 }
 
 private fun dotLabel(d: Dot?) = when (d) {
     Dot.Online -> L.online()
-    Dot.Connecting -> "连接中"
+    Dot.Connecting -> L.connecting()
     Dot.Unauthorized -> L.revoked()
     Dot.Offline -> L.offline()
-    null -> "未知"
+    null -> L.unknownStatus()
 }
 
 @Composable
 fun NearbyWifiPermissionSheet(onDismiss: () -> Unit, onAllow: () -> Unit) {
-    PocketSheet(onDismiss) {
-        SheetTitle(L.nearbyComputers())
-        Text(
-            "用于发现同一局域网内的电脑（不会用于定位）。",
-            fontSize = 14.sp, color = T.Text2, lineHeight = 22.sp,
-            modifier = Modifier.padding(horizontal = 22.dp, vertical = 8.dp),
-        )
+    ConnSheet(onDismiss) {
+        ConnSheetTitle(L.nearbyComputers())
         Row(Modifier.padding(horizontal = 22.dp, vertical = 16.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
             OutlinedButton(
-                onDismiss, Modifier.weight(1f).height(50.dp), shape = T.R12,
-                border = BorderStroke(1.dp, T.Border),
-                colors = ButtonDefaults.outlinedButtonColors(contentColor = T.Ink),
-            ) { Text("取消") }
-            Button(onAllow, Modifier.weight(1f).height(50.dp), shape = T.R12, colors = PrimaryColors()) {
-                Text("允许", color = Color.White)
+                onDismiss, Modifier.weight(1f).height(48.dp), shape = Conn.R12,
+                border = BorderStroke(1.dp, Conn.Border),
+                colors = ButtonDefaults.outlinedButtonColors(contentColor = Conn.Fg),
+            ) { Text(L.cancel()) }
+            Button(onAllow, Modifier.weight(1f).height(48.dp), shape = Conn.R12, colors = ConnPrimaryColors()) {
+                Text(L.allowNearby(), color = Conn.Bg)
             }
         }
     }
 }
 
 @Composable
-fun PairSheet(link: PairingLink?, prefName: String = "", onDismiss: () -> Unit, onPaired: (Profile) -> Unit) {
+fun PairSheet(
+    link: PairingLink?,
+    prefName: String = "",
+    addressHint: String = peerAddressHint(PeerTransport.Lan),
+    onDismiss: () -> Unit,
+    onPaired: (Profile) -> Unit,
+) {
     var address by remember(link) {
         mutableStateOf(link?.takeIf { it.host.isNotBlank() }?.let { "${it.host}:${it.port}" } ?: "")
     }
@@ -940,9 +1054,9 @@ fun PairSheet(link: PairingLink?, prefName: String = "", onDismiss: () -> Unit, 
             }
         }
     }
-    PocketSheet(onDismiss) {
-        SheetTitle("配对")
-        Field("地址", address, "100.x.y.z:7690 或局域网 host:port") {
+    ConnSheet(onDismiss) {
+        ConnSheetTitle(L.pairSheetTitle())
+        ConnField(L.addressField(), address, addressHint, mono = true) {
             address = it
             err = null
             PairingLink.parse(it.trim())?.let { parsedLink ->
@@ -950,52 +1064,93 @@ fun PairSheet(link: PairingLink?, prefName: String = "", onDismiss: () -> Unit, 
                 if (parsedLink.code.length == 6) code = parsedLink.code
             }
         }
-        Field("名称", name, "例如 Mac mini") { name = it }
-        Spacer(Modifier.height(14.dp))
+        ConnField(L.nameField(), name, L.nameHint()) { name = it }
+        Spacer(Modifier.height(12.dp))
         Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
-            BasicTextField(code, { v -> code = v.filter(Char::isDigit).take(6); err = null }, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword),
-                modifier = Modifier.focusRequester(focus), cursorBrush = SolidColor(Color.Transparent), textStyle = androidx.compose.ui.text.TextStyle(color = Color.Transparent),
+            BasicTextField(
+                code,
+                { v -> code = v.filter(Char::isDigit).take(6); err = null },
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword),
+                modifier = Modifier.focusRequester(focus),
+                cursorBrush = SolidColor(Color.Transparent),
+                textStyle = TextStyle(color = Color.Transparent),
                 decorationBox = {
-                    Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         repeat(6) { i ->
                             val cur = i == code.length
-                            Box(Modifier.size(46.dp, 56.dp).clip(T.R12).border(if (cur) 1.5.dp else 1.dp, if (cur) T.Ink else T.Border, T.R12), contentAlignment = Alignment.Center) {
-                                Text(code.getOrNull(i)?.toString() ?: "", fontSize = 24.sp, color = T.Ink, textAlign = TextAlign.Center)
+                            Box(
+                                Modifier.size(42.dp, 50.dp).clip(Conn.R12)
+                                    .border(if (cur) 1.5.dp else 1.dp, if (cur) Conn.Accent else Conn.Border, Conn.R12)
+                                    .background(Conn.Elevated),
+                                contentAlignment = Alignment.Center,
+                            ) {
+                                Text(
+                                    code.getOrNull(i)?.toString() ?: "",
+                                    style = Conn.Mono.copy(fontSize = 22.sp, color = Conn.Fg),
+                                    textAlign = TextAlign.Center,
+                                )
                             }
                         }
                     }
-                })
+                },
+            )
         }
-        err?.let { Text(it, color = T.Err, fontSize = 13.sp, modifier = Modifier.padding(horizontal = 22.dp, vertical = 8.dp)) }
+        err?.let { Text(it, color = Conn.Err, fontSize = 13.sp, modifier = Modifier.padding(horizontal = 22.dp, vertical = 8.dp)) }
         val ready = parsed != null && !busy
-        Button({
-            val generation = gate.begin() ?: return@Button
-            busy = true
-            scope.launch {
-                val result = Pocket.pair(name.trim(), parsed!!)
-                if (gate.complete(generation)) {
-                    result.onSuccess(onPaired).onFailure { err = it.message }
-                    busy = false
+        Button(
+            {
+                val generation = gate.begin() ?: return@Button
+                busy = true
+                scope.launch {
+                    val result = Pocket.pair(name.trim(), parsed!!)
+                    if (gate.complete(generation)) {
+                        result.onSuccess(onPaired).onFailure { err = it.message }
+                        busy = false
+                    }
                 }
-            }
-        }, Modifier.padding(horizontal = 18.dp, vertical = 16.dp).fillMaxWidth().height(52.dp), enabled = ready, shape = T.R12,
-            colors = PrimaryColors()) {
-            if (busy) CircularProgressIndicator(Modifier.size(18.dp), color = Color.White, strokeWidth = 2.dp) else Text("配对", fontSize = 16.sp, color = Color.White)
+            },
+            Modifier.padding(horizontal = 18.dp, vertical = 14.dp).fillMaxWidth().height(48.dp),
+            enabled = ready,
+            shape = Conn.R12,
+            colors = ConnPrimaryColors(),
+        ) {
+            if (busy) CircularProgressIndicator(Modifier.size(18.dp), color = Conn.Bg, strokeWidth = 2.dp)
+            else Text(L.pairAction(), fontSize = 15.sp, color = Conn.Bg)
         }
     }
     LaunchedEffect(Unit) { if (link != null) runCatching { focus.requestFocus() } }
 }
 
 @Composable
-private fun Field(label: String, v: String, hint: String, onChange: (String) -> Unit) {
-    Column(Modifier.padding(horizontal = 18.dp, vertical = 5.dp)) {
-        Text(label, fontSize = 13.sp, color = T.Text3, modifier = Modifier.padding(start = 4.dp, bottom = 4.dp))
-        Box(Modifier.fillMaxWidth().clip(T.R12).background(T.Fill2).padding(horizontal = 14.dp, vertical = 13.dp)) {
-            if (v.isEmpty()) Text(hint, color = T.Caption, fontSize = 15.sp)
-            BasicTextField(v, onChange, singleLine = true, textStyle = MaterialTheme.typography.bodyMedium.copy(fontSize = 15.sp), cursorBrush = SolidColor(T.Accent), modifier = Modifier.fillMaxWidth())
+private fun ConnField(label: String, v: String, hint: String, mono: Boolean = false, onChange: (String) -> Unit) {
+    Column(Modifier.padding(horizontal = 18.dp, vertical = 4.dp)) {
+        Text(label, fontSize = 12.sp, color = Conn.FgMute, modifier = Modifier.padding(start = 4.dp, bottom = 4.dp))
+        Box(Modifier.fillMaxWidth().clip(Conn.R12).background(Conn.Elevated).padding(horizontal = 14.dp, vertical = 12.dp)) {
+            if (v.isEmpty()) {
+                Text(hint, color = Conn.FgMute, style = if (mono) Conn.Mono.copy(fontSize = 14.sp, color = Conn.FgMute) else TextStyle.Default.copy(fontSize = 14.sp, color = Conn.FgMute))
+            }
+            BasicTextField(
+                v,
+                onChange,
+                singleLine = true,
+                textStyle = if (mono) Conn.Mono.copy(fontSize = 14.sp, color = Conn.Fg) else TextStyle.Default.copy(fontSize = 14.sp, color = Conn.Fg),
+                cursorBrush = SolidColor(Conn.Accent),
+                modifier = Modifier.fillMaxWidth(),
+            )
         }
     }
 }
+
+@Composable
+private fun connFieldColors() = OutlinedTextFieldDefaults.colors(
+    focusedTextColor = Conn.Fg,
+    unfocusedTextColor = Conn.Fg,
+    focusedBorderColor = Conn.Accent,
+    unfocusedBorderColor = Conn.Border,
+    cursorColor = Conn.Accent,
+    focusedContainerColor = Conn.Elevated,
+    unfocusedContainerColor = Conn.Elevated,
+)
 
 // ---------- Settings ----------
 
