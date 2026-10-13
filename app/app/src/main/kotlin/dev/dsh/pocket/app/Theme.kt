@@ -115,6 +115,30 @@ fun resolveDarkAppearance(appearance: Appearance, systemDark: Boolean): Boolean 
     Appearance.Light -> false
 }
 
+/**
+ * Tokyo Night chrome for the phone connection / pairing surface
+ * (peer tabs, address sheets). Meslo via [T.Mono] / [Conn.Mono].
+ */
+object Conn {
+    val Bg = TokyoNight.Bg
+    val Surface = Color(0xFF24283B)
+    val Elevated = Color(0xFF1F2335)
+    val Fg = TokyoNight.Fg
+    val FgDim = Color(0xFFA9B1D6)
+    val FgMute = Color(0xFF565F89)
+    val Accent = Color(0xFF7AA2F7)
+    val Border = Color(0xFF414868)
+    val TabIdle = Color(0xFF1F2335)
+    val Ok = Color(0xFF9ECE6A)
+    val Err = Color(0xFFF7768E)
+    val Warn = Color(0xFFE0AF68)
+    val Scrim = Color(0x99000000)
+    val Mono = TextStyle(fontFamily = MesloNerdFamily, fontSize = 13.sp, color = FgDim)
+    val R12 = RoundedCornerShape(12.dp)
+    val R16 = RoundedCornerShape(16.dp)
+    val Sheet = RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp)
+}
+
 @Composable
 fun PocketTheme(content: @Composable () -> Unit) {
     val appearance = runCatching { Pocket.prefs.appearance }.getOrDefault(Appearance.Light)

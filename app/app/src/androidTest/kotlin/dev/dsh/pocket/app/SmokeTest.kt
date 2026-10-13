@@ -13,9 +13,11 @@ class SmokeTest {
 
     @Test fun launchesToConnectionsAndOpensPairSheet() {
         rule.onNodeWithText("连接到桌面端 dsh").assertIsDisplayed()
-        rule.onNodeWithText("手动配对").performClick()
+        rule.onNodeWithText("局域网").assertIsDisplayed()
+        rule.onNodeWithText("Tailscale").assertIsDisplayed()
+        rule.onNodeWithText("输入地址").performClick()
         rule.waitUntil(10_000) {
-            rule.onAllNodesWithText("100.x.y.z:7690 或局域网 host:port").fetchSemanticsNodes().isNotEmpty()
+            rule.onAllNodesWithText("192.168.x.x:7690").fetchSemanticsNodes().isNotEmpty()
         }
         rule.onNode(hasText("配对") and hasClickAction()).assertExists()
     }

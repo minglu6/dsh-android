@@ -47,6 +47,8 @@ class ScreenshotTest {
         {"id":"deepseek-v4-pro","name":"DeepSeek-V4-Pro","description":"Stronger agentic coding, knowledge, and difficult reasoning; suited to complex or quality-critical tasks at higher cost."}]}]}"""))
 
     @Before fun state() {
+        // Skip NEARBY_WIFI in-panel CTA so connection screenshots show empty/nearby chrome.
+        runCatching { Pocket.prefs.nearbyWifiDeclined = true }
         val p = Profile("p1", "Mac mini", host = "100.106.128.87", port = 7690)
         Pocket.profiles.value = listOf(p, Profile("p2", "书房 NAS", host = "192.168.1.20", port = 7690))
         Pocket.active.value = "p1"

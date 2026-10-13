@@ -153,6 +153,48 @@ object L {
         "If tools need root, start dsh under tsu/su inside Termux yourself. This app never runs su."
     else
         "若工具需要 root，请在 Termux 内自行用 tsu/su 启动 dsh。本 App 从不执行 su。"
+
+    // Connection screen (LAN / Tailscale / 本机 Termux as equal peer tabs)
+    fun connections() = if (en) "Connections" else "连接"
+    fun connectDesktop() = if (en) "Connect to desktop dsh" else "连接到桌面端 dsh"
+    fun connectDesktopHint() =
+        if (en) "Scan, enter an address, or connect a nearby device"
+        else "扫码、输入地址，或连接附近设备"
+    fun scanQr() = if (en) "Scan" else "扫码"
+    fun enterAddress() = if (en) "Enter address" else "输入地址"
+    fun connectNearby() = if (en) "Connect nearby" else "连接附近设备"
+    fun moreActions() = if (en) "More" else "更多"
+    fun pairedDevices() = if (en) "Paired devices" else "已配对设备"
+    fun lanTab() = if (en) "LAN" else "局域网"
+    fun tailscaleTab() = "Tailscale"
+    fun localTab() = if (en) "This device" else "本机"
+    fun nearbyScanning() = if (en) "Looking for nearby computers…" else "正在搜索附近的电脑…"
+    fun nearbyEmpty() =
+        if (en) "No nearby computers yet. Keep the desktop «Phone connection» page open on the same Wi‑Fi."
+        else "暂未发现附近电脑。请在同一 Wi‑Fi 打开电脑端「手机连接」。"
+    fun nearbyNeedPermission() =
+        if (en) "Allow nearby Wi‑Fi devices to discover computers on this LAN."
+        else "允许附近的 Wi‑Fi 设备权限以发现同一局域网内的电脑。"
+    fun allowNearby() = if (en) "Allow" else "允许"
+    fun tailscaleHint() =
+        if (en) "Use a Tailscale IP (100.x) or MagicDNS name (*.ts.net). Same account as the desktop."
+        else "使用 Tailscale IP（100.x）或 MagicDNS 名称（*.ts.net），与电脑同一账号。"
+    fun pairSheetTitle() = if (en) "Pair" else "配对"
+    fun addressField() = if (en) "Address" else "地址"
+    fun nameField() = if (en) "Name" else "名称"
+    fun nameHint() = if (en) "e.g. Mac mini" else "例如 Mac mini"
+    fun pairAction() = if (en) "Pair" else "配对"
+    fun currentDevice() = if (en) "Current" else "当前"
+    fun connecting() = if (en) "Connecting" else "连接中"
+    fun unknownStatus() = if (en) "Unknown" else "未知"
+    fun rename() = if (en) "Rename" else "重命名"
+    fun connectAction() = if (en) "Connect" else "连接"
+    fun repairNeeded() =
+        if (en) "Connection info incomplete — pair again."
+        else "连接信息不完整，请重新配对。"
+    fun nearbyPermissionBody() =
+        if (en) "Used to discover computers on the same LAN (not for location)."
+        else "用于发现同一局域网内的电脑（不会用于定位）。"
     // Task notifications (desktop-aligned; adapted from saya-ch/dsh-mobile labels)
     fun taskFinished() = if (en) "Task finished" else "任务已完成"
     fun taskFinishedBody() = if (en) "Your DSH task finished" else "你的 DSH 任务已完成"

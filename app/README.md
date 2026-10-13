@@ -26,8 +26,8 @@ APK **不再**包含 `libpocket_iroh.so`；连接只走 host:port WebSocket。
 ## 使用
 
 1. 电脑端：`dsh web` 装好插件后，设置 →「手机连接」打开配对（QR + `dshpocket://pair?h=host:port&c=`）。
-2. 手机端：连接 →「扫码配对」或「手动配对」填入电脑地址与 6 位码（Tailscale / 局域网）。
-3. 本机：连接 →「本机 Termux」，连 Termux 里 `127.0.0.1:port` 的 pocket；配对串或粘贴 token。见 [docs/termux-sidecar.md](../docs/termux-sidecar.md)。
+2. 手机端：连接页对等切换「局域网 / Tailscale / 本机」；主动作「扫码 / 输入地址 / 连接附近设备」。
+3. 局域网卡始终可见附近 mDNS 列表；本机走 Termux 里 `127.0.0.1:port` 的 pocket（配对串或 token）。见 [docs/termux-sidecar.md](../docs/termux-sidecar.md)。
 4. 列表小标签按地址显示 `Tailscale` / `LAN` / `本机`。旧 iroh 配置需重新配对。
 5. token 用 Android Keystore 的 AES-GCM 密钥加密保存。APK 不内嵌 Node/dsh，不执行 su。
 
