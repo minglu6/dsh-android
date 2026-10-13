@@ -22,6 +22,18 @@ object LanDiscovery {
         }.values.toList()
 
     /**
+     * Keep only `_dshpocket._tcp` hosts that are not already paired
+     * (by instance id or host:port).
+     */
+    fun unpairedNearby(found: List<DiscoveredHost>, profiles: List<Profile>): List<DiscoveredHost> =
+        found.filter { disc ->
+            profiles.none { p ->
+                (p.instanceId.isNotBlank() && p.instanceId == disc.instanceId) ||
+                    (!p.needsRepair && p.host == disc.host && p.port == disc.port)
+            }
+        }
+
+    /**
      * When a paired profile's instance appears with a new host:port, return an updated copy.
      * Does not change credentials — only the reachable address.
      */

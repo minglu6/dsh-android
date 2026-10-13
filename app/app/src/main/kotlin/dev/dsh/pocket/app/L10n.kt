@@ -140,6 +140,8 @@ object L {
     fun diagnosticsChecking() = if (en) "Checking…" else "正在检查…"
     fun diagnosticsUnavailable() = if (en) "Diagnostics unavailable" else "诊断服务暂不可用"
     fun nearbyComputers() = if (en) "Nearby computers" else "附近的电脑"
+    /** mDNS `_dshpocket._tcp` unpaired desktops on the LAN (connections list). */
+    fun nearbyDevices() = if (en) "Nearby devices" else "附近设备"
     fun repairPair() = if (en) "Pair again" else "重新配对"
     fun online() = if (en) "Online" else "在线"
     fun offline() = if (en) "Offline" else "离线"
