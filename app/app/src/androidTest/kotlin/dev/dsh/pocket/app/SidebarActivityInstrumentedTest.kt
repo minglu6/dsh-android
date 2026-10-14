@@ -30,8 +30,8 @@ class SidebarActivityInstrumentedTest {
 
     @Test fun runningArcAnimatesAndStopsForApprovalAndIdle() {
         Pocket.init(InstrumentationRegistry.getInstrumentation().targetContext)
-        val previousScale = if (Build.VERSION.SDK_INT >= 33) ValueAnimator.getDurationScale() else 1f
-        if (Build.VERSION.SDK_INT >= 33) ValueAnimator.setDurationScale(1f)
+        val previousScale = animatorDurationScale()
+        setAnimatorDurationScale(1f)
         try {
             assumeTrue("Animation must be enabled to exercise real running frames", ValueAnimator.areAnimatorsEnabled())
             val activity = mutableStateOf(SidebarActivity.Running)
@@ -65,7 +65,21 @@ class SidebarActivityInstrumentedTest {
             rule.onNodeWithTag("activity").assertDoesNotExist()
             rule.mainClock.autoAdvance = true
         } finally {
-            if (Build.VERSION.SDK_INT >= 33) ValueAnimator.setDurationScale(previousScale)
+            setAnimatorDurationScale(previousScale)
+        }
+    }
+
+    private fun animatorDurationScale(): Float = if (Build.VERSION.SDK_INT >= 33) {
+        ValueAnimator.getDurationScale()
+    } else if (ValueAnimator.areAnimatorsEnabled()) 1f else 0f
+
+    /** `ValueAnimator.setDurationScale` is still hidden; CI turns animators off globally. */
+    private fun setAnimatorDurationScale(scale: Float) {
+        runCatching {
+            ValueAnimator::class.java
+                .getDeclaredMethod("setDurationScale", Float::class.javaPrimitiveType)
+                .apply { isAccessible = true }
+                .invoke(null, scale)
         }
     }
 }
