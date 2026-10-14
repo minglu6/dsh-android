@@ -1430,27 +1430,18 @@ object Pocket {
         if (t.isNotEmpty()) composerInsert.tryEmit(if (t.endsWith(' ')) t else "$t ")
     }
 
-    /**
-     * Enrich a `workspace/changes` card via Host summary.
-     * @return Triple(total, singleDisplayName, added) or null when unavailable.
-     */
-    fun fetchChangesSummary(seq: Long, onResult: (Triple<Int, String?, Int>?) -> Unit) = main.launch {
-        val c = client ?: run { onResult(null); return@launch }
-        val st = chat.value ?: run { onResult(null); return@launch }
-        if (!hasOp("workspaceChanges.summary")) { onResult(null); return@launch }
-        runCatching {
-            val summary = c.workspaceChangesSummary(st.sessionId, seq)["summary"]
-            if (summary == null || summary is kotlinx.serialization.json.JsonNull) {
-                onResult(null); return@runCatching
-            }
-            val total = summary["total"].long()?.toInt() ?: summary["files"].arr()?.size ?: 0
-            val files = summary["files"].arr().orEmpty()
-            val name = files.singleOrNull()?.let { f ->
-                f["display"].str() ?: f["path"].str()?.substringAfterLast('/')
-            }
-            val added = summary["added"].long()?.toInt() ?: 0
-            onResult(Triple(total, name, added))
-        }.onFailure { onResult(null) }
+    /** Load the announced summary for this session, without consulting the currently open chat. */
+    suspend fun fetchChangesSummary(sessionId: String, seq: Long): WorkspaceChangesSummary? {
+        val c = client ?: return null
+        if (!hasOp("workspaceChanges.summary")) return null
+        return WorkspaceChangesSummary.parse(c.workspaceChangesSummary(sessionId, seq)["summary"])
+    }
+
+    /** File indices refer to the unmodified Host summary list for the same session and event. */
+    suspend fun fetchChangesDiff(sessionId: String, seq: Long, index: Int): WorkspaceFileDiff? {
+        val c = client ?: return null
+        if (!hasOp("workspaceChanges.diff")) return null
+        return WorkspaceFileDiff.parse(c.workspaceChangesDiff(sessionId, seq, index)["diff"])
     }
 
     suspend fun listFiles(sessionId: String, path: String) = client?.listFiles(sessionId, path)

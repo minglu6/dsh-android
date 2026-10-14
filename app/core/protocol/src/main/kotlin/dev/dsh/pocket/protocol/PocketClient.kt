@@ -368,6 +368,9 @@ class PocketClient(
     suspend fun workspaceChangesSummary(sessionId: String, seq: Long): JsonElement =
         call("workspaceChanges.summary", jsonOf("sessionId" to sessionId, "seq" to seq))
 
+    suspend fun workspaceChangesDiff(sessionId: String, seq: Long, index: Int): JsonElement =
+        call("workspaceChanges.diff", jsonOf("sessionId" to sessionId, "seq" to seq, "index" to index))
+
     // ---- Desktop settings parity (models / plugins / schedule)
     suspend fun modelsProviders(): JsonElement = call("models.providers")
     suspend fun modelsProviderGet(provider: String): JsonElement =

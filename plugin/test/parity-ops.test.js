@@ -218,6 +218,72 @@ test('workspaceChanges.summary forwards Host summary', () => {
   assert.throws(() => ops['workspaceChanges.summary']({ sessionId: 's1' }), /seq required/)
 })
 
+test('workspace changes only advertises Host methods that actually exist', () => {
+  assert.deepEqual(workspaceChangesOps(undefined), {})
+  assert.deepEqual(Object.keys(workspaceChangesOps({ summary() {} })), ['workspaceChanges.summary'])
+  assert.deepEqual(Object.keys(workspaceChangesOps({ diff() {} })), ['workspaceChanges.diff'])
+})
+
+test('workspace changes preserves absent summaries and comparisons as null', async () => {
+  const ops = workspaceChangesOps({ summary() {}, async diff() {} })
+  assert.deepEqual(ops['workspaceChanges.summary']({ sessionId: 's1', seq: 42 }), { summary: null })
+  assert.deepEqual(await ops['workspaceChanges.diff']({ sessionId: 's1', seq: 42, index: 0 }, new AbortController().signal), { diff: null })
+})
+
+test('workspaceChanges.diff forwards session, event, original file index and cancellation signal', async () => {
+  const ac = new AbortController()
+  const expected = { kind: 'text', path: '../a.ts', display: '../a.ts', before: true, after: false, coarse: false, hunks: [] }
+  let actual
+  const host = {
+    async diff(...args) {
+      assert.equal(this, host)
+      actual = args
+      return expected
+    },
+  }
+  const ops = workspaceChangesOps(host)
+  const result = await ops['workspaceChanges.diff']({ sessionId: 'not-current-chat', seq: 123, index: 2 }, ac.signal)
+  assert.equal(result.diff, expected)
+  assert.deepEqual(actual, ['not-current-chat', 123, 2, ac.signal])
+  ac.abort()
+  assert.equal(actual[3].aborted, true)
+})
+
+test('workspaceChanges.diff rejects invalid indices before calling Host', async () => {
+  let called = false
+  const ops = workspaceChangesOps({ async diff() { called = true } })
+  for (const index of [undefined, null, -1, 0.5, Number.MAX_SAFE_INTEGER + 1, NaN, Infinity, '0']) {
+    await assert.rejects(
+      () => ops['workspaceChanges.diff']({ sessionId: 's1', seq: 42, index }, new AbortController().signal),
+      { code: 'bad-request' },
+    )
+  }
+  for (const args of [{ seq: 42, index: 0 }, { sessionId: 's1', index: 0 }, { sessionId: 's1', seq: 0.5, index: 0 }]) {
+    await assert.rejects(() => ops['workspaceChanges.diff'](args), { code: 'bad-request' })
+  }
+  assert.equal(called, false)
+  await ops['workspaceChanges.diff']({ sessionId: 's1', seq: 42, index: 0 }, new AbortController().signal)
+  assert.equal(called, true)
+})
+
+test('workspaceChanges.diff propagates Host errors and request cancellation', async () => {
+  const failure = new Error('snapshot read failed')
+  const failed = workspaceChangesOps({ async diff() { throw failure } })
+  await assert.rejects(() => failed['workspaceChanges.diff']({ sessionId: 's1', seq: 42, index: 0 }), (error) => error === failure)
+
+  const ac = new AbortController()
+  const cancelled = workspaceChangesOps({
+    diff(_sessionId, _seq, _index, signal) {
+      return new Promise((_resolve, reject) => {
+        signal.addEventListener('abort', () => reject(signal.reason), { once: true })
+      })
+    },
+  })
+  const pending = cancelled['workspaceChanges.diff']({ sessionId: 's1', seq: 42, index: 0 }, ac.signal)
+  ac.abort()
+  await assert.rejects(() => pending, (error) => error === ac.signal.reason)
+})
+
 test('session.attachment and attachments.upload forward', async () => {
   const att = attachmentOps({
     attachment: async (req) => ({ attachment: { attachmentId: req.attachmentId }, data: 'QQ==' }),

@@ -41,6 +41,10 @@ Data: `sessionController.follow` / `page` event stream (pocket `follow` / `histo
 | Deliverables | File cards under reply | `deliverables.row.*` 交付文件 / Present files | `deliverables/presented` |
 | Changed files | Diff entry under reply | `deliverables.changes.*` | turn file-change projection |
 
+Changed-file cards use the latest `workspace/changes` announcement per completed turn and the authenticated `workspaceChanges.summary(sessionId, seq)` response, not tool-output heuristics or event count placeholders. They appear between the final answer and message actions. The official code/file artwork, aggregate additions/deletions, ordered paths and per-file counts match desktop; more than four recorded files can expand/collapse. A single file uses its name and type icon, with binary/oversized status instead of invented zero counts. Missing/empty summaries render no card. Disabling the coding view also prevents summary requests.
+
+Tapping a title or row opens the native end panel at the original Host file index through `workspaceChanges.diff(sessionId, seq, index)`. The mobile review uses a wrapped single column with old/new line numbers, file switching, error retry, and a 5000-line render cap; it does not substitute current file contents for the recorded turn snapshot. Desktop split view, hover previews and syntax token colors are not reproduced. Old bridges can still serve the card; review activation requires reloading the updated bridge. Host restart/disposal may remove old in-memory summaries.
+
 ### 1.2 Markdown
 
 Desktop renderer (ui-chat / primitives): headings, lists, tables, fenced code (Meslo), inline code, links, images, footnotes (`markdown.footnotes`), truncation (`markdown.truncatedCharacters`).  
@@ -262,7 +266,7 @@ Guide artwork is selected from the owning feature's registry, not from generic c
 | 会话数据诊断 | `tab.title` 会话数据诊断 | Original follow/history records + Android chat projection | **done** — desktop presentation selector/count, table columns, type-filter popover, hierarchy, resizable JSON details and native Chat element picking |
 | 文档预览 | documentpreview locales | Host file bytes + preview (opened via `openResource`, not a guide capsule) | **done** — `files.read` text paging + `files.readBytes` (base64) for image/PDF; `FilePreviewSheet` |
 | Dock split / float | `dock.*` | desktop layout | **hide** (single adaptive end panel) |
-| Deliverable / changes-review tabs | `deliverables.*` | events / turn payloads | feasible once events parsed |
+| Deliverable / changes-review tabs | `deliverables.*` | `workspaceChanges.summary` / `.diff` | **done** as native end panels; changes use turn snapshots, not current file contents |
 
 Session diagnostics follows `experimental/session-inspector`'s `View.tsx`, `InspectorTable.tsx`, `TypeFilter.tsx`, `InspectorDetails.tsx` and locales. The compact toolbar contains the presentation selector, original crosshair, count, conditional earlier-history action and follow action. The horizontally scrollable table retains the 660dp minimum width and 64/190/65/100dp identity/type/T/S/UTC-time columns; Chat Group omits time. Filtering is explicitly confirmed, offers candidates, and preserves parent context. Detail trees use the desktop Object/Array labels, with raw JSON expanded and group children loaded on demand; the divider resizes the detail area within 15–80%. There are no added Copy/JSON/Tree controls, row-count suffix or explanatory banners.
 
@@ -343,7 +347,7 @@ Model settings use the desktop UI, not the mere existence of Host APIs, as their
 | Message clock | **done** (nowrap beside icons) | feasible |
 | Retry / turn-error / maxTokens rows | **done** (this PR) | feasible |
 | Stopped / interrupted copy | **done** (`message.stopped` 已停止) | feasible |
-| Deliverable / changed-file cards | **done** (parse `deliverables/presented` / `workspace/changes`) | Changes count enrichment still Host-summary limited |
+| Deliverable / changed-file cards | **done** (official artwork, full summary statistics, four-row disclosure, single-file status and snapshot review) | Host summary/diff lifetime applies; no fabricated fallback |
 | Streaming + stop | present | — |
 | Todo panel (清单) | **done** (parse `todo/write` + projections; sheet) | was needs-plugin |
 | User-questions prompts | **done** (push `user-question` + `userQuestions.answer`) | was needs-plugin |

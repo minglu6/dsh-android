@@ -33,6 +33,8 @@ dsh plugin --profile desktop add "$PWD"
 
 更新源码后重新安装依赖、执行 `npm run build:client`，按相同 profile 安装流程更新并重启 Host。尤其是修改 `src/client/**` 后必须重建 `lib/client.js`。**升级 APK 不会自动更新或重载电脑端桥接。**
 
+本轮文件改动通过 `workspaceChanges.summary {sessionId, seq}` 返回 Host 的完整摘要，通过 `workspaceChanges.diff {sessionId, seq, index}` 返回该轮指定文件的快照差异。`index` 是摘要文件列表的原始下标；只公布 Host 实际提供的方法，并传递请求取消信号。摘要／差异已释放时返回 `null`，不改读当前工作区文件。旧桥接需重启才能启用新增的差异接口。
+
 ## 配置与网络
 
 以 Web profile 为例，在 `$DSH_HOME/profiles/web/cordis.patch.yml` 配置（默认 `DSH_HOME` 为 `~/.dsh`）；桌面使用对应的 `desktop` profile。所有配置项均可省略：

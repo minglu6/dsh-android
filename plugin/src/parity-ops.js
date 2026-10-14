@@ -174,20 +174,23 @@ export function attachmentOps(sc) {
   }
 }
 
-/**
- * Host `workspaceChanges.summary(sessionId, seq)` — enrich `workspace/changes` chat cards.
- * Returns `{ summary }` or `{ summary: null }` when the Host no longer holds the turn.
- */
+/** Serve Host-retained turn summaries and comparisons; only publish supported methods. */
 export function workspaceChangesOps(workspaceChanges) {
-  return {
-    'workspaceChanges.summary': (a) => {
+  const ops = {}
+  if (typeof workspaceChanges?.summary === 'function') {
+    ops['workspaceChanges.summary'] = (a) => {
       if (!str(a.sessionId) || !Number.isSafeInteger(a.seq)) throw bad('sessionId and seq required')
-      if (!workspaceChanges?.summary) {
-        throw Object.assign(new Error('workspaceChanges unavailable'), { code: 'unavailable' })
-      }
       return { summary: workspaceChanges.summary(a.sessionId, a.seq) ?? null }
-    },
+    }
   }
+  if (typeof workspaceChanges?.diff === 'function') {
+    ops['workspaceChanges.diff'] = async (a, signal) => {
+      if (!str(a.sessionId) || !Number.isSafeInteger(a.seq)) throw bad('sessionId and seq required')
+      if (!Number.isSafeInteger(a.index) || a.index < 0) throw bad('non-negative safe index required')
+      return { diff: await workspaceChanges.diff(a.sessionId, a.seq, a.index, signal) ?? null }
+    }
+  }
+  return ops
 }
 
 /**

@@ -19,7 +19,14 @@ import kotlin.math.ceil
 /** Exact fixed-color SVG artwork from official ui-primitives FileTypeIcon and CodeFileIcon. */
 @Composable
 fun FileTypeIcon(path: String, directory: Boolean = false, modifier: Modifier = Modifier) {
-    val kind = if (directory) "folder" else classifyFileType(path)
+    FileArtwork(if (directory) "folder" else classifyFileType(path), modifier)
+}
+
+@Composable
+internal fun CodeFileIcon(modifier: Modifier = Modifier) = FileArtwork("code", modifier)
+
+@Composable
+private fun FileArtwork(kind: String, modifier: Modifier) {
     val picture = remember(kind) { fileTypePicture(kind) }
     Spacer(modifier.size(20.dp).drawWithCache {
         val side = size.minDimension

@@ -90,8 +90,7 @@ class ParityItemsTest {
         r.apply(ev(1, "workspace/changes", """{"turn":3}"""))
         val c = r.items().filterIsInstance<Item.Changes>().single()
         assertEquals(3, c.turn)
-        assertEquals(0, c.count)
-        assertNull(c.name)
+        assertEquals(1L, c.seq)
 
         r.apply(
             ev(
@@ -101,7 +100,46 @@ class ParityItemsTest {
         )
         val c2 = r.items().filterIsInstance<Item.Changes>().last()
         assertEquals(4, c2.turn)
-        assertEquals(1, c2.count)
-        assertEquals("src/a.kt", c2.name)
+        assertEquals(2L, c2.seq)
+    }
+
+    @Test fun latestWorkspaceChangesAnnouncementReplacesOnlyItsTurn() {
+        val r = TranscriptReducer()
+        r.apply(j("""{"type":"snapshot","cursor":0,"records":[],"projections":{}}"""))
+        r.apply(ev(1, "workspace/changes", """{"turn":3}"""))
+        r.apply(ev(2, "workspace/changes", """{"turn":4}"""))
+        r.apply(ev(3, "workspace/changes", """{"turn":3}"""))
+        val changes = r.items().filterIsInstance<Item.Changes>()
+        assertEquals(listOf(3, 4), changes.map { it.turn })
+        assertEquals(listOf(3L, 2L), changes.map { it.seq })
+        assertEquals("ch3", changes.first().key)
+        r.apply(ev(1, "workspace/changes", """{"turn":3}"""))
+        assertEquals(changes, r.items().filterIsInstance<Item.Changes>())
+    }
+
+    @Test fun historyPageDoesNotRestoreSupersededWorkspaceChanges() {
+        val r = TranscriptReducer()
+        r.apply(j("""{"type":"snapshot","cursor":4,"hasMore":true,"records":[
+            {"type":"event","event":{"type":"workspace/changes","seq":4,"data":{"turn":3}}}
+        ],"projections":{}}"""))
+        r.prepend(j("""[
+            {"type":"event","event":{"type":"workspace/changes","seq":1,"data":{"turn":2}}},
+            {"type":"event","event":{"type":"workspace/changes","seq":2,"data":{"turn":3}}},
+            {"type":"event","event":{"type":"workspace/changes","seq":3,"data":{"turn":3}}}
+        ]"""), false)
+        assertEquals(listOf(2, 3), r.items().filterIsInstance<Item.Changes>().map { it.turn })
+        assertEquals(listOf(1L, 4L), r.items().filterIsInstance<Item.Changes>().map { it.seq })
+    }
+
+    @Test fun snapshotKeepsLatestWorkspaceChangesAndDoesNotGuessFromText() {
+        val r = TranscriptReducer()
+        r.apply(j("""{"type":"snapshot","cursor":3,"records":[
+            {"type":"event","event":{"type":"workspace/changes","seq":1,"data":{"turn":2}}},
+            {"type":"event","event":{"type":"workspace/changes","seq":2,"data":{"turn":2}}},
+            {"type":"event","event":{"type":"assistant/message","seq":3,"data":{
+                "turn":3,"step":1,"stream":[],"message":{"content":[{"type":"text","text":"Edited a.kt +5 -2"}]}
+            }}}
+        ],"projections":{}}"""))
+        assertEquals(2L, r.items().filterIsInstance<Item.Changes>().single().seq)
     }
 }

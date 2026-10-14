@@ -310,7 +310,7 @@ private fun inspectorItemRow(item: Item): InspectorRow {
             "startedAt" to item.startedAt, "endedAt" to item.endedAt, "turn" to item.turn)
         is Item.Deliverable -> jsonOf("turn" to item.turn,
             "files" to item.files.map { jsonOf("path" to it.path, "description" to it.description) })
-        is Item.Changes -> jsonOf("turn" to item.turn, "count" to item.count, "name" to item.name, "seq" to item.seq)
+        is Item.Changes -> jsonOf("turn" to item.turn, "seq" to item.seq)
     }
     val type = when (item) {
         is Item.User -> "Item.User"

@@ -697,11 +697,20 @@ internal fun Transcript(
             if (control.turnSummary && targetRow != null && targetRow.key in control.controlledKeys) openTurns[control.key] = true
         }
     }
-    val rows = visibleChatRows(allRows, openTurns)
     val lastAnswers = remember(allRows) {
         allRows.filterIsInstance<ChatRow.Answer>().mapNotNull { row -> row.item.turn?.let { it to row.key } }.toMap()
     }
-    val revealIndex = remember(rows, revealItemKey) { revealItemKey?.let { inspectorRowIndex(rows, it) } ?: -1 }
+    val changesByTurn = remember(allRows) {
+        allRows.filterIsInstance<ChatRow.Changes>().associate { it.item.turn to it.item }
+    }
+    val rows = visibleChatRows(allRows, openTurns).filterNot {
+        it is ChatRow.Changes && it.item.turn in lastAnswers
+    }
+    val revealIndex = remember(rows, revealItemKey, changesByTurn, lastAnswers) {
+        val target = revealItemKey ?: return@remember -1
+        val attachedTurn = changesByTurn.entries.firstOrNull { it.value.key == target }?.key
+        inspectorRowIndex(rows, attachedTurn?.let { lastAnswers[it] } ?: target)
+    }
     val n = rows.size
     val lastLen = (st.items.lastOrNull() as? Item.Text)?.text?.length ?: 0
     val inspection = LocalInspectionMode.current
@@ -823,6 +832,13 @@ internal fun Transcript(
                     val usage = if (detailedUsage && turn != null) st.turnTokenUsage[turn] else null
                     Column(Modifier.fillMaxWidth()) {
                         MarkdownView(row.item.text, streaming = row.item.live)
+                        if (showActions && Pocket.prefs.showCodeWorkView) changesByTurn[turn]?.let { changes ->
+                            Box(Modifier.padding(top = 12.dp)) {
+                                InspectorChatTarget(changes.key, reveal = revealItemKey == changes.key) {
+                                    ChangesCard(st.sessionId, changes)
+                                }
+                            }
+                        }
                         if (showActions) MessageActions(
                             text = row.item.text,
                             timeMs = row.item.at,
@@ -852,7 +868,9 @@ internal fun Transcript(
                     onTool = onTool,
                 )
                 is ChatRow.Deliverable -> DeliverableCard(row.item)
-                is ChatRow.Changes -> if (Pocket.prefs.showCodeWorkView) ChangesCard(row.item)
+                is ChatRow.Changes -> if (Pocket.prefs.showCodeWorkView && st.turns.any { it.turn == row.item.turn && it.closed }) {
+                    ChangesCard(st.sessionId, row.item)
+                }
             }
             }
             }
@@ -1325,34 +1343,6 @@ private fun DeliverableCard(item: Item.Deliverable) {
     }
 }
 
-@Composable
-private fun ChangesCard(item: Item.Changes) {
-    var count by remember(item.key) { mutableIntStateOf(item.count) }
-    var name by remember(item.key) { mutableStateOf(item.name) }
-    LaunchedEffect(item.key, item.seq) {
-        val seq = item.seq ?: return@LaunchedEffect
-        if (count > 0 && name != null) return@LaunchedEffect
-        if ("workspaceChanges.summary" !in Pocket.ops.value) return@LaunchedEffect
-        Pocket.fetchChangesSummary(seq) { triple ->
-            if (triple == null) return@fetchChangesSummary
-            count = triple.first
-            if (triple.second != null) name = triple.second
-        }
-    }
-    val title = when {
-        name != null -> L.editedName(name!!)
-        else -> L.editedCount(count.coerceAtLeast(0))
-    }
-    SelectableOutput {
-        Row(
-            Modifier.fillMaxWidth().clip(T.R12).border(1.dp, T.Border, T.R12).padding(horizontal = 14.dp, vertical = 12.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Text(title, fontSize = 14.sp, color = T.Ink, modifier = Modifier.weight(1f))
-            Text("T${item.turn}", fontSize = 12.sp, color = T.Caption, style = T.Mono)
-        }
-    }
-}
 
 internal data class QuestionDraft(val selected: Set<String> = emptySet(), val custom: String = "") {
     val answered: Boolean get() = selected.isNotEmpty() || custom.isNotBlank()

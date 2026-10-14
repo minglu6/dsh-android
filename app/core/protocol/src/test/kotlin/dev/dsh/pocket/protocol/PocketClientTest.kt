@@ -107,6 +107,44 @@ class PocketClientTest {
         assertEquals(0, pendingCount(client))
     }
 
+    @Test fun workspaceChangeCallsKeepExplicitSessionEventAndFileIndex() = runTest {
+        withClient { client, transport ->
+            val summary = async { client.workspaceChangesSummary("specified-session", 42L) }
+            runCurrent()
+            val summaryRequest = transport.requests.last()
+            assertEquals("workspaceChanges.summary", summaryRequest["op"].str())
+            assertEquals("specified-session", summaryRequest["args"]["sessionId"].str())
+            assertEquals(42L, summaryRequest["args"]["seq"].long())
+            val summaryReply = jsonOf("summary" to jsonOf("turn" to 2, "total" to 9))
+            transport.reply(summaryRequest, summaryReply)
+            assertEquals(summaryReply, summary.await())
+
+            val diff = async { client.workspaceChangesDiff("another-session", 91L, 2) }
+            runCurrent()
+            val diffRequest = transport.requests.last()
+            assertEquals("workspaceChanges.diff", diffRequest["op"].str())
+            assertEquals("another-session", diffRequest["args"]["sessionId"].str())
+            assertEquals(91L, diffRequest["args"]["seq"].long())
+            assertEquals(2, diffRequest["args"]["index"].int())
+            val diffReply = jsonOf("diff" to jsonOf("kind" to "binary", "path" to "a.bin", "display" to "a.bin"))
+            transport.reply(diffRequest, diffReply)
+            assertEquals(diffReply, diff.await())
+        }
+    }
+
+    @Test fun workspaceDiffCancellationPropagatesAndReleasesPendingRequest() = runTest {
+        withClient { client, transport ->
+            val diff = async { client.workspaceChangesDiff("specified-session", 42L, 0) }
+            runCurrent()
+            val request = transport.requests.last()
+            diff.cancel()
+            assertFailsWith<CancellationException> { diff.await() }
+            runCurrent()
+            assertEquals(0, pendingCount(client))
+            assertNextRequestIgnoresLateReply(client, transport, request)
+        }
+    }
+
     @Test fun jobOutputBeforeSubscribeReplyIsRetainedAndCollectorCancellationUnfollows() = runTest {
         withClient { client, transport ->
             transport.onSend = {

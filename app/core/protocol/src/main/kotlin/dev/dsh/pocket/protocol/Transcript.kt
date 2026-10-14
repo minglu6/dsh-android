@@ -133,15 +133,10 @@ sealed interface Item {
         val files: List<DeliverableFile>,
         val turn: Int? = null,
     ) : Item
-    /**
-     * Turn file-change announcement from `workspace/changes`.
-     * [count]/[name] may stay sparse until Host summary is available ([count] 0 = unknown).
-     */
+    /** Turn file-change announcement; statistics are served separately by the Host summary. */
     data class Changes(
         override val key: String,
         val turn: Int,
-        val count: Int = 0,
-        val name: String? = null,
         /** Event seq for `workspaceChanges.summary`. */
         val seq: Long? = null,
     ) : Item
@@ -516,7 +511,8 @@ class TranscriptReducer {
                 later.resultAt = earlier.resultAt ?: later.resultAt
             }
         }
-        val older = prior.items()
+        val changedTurns = committed.filterIsInstance<Item.Changes>().mapTo(HashSet()) { it.turn }
+        val older = prior.items().filterNot { it is Item.Changes && it.turn in changedTurns }
         val olderSteps = prior.stepRecords()
         val shift = older.size
         if (shift > 0) {
@@ -880,16 +876,12 @@ class TranscriptReducer {
                 }
             }
             "workspace/changes" -> {
-                val turn = data["turn"].long()?.toInt() ?: return
-                // Event carries only turn; Host summary may enrich count/name later.
-                val count = data["total"].long()?.toInt()
-                    ?: data["count"].long()?.toInt()
-                    ?: data["files"].arr()?.size
-                    ?: 0
-                val name = data["files"].arr()?.singleOrNull()?.let { f ->
-                    f["display"].str() ?: f["path"].str()?.substringAfterLast('/')
-                }
-                committed += Item.Changes(key = "ch$seq", turn = turn, count = count, name = name, seq = seq)
+                val turn = data["turn"].long()?.takeIf { it in 0..Int.MAX_VALUE.toLong() }?.toInt()
+                    ?: return
+                // The official event carries only turn; statistics come exclusively from the Host summary.
+                val change = Item.Changes(key = "ch$seq", turn = turn, seq = seq)
+                val previous = committed.indexOfLast { it is Item.Changes && it.turn == turn }
+                if (previous >= 0) committed[previous] = change else committed += change
             }
         }
     }
