@@ -21,6 +21,29 @@ class FormatTest {
         assertNull(primaryArg("x", ""))
     }
 
+    @Test fun sessionTimeUsesDesktopElapsedBucketsAndClampsFutureActivity() {
+        val day = 86_400_000L
+        val now = 2_000_000_000_000L
+        val cases = listOf(
+            Triple(-60_000L, "刚刚", "now"),
+            Triple(59_999L, "刚刚", "now"),
+            Triple(60_000L, "1分钟", "1min"),
+            Triple(3_599_999L, "59分钟", "59min"),
+            Triple(3_600_000L, "1小时", "1h"),
+            Triple(day - 1, "23小时", "23h"),
+            Triple(day, "1天", "1d"),
+            Triple(30 * day - 1, "29天", "29d"),
+            Triple(30 * day, "1个月", "1mo"),
+            Triple(365 * day - 1, "12个月", "12mo"),
+            Triple(365 * day, "1年", "1y"),
+            Triple(2 * 365 * day, "2年", "2y"),
+        )
+        for ((elapsed, zh, en) in cases) {
+            assertEquals("zh elapsed=$elapsed", zh, formatSessionTime(now - elapsed, now, AppLanguage.Zh))
+            assertEquals("en elapsed=$elapsed", en, formatSessionTime(now - elapsed, now, AppLanguage.En))
+        }
+    }
+
     @Test fun messageClockMatchesDesktopRules() {
         fun at(y: Int, month0: Int, d: Int, h: Int, mi: Int): Long =
             java.util.Calendar.getInstance().apply {

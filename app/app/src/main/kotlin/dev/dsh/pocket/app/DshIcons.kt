@@ -8,6 +8,10 @@ import androidx.compose.ui.res.vectorResource
 object D {
     private val v: @Composable (Int) -> ImageVector = { ImageVector.vectorResource(it) }
     val ellipsis @Composable get() = v(R.drawable.dsh_ellipsis)
+    val archive @Composable get() = v(R.drawable.dsh_archive)
+    val unarchive @Composable get() = v(R.drawable.dsh_unarchive)
+    val pin @Composable get() = v(R.drawable.dsh_pin)
+    val pinFill @Composable get() = v(R.drawable.dsh_pin_fill)
     val panelRight @Composable get() = v(R.drawable.dsh_panel_right)
     val users @Composable get() = v(R.drawable.dsh_users)
     val agentPreset @Composable get() = v(R.drawable.dsh_agent_preset)

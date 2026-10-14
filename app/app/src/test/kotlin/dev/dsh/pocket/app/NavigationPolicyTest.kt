@@ -56,8 +56,6 @@ class NavigationPolicyTest {
         val all = listOf(session("source"), session("archived"), session("fork", "source", time = 3), session("other"))
         val order = reconcileSessionOrder(all, listOf("archived", "source", "other"))
         assertEquals(listOf("archived", "fork", "source", "other"), order)
-        assertEquals(listOf("archived", "source", "fork", "other"), moveSession(order, listOf("fork", "source", "other"), "source", -1))
-        assertEquals(order, moveSession(order, listOf("fork", "source"), "fork", -1))
         assertEquals(order, reconcileSessionOrder(all, order))
     }
 

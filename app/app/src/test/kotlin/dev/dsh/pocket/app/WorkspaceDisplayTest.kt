@@ -76,7 +76,6 @@ class WorkspaceDisplayTest {
         Pocket.prefs.setCollapsedWorkspaces("workspace-display", emptySet())
         rule.setContent { PocketTheme { SessionDrawer({}, {}, {}, {}) } }
         rule.onNodeWithText("默认工作区").assertIsDisplayed()
-        rule.onNodeWithText(windowsPath).assertIsDisplayed()
         rule.onRoot().captureRoboImage("build/screenshots/workspace-windows-sidebar.png",
             roborazziOptions = RoborazziOptions(taskType = RoborazziTaskType.Record))
         rule.runOnIdle { Pocket.prefs.language = AppLanguage.En }

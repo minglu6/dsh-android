@@ -95,10 +95,7 @@ private fun WorkspaceGroupHeader(
                 Modifier.size(16.dp).testTag("workspaceIcon:${workspace?.workspaceId ?: path}"),
                 tint = if (active) T.Accent else T.Text3)
             Spacer(Modifier.width(8.dp))
-            Column(Modifier.weight(1f)) {
-                Text(title, fontSize = 14.sp, color = T.Ink, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                if (path.isNotEmpty()) Text(path, fontSize = 10.sp, color = T.Caption, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            }
+            Text(title, modifier = Modifier.weight(1f), fontSize = 14.sp, color = T.Ink, maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
         if (workspace != null) {
             if ("workspace.rename" in ops || "workspace.delete" in ops) Box {

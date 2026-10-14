@@ -258,6 +258,10 @@ Empty: `empty.none` 暂无会话 / `empty.noMatches` 无匹配结果.
 
 Workspace action buttons retain 48dp touch targets. Opening actions never toggles the group. Cancelling rename discards its draft before reopening; cancelling deletion leaves the workspace unchanged. Verified on a physical Android device with `WorkspaceDisplayInstrumentedTest`, plus release-APK menu inspection and direct New session navigation against the connected Host.
 
+Workspace headers and session rows show their titles without working-directory subtitles or duplicate pinned/archived text. The current session row (or the row with an open menu) exposes the desktop-order `⋯ → archive/restore → pin/unpin` strip; other rows show the relative activity time and retain a filled pinned marker when pinned. Long-press opens a historical row's menu without opening the conversation; dismissing it restores the time. Touch targets remain 48dp while artwork uses the official Regular SVG paths at 14dp. The anchored menu contains only `置顶会话 → 重命名 → 分叉会话 → 归档会话`, with matching icons and state-dependent labels; no mobile-only move-up/down commands or unsupported desktop keyboard shortcuts. Blank sessions have no time or action strip, archived sessions have no pin/rename/fork actions, and archive confirmation continues to use the existing active-work safeguards. Full paths remain in the workspace picker, not the sidebar.
+
+Session times use the Host's `updatedAt` in epoch milliseconds and the desktop's elapsed-time buckets: now, minutes, hours, days, 30-day months and 365-day years, rounded down with future timestamps clamped to now. Chinese and English labels match `ui-workspace` (`2分钟` / `2min`, `9小时` / `9h`, `1个月` / `1mo`). A shared 30-second clock refreshes visible drawer rows, pauses in the background and refreshes on resume. Workspace, pinned, flat and search rows share this renderer; long titles ellipsize before the right-aligned time.
+
 ---
 
 ## 5. Right panel

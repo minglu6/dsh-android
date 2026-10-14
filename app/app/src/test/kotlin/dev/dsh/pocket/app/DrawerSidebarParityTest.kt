@@ -15,6 +15,8 @@ import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performTouchInput
+import androidx.compose.ui.test.longClick
 import androidx.compose.ui.test.assertTextEquals
 import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performTextInput
@@ -503,6 +505,127 @@ class DrawerSidebarParityTest {
         rule.setContent { PocketTheme { SessionDrawer({}, {}, {}, {}) } }
         rule.onNodeWithText("Visible fork").assertIsDisplayed()
         rule.onNodeWithText("Hidden child").assertDoesNotExist()
+    }
+    @Test
+    @Config(qualifiers = "w360dp-h792dp-xxhdpi")
+    @OptIn(com.github.takahirom.roborazzi.ExperimentalRoborazziApi::class)
+    fun historicalSessionTimesYieldToActionsAndReturnAfterDismissal() {
+        val now = System.currentTimeMillis()
+        val longTitle = "历史会话标题很长时仍然保留右侧完整的时间"
+        Pocket.prefs.archivedFilter = ArchivedFilter.Show
+        Pocket.ops.value = setOf("sessions.rename", "workspace.archiveSession", "workspace.pinSession")
+        Pocket.sessions.value = listOf(
+            SessionSummary("recent", longTitle, "/repo", false, false, now - 150_000, null),
+            SessionSummary("current", "当前会话", "/repo", false, false, now - 2_370_000, null),
+            SessionSummary("hours", "较早会话", "/repo", false, false, now - 9 * 3_600_000 - 30_000, null),
+            SessionSummary("month", "上个月的会话", "/repo", false, false, now - 35L * 86_400_000, null),
+        )
+        Pocket.workspaces.value = listOf(WorkspaceView("repo", "/repo", "Project", Pocket.sessions.value.map { it.sessionId }, null, null))
+        Pocket.chat.value = ChatState("current")
+        var picked: String? = null
+        rule.setContent { PocketTheme { SessionDrawer({ picked = it }, {}, {}, {}) } }
+        val time = rule.onNodeWithTag("sessionTime:recent", useUnmergedTree = true)
+        time.assertIsDisplayed().assertTextEquals("2分钟")
+        rule.onNodeWithTag("sessionTime:hours", useUnmergedTree = true).assertTextEquals("9小时")
+        rule.onNodeWithTag("sessionTime:month", useUnmergedTree = true).assertTextEquals("1个月")
+        rule.onNodeWithTag("sessionTime:current", useUnmergedTree = true).assertDoesNotExist()
+        rule.onNodeWithTag("sessionMenu:recent").assertDoesNotExist()
+        val titleBounds = rule.onNodeWithText(longTitle, useUnmergedTree = true).fetchSemanticsNode().boundsInRoot
+        val timeBounds = time.fetchSemanticsNode().boundsInRoot
+        assertTrue(titleBounds.right <= timeBounds.left)
+        assertTrue(kotlin.math.abs(titleBounds.center.y - timeBounds.center.y) < 2f)
+        for (appearance in listOf(Appearance.Light, Appearance.Dark)) {
+            rule.runOnIdle { Pocket.prefs.appearance = appearance }
+            rule.onRoot().captureRoboImage("build/screenshots/session-time-${appearance.name}.png",
+                roborazziOptions = RoborazziOptions(taskType = RoborazziTaskType.Record))
+        }
+        rule.onNodeWithText(longTitle).performTouchInput { longClick() }
+        time.assertDoesNotExist()
+        rule.onNodeWithText("重命名").assertIsDisplayed()
+        androidx.test.espresso.Espresso.pressBack()
+        time.assertIsDisplayed()
+        assertEquals(null, picked)
+        rule.runOnIdle {
+            Pocket.sessions.value = Pocket.sessions.value.map {
+                if (it.sessionId == "recent") it.copy(updatedAt = now - 5_430_000) else it
+            }
+            Pocket.prefs.language = AppLanguage.En
+        }
+        time.assertTextEquals("1h")
+        rule.runOnIdle {
+            Pocket.archivedIds.value = setOf("recent")
+        }
+        time.assertIsDisplayed().assertTextEquals("1h")
+    }
+
+
+    @Test
+    @Config(qualifiers = "w360dp-h792dp-xxhdpi")
+    @OptIn(com.github.takahirom.roborazzi.ExperimentalRoborazziApi::class)
+    fun sessionActionsStayOnTheirRowWithoutOpeningTheConversation() {
+        val cwd = "C:\\Users\\luming2\\Documents\\deepseek-harness\\default-workspace"
+        Pocket.ops.value = setOf("sessions.rename", "sessions.fork", "workspace.pinSession", "workspace.archiveSession")
+        Pocket.sessions.value = listOf(
+            SessionSummary("newer", "较新会话", cwd, false, false, 3, null),
+            SessionSummary("s1", "当前会话", cwd, false, false, 2, null),
+            SessionSummary("older", "较早会话", cwd, false, false, 1, null),
+        )
+        Pocket.workspaces.value = listOf(WorkspaceView("default", cwd, "default-workspace", listOf("newer", "s1", "older"), null, null))
+        Pocket.chat.value = ChatState("s1")
+        var picked: String? = null
+        rule.setContent { PocketTheme { SessionDrawer({ picked = it }, {}, {}, {}) } }
+        rule.onNodeWithText(cwd, useUnmergedTree = true).assertDoesNotExist()
+        val more = rule.onNodeWithTag("sessionMenu:s1").assertIsDisplayed()
+        val archive = rule.onNodeWithTag("sessionArchive:s1").assertIsDisplayed()
+        val pin = rule.onNodeWithTag("sessionPin:s1").assertIsDisplayed()
+        assertTrue(more.fetchSemanticsNode().boundsInRoot.right <= archive.fetchSemanticsNode().boundsInRoot.left)
+        assertTrue(archive.fetchSemanticsNode().boundsInRoot.right <= pin.fetchSemanticsNode().boundsInRoot.left)
+        for (appearance in listOf(Appearance.Light, Appearance.Dark)) {
+            rule.runOnIdle { Pocket.prefs.appearance = appearance }
+            rule.onRoot().captureRoboImage("build/screenshots/session-toolbar-${appearance.name}.png",
+                roborazziOptions = RoborazziOptions(taskType = RoborazziTaskType.Record))
+        }
+        rule.runOnIdle { Pocket.prefs.appearance = Appearance.Light }
+        more.performClick()
+        val items = listOf("置顶会话", "重命名", "分叉会话", "归档会话")
+        val bounds = items.map { rule.onNodeWithText(it).assertIsDisplayed().fetchSemanticsNode().boundsInWindow }
+        bounds.zipWithNext().forEach { (a, b) -> assertTrue(a.bottom <= b.top) }
+        rule.onNodeWithText("上移").assertDoesNotExist()
+        rule.onNodeWithText("下移").assertDoesNotExist()
+        androidx.test.espresso.Espresso.pressBack()
+        rule.onNodeWithText("分叉会话").assertDoesNotExist()
+        assertEquals(null, picked)
+        rule.onNodeWithText("当前会话", useUnmergedTree = true).performClick()
+        rule.runOnIdle { assertEquals("s1", picked) }
+    }
+
+    @Test
+    fun blankAndArchivedSessionsDoNotExposeInapplicableActions() {
+        Pocket.prefs.sessionGroupBy = SessionGroupBy.Flat
+        Pocket.prefs.archivedFilter = ArchivedFilter.Show
+        Pocket.ops.value = setOf("sessions.rename", "sessions.fork", "workspace.pinSession", "workspace.archiveSession")
+        Pocket.sessions.value = listOf(SessionSummary("s1", "Example", "/workspace", false, false, 1, null))
+        Pocket.chat.value = ChatState("s1")
+        rule.setContent { PocketTheme { SessionDrawer({}, {}, {}, {}) } }
+        rule.runOnIdle { Pocket.pinnedIds.value = setOf("s1") }
+        rule.onNodeWithTag("sessionPin:s1").assertContentDescriptionEquals("取消置顶")
+        rule.runOnIdle { Pocket.archivedIds.value = setOf("s1") }
+        rule.onNodeWithTag("sessionPin:s1").assertDoesNotExist()
+        rule.onNodeWithTag("sessionArchive:s1").assertContentDescriptionEquals("取消归档")
+        rule.onNodeWithTag("sessionMenu:s1").performClick()
+        rule.onNodeWithText("置顶会话").assertDoesNotExist()
+        rule.onNodeWithText("重命名").assertDoesNotExist()
+        rule.onNodeWithText("分叉会话").assertDoesNotExist()
+        rule.onNodeWithText("取消归档").assertIsDisplayed()
+        rule.runOnIdle {
+            Pocket.archivedIds.value = emptySet()
+            Pocket.pinnedIds.value = emptySet()
+            Pocket.sessions.value = Pocket.sessions.value.map { it.copy(blank = true) }
+        }
+        rule.onNodeWithTag("sessionMenu:s1").assertDoesNotExist()
+        rule.onNodeWithTag("sessionArchive:s1").assertDoesNotExist()
+        rule.onNodeWithTag("sessionPin:s1").assertDoesNotExist()
+        rule.onNodeWithTag("sessionTime:s1", useUnmergedTree = true).assertDoesNotExist()
     }
 
     @Test fun navigationPreferencesAreHostIsolated() {

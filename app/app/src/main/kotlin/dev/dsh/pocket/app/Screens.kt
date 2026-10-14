@@ -48,12 +48,16 @@ import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.lifecycle.repeatOnLifecycle
 import androidx.core.content.ContextCompat
 import dev.dsh.pocket.protocol.PairingLink
 import dev.dsh.pocket.protocol.parseHostPort
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -173,6 +177,15 @@ private fun SessionDrawerBody(
     val pinned by Pocket.pinnedIds.collectAsState()
     val ops by Pocket.ops.collectAsState()
     val activities = rememberSidebarActivities()
+    val lifecycle = LocalLifecycleOwner.current.lifecycle
+    val now by produceState(System.currentTimeMillis(), lifecycle) {
+        lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
+            while (true) {
+                value = System.currentTimeMillis()
+                delay(30_000)
+            }
+        }
+    }
     val profile = Pocket.profiles.collectAsState().value.firstOrNull { it.id == active }
     val workspaces by Pocket.workspaces.collectAsState()
     val host = active.orEmpty()
@@ -212,25 +225,17 @@ private fun SessionDrawerBody(
     }
     val ordered = if (orderBy == SessionOrderBy.Updated) sessions.sortedByDescending { it.updatedAt }
         else completeOrder.mapNotNull { id -> sessions.firstOrNull { it.sessionId == id } }
-    val moveOrder = if (orderBy == SessionOrderBy.Updated) ordered.map { it.sessionId } else completeOrder
     val visible = ordered.filter { visibleDrawerSession(it, chat?.sessionId, archived, archivedFilter) }
         .sortedByDescending { it.blank && it.sessionId == chat?.sessionId }
     val searchFocus = remember { FocusRequester() }
     val currentSearch by rememberUpdatedState(search)
     val currentHost by rememberUpdatedState(host)
-    fun saveOrder(ids: List<String>) {
-        savedOrder = ids
-        Pocket.prefs.setManualSessionOrder(host, ids)
-        orderBy = SessionOrderBy.Manual
-        Pocket.prefs.sessionOrderBy = orderBy
-    }
     fun toggleGroup(key: String) {
         sessionLimits.remove(key)
         collapsedWorkspaces = if (key in collapsedWorkspaces) collapsedWorkspaces - key else collapsedWorkspaces + key
         Pocket.prefs.setCollapsedWorkspaces(host, collapsedWorkspaces)
     }
     @Composable fun sessionRows(rows: List<dev.dsh.pocket.protocol.SessionSummary>, groupKey: String? = null) {
-        val peers = rows.filter { !it.blank && it.sessionId !in archived && it.archived != true }.map { it.sessionId }
         val limit = if (groupKey == null) Int.MAX_VALUE else sessionLimits[groupKey] ?: 5
         var idleCount = 0
         val projected = rows.filter { session ->
@@ -241,8 +246,9 @@ private fun SessionDrawerBody(
         projected.forEach { s ->
             key(s.sessionId) {
                 SessionRow(s, s.sessionId == chat?.sessionId, s.sessionId in archived || s.archived == true,
-                    s.sessionId in pinned && s.sessionId !in archived, menuSessionId == s.sessionId,
+                    menuSessionId == s.sessionId,
                     activity = activities[s.sessionId] ?: if (s.running) SidebarActivity.Running else SidebarActivity.Idle,
+                    now = now,
                     onPick = {
                         search = ""; searchExpanded = false
                         val workspace = workspaces.firstOrNull { s.sessionId in it.sessionIds }
@@ -255,12 +261,6 @@ private fun SessionDrawerBody(
                         onPick(s.sessionId)
                     },
                     onMenuOpenChange = { menuSessionId = if (it) s.sessionId else null },
-                    onMoveUp = peers.indexOf(s.sessionId).takeIf { search.isBlank() && it > 0 }?.let {
-                        { saveOrder(moveSession(moveOrder, peers, s.sessionId, -1)) }
-                    },
-                    onMoveDown = peers.indexOf(s.sessionId).takeIf { search.isBlank() && it >= 0 && it < peers.lastIndex }?.let {
-                        { saveOrder(moveSession(moveOrder, peers, s.sessionId, 1)) }
-                    },
                 )
             }
         }
@@ -512,13 +512,11 @@ private fun SessionRow(
     s: dev.dsh.pocket.protocol.SessionSummary,
     selected: Boolean,
     archived: Boolean,
-    pinned: Boolean,
     menuOpen: Boolean,
     activity: SidebarActivity,
+    now: Long,
     onPick: () -> Unit,
     onMenuOpenChange: (Boolean) -> Unit,
-    onMoveUp: (() -> Unit)? = null,
-    onMoveDown: (() -> Unit)? = null,
 ) {
     val ops by Pocket.ops.collectAsState()
     val archivedIds by Pocket.archivedIds.collectAsState()
@@ -531,10 +529,25 @@ private fun SessionRow(
     var archiveConfirm by remember { mutableStateOf(false) }
     var archiveActivity by remember { mutableStateOf<kotlinx.serialization.json.JsonElement?>(null) }
     var restoreConfirm by remember { mutableStateOf(false) }
+    val pinLabel = if (isPinned) L.unpinSession() else L.pinSession()
+    val pinIcon = if (isPinned) D.pinFill else D.pin
+    val archiveLabel = if (isArchived) L.unarchiveSession() else L.archiveSession()
+    val archiveIcon = if (isArchived) D.unarchive else D.archive
+    fun togglePin() {
+        onMenuOpenChange(false)
+        if (isPinned) Pocket.unpinSession(s.sessionId) else Pocket.pinSession(s.sessionId)
+    }
+    fun toggleArchive() {
+        onMenuOpenChange(false)
+        if (isArchived) Pocket.unarchiveSession(s.sessionId)
+        else Pocket.archiveSession(s.sessionId, stopActivity = false, onActivity = { details ->
+            archiveActivity = details; archiveConfirm = true
+        })
+    }
     Box {
         Row(
             Modifier.padding(horizontal = 10.dp).fillMaxWidth().clip(T.R8).background(if (selected) T.Fill else Color.Transparent)
-                .combinedClickable(onClick = { if (isArchived) restoreConfirm = true else onPick() }, onLongClick = { onMenuOpenChange(true) })
+                .combinedClickable(onClick = { if (isArchived) restoreConfirm = true else onPick() }, onLongClick = { if (!s.blank) onMenuOpenChange(true) })
                 .heightIn(min = 48.dp).padding(start = 16.dp, end = 4.dp, top = 4.dp, bottom = 4.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
@@ -547,61 +560,61 @@ private fun SessionRow(
                     Text(s.title ?: navText("新会话", "New session"), fontSize = 15.sp, color = if (isArchived) T.Caption else T.Ink, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
                 s.searchSnippet?.let { Text(it, color = T.Text2, fontSize = 12.sp, maxLines = 2, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(start = 22.dp)) }
-                s.cwd?.let { Text(it, color = T.Caption, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(start = 22.dp)) }
-                if (archived || pinned) {
-                    Text(
-                        listOfNotNull(if (pinned) L.pinned() else null, if (archived) L.archived() else null).joinToString(" · "),
-                        fontSize = 11.sp, color = T.Caption, modifier = Modifier.padding(start = 22.dp),
+            }
+            if (!s.blank) {
+                // Touch has no hover: expose the desktop action strip for the current/menu row.
+                val showActions = selected || menuOpen
+                Box {
+                    if (showActions) IconButton({ onMenuOpenChange(!menuOpen) }, Modifier.size(48.dp).testTag("sessionMenu:${s.sessionId}")) {
+                        Icon(D.ellipsis, L.moreActions(), Modifier.size(14.dp), tint = T.Caption)
+                    }
+                    if (!showActions) Text(
+                        formatSessionTime(s.updatedAt, now, Pocket.prefs.language),
+                        color = T.Caption,
+                        fontSize = 12.sp,
+                        maxLines = 1,
+                        modifier = Modifier.padding(start = 8.dp, end = 12.dp).testTag("sessionTime:${s.sessionId}"),
                     )
+                    DropdownMenu(
+                        expanded = menuOpen,
+                        onDismissRequest = { onMenuOpenChange(false) },
+                        containerColor = T.Surface,
+                        shape = T.R12,
+                    ) {
+                        if ("workspace.pinSession" in ops && !isArchived) DropdownMenuItem(
+                            text = { Text(pinLabel) },
+                            leadingIcon = { Icon(pinIcon, null, Modifier.size(16.dp)) },
+                            onClick = ::togglePin,
+                        )
+                        if ("sessions.rename" in ops && !isArchived) DropdownMenuItem(
+                            text = { Text(L.rename()) },
+                            leadingIcon = { Icon(D.edit, null, Modifier.size(16.dp)) },
+                            onClick = { onMenuOpenChange(false); renameOpen = true },
+                        )
+                        if ("sessions.fork" in ops && !isArchived) DropdownMenuItem(
+                            text = { Text(navText("分叉会话", "Fork session")) },
+                            leadingIcon = { Icon(D.branch, null, Modifier.size(16.dp)) },
+                            onClick = { onMenuOpenChange(false); Pocket.forkSessionFrom(s.sessionId) },
+                        )
+                        if ("workspace.archiveSession" in ops) DropdownMenuItem(
+                            text = { Text(archiveLabel) },
+                            leadingIcon = { Icon(archiveIcon, null, Modifier.size(16.dp)) },
+                            onClick = ::toggleArchive,
+                        )
+                    }
                 }
-            }
-            IconButton({ onMenuOpenChange(true) }, Modifier.size(48.dp).testTag("sessionMenu:${s.sessionId}")) {
-                Icon(D.ellipsis, L.moreActions(), Modifier.size(18.dp), tint = T.Caption)
-            }
-        }
-        // DropdownMenu (not a bottom sheet): first tap reaches items; drawer gestures stay uninvolved.
-        DropdownMenu(
-            expanded = menuOpen,
-            onDismissRequest = { onMenuOpenChange(false) },
-            containerColor = T.Surface,
-        ) {
-            if ("sessions.rename" in ops && !isArchived) DropdownMenuItem(
-                text = { Text(L.rename()) },
-                onClick = { onMenuOpenChange(false); renameOpen = true },
-            )
-            if ("workspace.pinSession" in ops && !isArchived) {
-                DropdownMenuItem(
-                    text = { Text(if (isPinned) L.unpinSession() else L.pinSession()) },
-                    onClick = {
-                        if (isPinned) Pocket.unpinSession(s.sessionId) else Pocket.pinSession(s.sessionId)
-                        onMenuOpenChange(false)
-                    },
-                )
-            }
-            if ("workspace.archiveSession" in ops) {
-                DropdownMenuItem(
-                    text = { Text(if (isArchived) L.unarchiveSession() else L.archiveSession()) },
-                    onClick = {
-                        if (isArchived) Pocket.unarchiveSession(s.sessionId)
-                        else Pocket.archiveSession(s.sessionId, stopActivity = false, onActivity = { details ->
-                            archiveActivity = details; archiveConfirm = true
-                        })
-                        onMenuOpenChange(false)
-                    },
-                )
-            }
-            if ("sessions.fork" in ops && !isArchived) {
-                DropdownMenuItem(
-                    text = { Text(navText("在新对话中分支", "Fork in new conversation")) },
-                    onClick = {
-                        Pocket.forkSessionFrom(s.sessionId)
-                        onMenuOpenChange(false)
-                    },
-                )
-            }
-            if (!isArchived && !s.blank) {
-                onMoveUp?.let { move -> DropdownMenuItem(text = { Text(navText("上移", "Move up")) }, onClick = { move(); onMenuOpenChange(false) }) }
-                onMoveDown?.let { move -> DropdownMenuItem(text = { Text(navText("下移", "Move down")) }, onClick = { move(); onMenuOpenChange(false) }) }
+                if (showActions && "workspace.archiveSession" in ops) IconButton(
+                    ::toggleArchive, Modifier.size(48.dp).testTag("sessionArchive:${s.sessionId}"),
+                ) {
+                    Icon(archiveIcon, archiveLabel, Modifier.size(14.dp), tint = T.Caption)
+                }
+                if (showActions && "workspace.pinSession" in ops && !isArchived) IconButton(
+                    ::togglePin, Modifier.size(48.dp).testTag("sessionPin:${s.sessionId}"),
+                ) {
+                    Icon(pinIcon, pinLabel, Modifier.size(14.dp), tint = T.Caption)
+                } else if (isPinned && !isArchived) {
+                    Icon(D.pinFill, L.pinned(), Modifier.padding(end = 17.dp).size(14.dp), tint = T.Caption)
+                }
             }
         }
     }

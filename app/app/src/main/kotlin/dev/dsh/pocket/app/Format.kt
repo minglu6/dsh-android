@@ -68,6 +68,20 @@ fun formatElapsed(ms: Long): String {
     return if (ms < 10_000) "${"%.2f".format(seconds)}s" else "${"%.1f".format(seconds)}s"
 }
 
+/** Desktop relative-time buckets use elapsed milliseconds, not calendar boundaries. */
+internal fun formatSessionTime(at: Long, now: Long, language: AppLanguage): String {
+    val diff = (now - at).coerceAtLeast(0)
+    val en = language == AppLanguage.En
+    return when {
+        diff < 60_000L -> if (en) "now" else "刚刚"
+        diff < 3_600_000L -> "${diff / 60_000L}" + if (en) "min" else "分钟"
+        diff < 86_400_000L -> "${diff / 3_600_000L}" + if (en) "h" else "小时"
+        diff < 30 * 86_400_000L -> "${diff / 86_400_000L}" + if (en) "d" else "天"
+        diff < 365 * 86_400_000L -> "${diff / (30 * 86_400_000L)}" + if (en) "mo" else "个月"
+        else -> "${diff / (365 * 86_400_000L)}" + if (en) "y" else "年"
+    }
+}
+
 /**
  * Desktop `formatMessageClock` / `clock.md` / `clock.ymd`:
  * same calendar day → `HH:mm`; same year → `{m}月{d}日 HH:mm`; else `{y}年{m}月{d}日`.

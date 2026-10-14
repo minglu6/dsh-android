@@ -43,17 +43,6 @@ internal fun reconcileSessionOrder(sessions: List<SessionSummary>, saved: List<S
     return order
 }
 
-/** Reorder only visible peers; hidden archived slots and other groups remain intact. */
-internal fun moveSession(order: List<String>, peers: List<String>, id: String, delta: Int): List<String> {
-    val index = peers.indexOf(id)
-    val target = peers.getOrNull(index + delta) ?: return order
-    if (index < 0) return order
-    val from = order.indexOf(id)
-    val to = order.indexOf(target)
-    if (from < 0 || to < 0) return order
-    return order.toMutableList().apply { this[from] = target; this[to] = id }
-}
-
 internal data class WorkspaceBranch(val path: String, val children: List<WorkspaceBranch>)
 
 /** A path-segment tree, so /a/project never absorbs /b/project or /a/project-other. */
