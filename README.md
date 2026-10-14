@@ -1,68 +1,106 @@
 # dsh-android
 
-**像使用手机应用一样，操作电脑上的 DSH。**
+**English** | [简体中文](README.zh-CN.md)
 
-[DeepSeek Harness（dsh）](https://github.com/deepseek-ai/deepseek-harness) 的非官方原生 Android 客户端，使用 Kotlin 与 Jetpack Compose 开发。以**接近 100% 复刻桌面版的功能与交互体验**为目标，把电脑上的 DSH 带到手机，而不只是提供一个精简聊天窗口。
+Unofficial native Android remote client for [DeepSeek Harness (dsh)](https://github.com/deepseek-ai/deepseek-harness). The phone is a control surface only: model calls, tool execution, files, terminals, and scheduled work run on the desktop Host. This repository is not developed or maintained by DeepSeek.
 
-模型调用、工具执行、文件和任务仍由电脑上的 dsh Host 承担；手机不是独立的本地 Agent，也不是把完整桌面网页套进 WebView。本项目不由 DeepSeek 官方开发或维护。
+The app is written in Kotlin and Jetpack Compose. It is not a WebView of the desktop UI, and it does not run a local Agent on the phone.
 
-[下载 APK](https://github.com/minglu6/dsh-android/releases/tag/dsh-android-latest) · [快速开始](#快速开始) · [Android 使用与开发](app/README.md) · [Host 插件说明](plugin/README.md)
+[Download APK](https://github.com/minglu6/dsh-android/releases/download/dsh-android-latest/dsh-android.apk) · [Android notes](app/README.md) · [Host plugin](plugin/README.md)
 
-## 项目特色
+## Features
 
-- **桌面体验高度复刻**：围绕桌面版的功能入口、界面风格和操作逻辑持续对齐，覆盖会话、模型、审批、工作区、终端、插件与自动化等主要场景。
-- **用手机的方式操作电脑**：针对触屏、软键盘和窄屏布局做原生适配，使用抽屉、侧面板和触控操作，不用在手机上拖动桌面画面或点击缩小的网页按钮。
-- **同一台电脑，同一套 DSH**：直接操作电脑 Host 的会话、文件、工具与配置，任务仍在电脑执行；离开电脑后，也能在手机上继续查看和处理。
+Available surfaces depend on the Host version and enabled plugins. The list below matches what the current client and bridge implement.
 
-## 主要功能
+| Area | Capabilities |
+| --- | --- |
+| Sessions | Streaming chat, reasoning and tool process, history, queue / steer send, approvals and user questions, model and reasoning-effort selection |
+| Workspaces | Session grouping, register and switch Host workspaces, directory browse and search, file preview |
+| Host tools | PTY terminal, background jobs, session trajectory and data diagnostics; a phone-local browser panel |
+| Configuration | Host model providers, Agent presets, shared general settings, plugin management and the built-in plugin inventory |
+| Automation | Task search, rule editing, delivery history and deletion; the create entry opens a conversation |
+| Connection | QR / pairing URI, LAN mDNS discovery, multi-host management, connection diagnostics, reconnect with cursor resume |
 
-| 场景 | 能力 |
-|---|---|
-| 会话与协作 | 流式聊天、思考与工具过程、历史记录、排队／插话发送、审批与提问、模型和推理等级选择 |
-| 工作区 | 会话分组、注册与切换主机工作区、目录浏览与搜索、文件预览 |
-| 主机工具 | PTY 终端、后台任务、会话轨迹与数据诊断；另提供手机端浏览器面板 |
-| 配置管理 | Host 模型提供商、Agent 预设、共享通用设置、插件管理与内置插件目录 |
-| 自动化 | 任务搜索、规则编辑、投递历史和删除；新建入口进入会话 |
-| 连接 | 扫码／配对链接、局域网 mDNS 发现、多主机管理、连接诊断、断线续订 |
+## Screenshots
 
-“接近 100%”是功能与体验的对齐目标，不是已量化的覆盖率。可用功能取决于 Host 版本与启用的插件；第三方页面和平台能力的具体差异见[已知限制](#已知限制)。
-
-## 界面演示
-
-截图由当前 Compose 界面在 Robolectric 中渲染，使用演示数据，不包含私人会话或真实凭据。点击图片可查看大图。
+Screenshots are rendered from the current Compose UI under Robolectric with demo data. They do not contain private conversations or real credentials.
 
 <table>
   <tr>
-    <td align="center"><a href="docs/screenshots/showcase/chat.png"><img src="docs/screenshots/showcase/chat.png" width="250" alt="聊天与运行过程" /></a><br />聊天与运行过程</td>
-    <td align="center"><a href="docs/screenshots/showcase/workspace.png"><img src="docs/screenshots/showcase/workspace.png" width="250" alt="工作区与会话导航" /></a><br />工作区与会话导航</td>
-    <td align="center"><a href="docs/screenshots/showcase/models.png"><img src="docs/screenshots/showcase/models.png" width="250" alt="模型提供商配置" /></a><br />模型提供商配置</td>
+    <td align="center"><a href="docs/screenshots/showcase/chat.png"><img src="docs/screenshots/showcase/chat.png" width="250" alt="Chat and run process" /></a><br />Chat and run process</td>
+    <td align="center"><a href="docs/screenshots/showcase/workspace.png"><img src="docs/screenshots/showcase/workspace.png" width="250" alt="Workspace and session navigation" /></a><br />Workspace and session navigation</td>
+    <td align="center"><a href="docs/screenshots/showcase/models.png"><img src="docs/screenshots/showcase/models.png" width="250" alt="Model provider settings" /></a><br />Model provider settings</td>
   </tr>
   <tr>
-    <td align="center"><a href="docs/screenshots/showcase/terminal.png"><img src="docs/screenshots/showcase/terminal.png" width="250" alt="主机终端" /></a><br />主机终端</td>
-    <td align="center"><a href="docs/screenshots/showcase/plugins.png"><img src="docs/screenshots/showcase/plugins.png" width="250" alt="插件管理" /></a><br />插件管理</td>
-    <td align="center"><a href="docs/screenshots/showcase/schedule.png"><img src="docs/screenshots/showcase/schedule.png" width="250" alt="自动化任务" /></a><br />自动化任务</td>
+    <td align="center"><a href="docs/screenshots/showcase/terminal.png"><img src="docs/screenshots/showcase/terminal.png" width="250" alt="Host terminal" /></a><br />Host terminal</td>
+    <td align="center"><a href="docs/screenshots/showcase/plugins.png"><img src="docs/screenshots/showcase/plugins.png" width="250" alt="Plugin management" /></a><br />Plugin management</td>
+    <td align="center"><a href="docs/screenshots/showcase/schedule.png"><img src="docs/screenshots/showcase/schedule.png" width="250" alt="Scheduled tasks" /></a><br />Scheduled tasks</td>
   </tr>
 </table>
 
-## 下载与运行前提
+## Architecture
 
-- **手机：** Android 8.0（API 26）或更新版本。
-- **电脑：** 已安装 dsh，且保持 Host 运行。当前 CI 集成测试固定使用 `@deepseek-ai/dsh@0.2.1-alpha.2`；插件声明的 session-controller peer 范围为 `>=0.2.1-alpha.2 <0.2.2-0`，不等于所有版本均已验证。
-- **Node.js：** `^22.19.0 || >=24.0.0`，即 22.x 的 22.19.0 及以上，或 24.0.0 及以上；不包含 23.x。`dsh plugin` 需要 PATH 中有 pnpm，CI 使用 `pnpm@10`。
-- **网络：** 手机与电脑在可互访的局域网，或同一可互访的 Tailscale 网络。默认桥接端口为 TCP `7690`，防火墙需允许访问；Wi-Fi 客户端隔离会阻断连接。
+```
+Android app (dev.dsh.pocket)          Desktop
+┌──────────────────────────┐          ┌─────────────────────────────────────┐
+│ Kotlin / Compose client  │  JSON    │ dsh Host                            │
+│ display and control only │  over WS │  └─ dsh-plugin-pocket               │
+│                          │◄────────►│      in-process Host services       │
+│ core/protocol            │ host:port│      authenticated JSON protocol    │
+└──────────────────────────┘          │                                     │
+                                      │ optional: pocket-host (iroh)        │
+                                      │ only when config.iroh = true        │
+                                      └─────────────────────────────────────┘
+```
 
-从 [滚动预发布页面](https://github.com/minglu6/dsh-android/releases/tag/dsh-android-latest) 下载安装：
+The phone talks to `dsh-plugin-pocket` over an authenticated JSON/WebSocket protocol. The plugin runs inside the dsh process and calls Host session, workspace, settings, terminal, plugin, and schedule services in-process. The phone does not keep a second task database, package manager, or model runtime.
 
-- [dsh-android.apk](https://github.com/minglu6/dsh-android/releases/download/dsh-android-latest/dsh-android.apk)：release 构建，开启 R8 与资源压缩。
-- [dsh-android-debug.apk](https://github.com/minglu6/dsh-android/releases/download/dsh-android-latest/dsh-android-debug.apk)：debug 构建，供调试使用。
+### Phone path: LAN or Tailscale WebSocket
 
-按 Android 提示允许所用浏览器或文件管理器安装 APK。**release 构建不代表一定使用发布密钥签名**：CI 配齐签名 Secrets 时使用指定密钥，否则回退到 debug keystore。发布说明中的 `Signing=secrets` 或 `Signing=debug-fallback` 标明构建方式；签名不同的 APK 无法直接覆盖安装，应先保留需要的数据再处理安装冲突。
+The Android client uses **host:port WebSocket only**. The APK does not ship `libpocket_iroh.so` or JNI.
 
-## 快速开始
+- Default listen address is `0.0.0.0:7690`. Pairing advertises IPv4 only; IPv6-only pairing is not supported.
+- When both a LAN IPv4 and a Tailscale address (`100.64.0.0/10` or `*.ts.net`) are available, **Settings → Phone connection** can switch **LAN / Tailscale**. The advertised address, QR code, and copy link change; the listener is not restarted and existing paired connections are not dropped.
+- The plugin advertises `_dshpocket._tcp` over mDNS. The phone can discover nearby hosts on the same LAN.
+- The LAN path is `ws://` / HTTP and has no TLS. Pairing authenticates the device; it does not encrypt the wire. Cross-network use should be Tailscale or another trusted encrypted path. Do not expose port 7690 to the public internet.
+- Wi-Fi client isolation blocks LAN pairing. Both ends of a Tailscale path must be able to reach each other on the tailnet.
 
-### 1. 在电脑安装桥接插件
+### Optional desktop iroh sidecar
 
-以下从源码安装，示例使用 `web` profile。如果尚未安装 dsh 与 pnpm，可按当前 CI 的版本安装：
+`plugin/iroh/pocket-host` starts only when the plugin config sets `iroh: true`. It is a leftover desktop experiment and is **not** used for phone pairing.
+
+- The sidecar speaks newline-JSON with the plugin over stdio and accepts iroh peers on ALPN `dsh-pocket/1`.
+- Discovery uses iroh N0 (pkarr). The default relay is a self-hosted Tokyo endpoint at `https://iroh.9643275.xyz.`. Desktop `pocket-host` can override relays with the comma-separated `DSH_IROH_RELAY_URLS` environment variable.
+- After an 8-second upgrade window the sidecar reports the path as `direct` or `relay`.
+- Ordinary Android users do not need to build or install it. CI still builds Linux x64 and macOS arm64 binaries for plugin tests and the rolling release.
+
+## Download and install
+
+Requirements:
+
+- Phone: Android 8.0 (API 26) or later.
+- Desktop: dsh installed and the Host kept running. CI integration tests pin `@deepseek-ai/dsh@0.2.1-alpha.2`. The plugin peer range is `>=0.2.1-alpha.2 <0.2.2-0`; that is a dependency declaration, not a claim that every version in the range is tested.
+- Node.js: `^22.19.0 || >=24.0.0` (22.19.0+ on 22.x, or 24.0.0+). 23.x is not included. `dsh plugin` requires `pnpm` on `PATH`; CI uses `pnpm@10`.
+- Network: a reachable LAN, or the same Tailscale tailnet. The firewall must allow the bridge port (default TCP `7690`).
+
+Latest release APK (R8 minify and resource shrinking):
+
+https://github.com/minglu6/dsh-android/releases/download/dsh-android-latest/dsh-android.apk
+
+Related artifacts on the [rolling prerelease](https://github.com/minglu6/dsh-android/releases/tag/dsh-android-latest):
+
+- [dsh-android-debug.apk](https://github.com/minglu6/dsh-android/releases/download/dsh-android-latest/dsh-android-debug.apk) — debug build.
+- `pocket-host-linux-x64` and `pocket-host-darwin-arm64` — optional desktop sidecar binaries.
+
+Allow the browser or file manager to install the APK. A release build is not always signed with a production key: CI uses the configured keystore when the signing Secrets are present, otherwise it falls back to the debug keystore. Release notes mark `Signing=secrets` or `Signing=debug-fallback`. APKs signed with different keys cannot overwrite each other.
+
+## Desktop plugin and pairing
+
+The plugin is not published to npm. Install it from this repository into the dsh profile you actually run.
+
+### Install the bridge
+
+Example for the `web` profile. If dsh and pnpm are not installed yet, match the versions CI uses:
 
 ```bash
 npm install -g pnpm@10 @deepseek-ai/dsh@0.2.1-alpha.2
@@ -77,51 +115,166 @@ dsh plugin --profile web add "$PWD"
 dsh web
 ```
 
-插件安装到指定 profile；若使用桌面 App，需在其 `desktop` profile 安装，而不是只装到 `web`。管理入口位于 **设置 → 手机连接**，不在账号菜单里。更多配置见 [插件说明](plugin/README.md)。
+The desktop app uses the `desktop` profile. Install there as well; installing only into `web` does not affect the desktop Host:
 
-### 2. 配对手机
+```bash
+dsh plugin --profile desktop add "$PWD"
+```
 
-1. 电脑打开 **设置 → 手机连接**，选择局域网或 Tailscale，并打开配对窗口。
-2. 手机打开会话侧栏底部的主机信息，进入连接管理，选择 **扫码** 或 **输入地址**；同一局域网也可从 **附近设备** 发现主机。
-3. 扫描二维码或输入配对链接 `dshpocket://pair?h=<host:port>&c=<6位码>`。名称可留空，默认使用主机地址。
-4. 连接成功后，选择工作区／会话即可使用。模型提供商和凭据由 Host 管理；手机侧的模型设置也是对该 Host 的配置。
+Restart the matching Host after install or upgrade. The management UI is registered through the official client half at **Settings → Phone connection**. It is not injected into the account menu.
 
-配对码有效期为 10 分钟，最多尝试 3 次，成功后立即失效。更新 APK 后若新入口仍不可用，应同步更新插件并重启相应 Host；安装 APK 不会替换电脑上正在运行的桥接。
+After source changes, reinstall dependencies, run `npm run build:client` again (required after edits under `src/client/**`), re-add the plugin to the same profile, and restart the Host. Installing a new APK does not update or reload the desktop bridge.
 
-## 网络与安全边界
+Optional plugin config lives in `$DSH_HOME/profiles/<profile>/cordis.patch.yml` (default `DSH_HOME` is `~/.dsh`). All fields may be omitted:
 
-- 默认监听 `0.0.0.0:7690`，优先公布局域网 IPv4；也可选 Tailscale 或配置特定监听地址。请用防火墙限制访问范围，**不要将该端口直接暴露到公网**。
-- 局域网使用 `ws://`／HTTP，桥接本身不提供 TLS；配对鉴权不等于传输加密。跨网络连接应使用 Tailscale 或已有可信的加密链路。
-- 配对设备能够控制当前 Host 的会话、终端和配置，应按主机管理凭据保护。手机 token 由 Android Keystore 密钥加密存储；Host 保存设备 token 的 SHA-256，并可在「手机连接」撤销设备。
-- 可选的插件自定义 Web 页面使用短期票据与网页会话，不向 WebView 暴露长期手机 token 或 Host 启动令牌；这不是对任意第三方插件的安全担保。仅安装和访问可信插件。
-- 诊断报告包含网络地址、实例 ID 等信息，分享前请自行检查敏感内容。
+```yaml
+- id: dsh-pocket
+  config:
+    # host: 192.168.1.10       # bind / advertise this interface; omit to bind 0.0.0.0
+    # port: 7690
+    # dataDir: /path/to/pocket # default $DSH_HOME/pocket
+    # token: <owner-token>     # optional fixed owner token
+    # pair: true               # open the pairing window on start
+    # iroh: true               # legacy desktop sidecar only
+    # hostBinary: /path/to/pocket-host
+```
 
-## 已知限制
+The plugin also disables the default `directory-picker` auto entry and loads the official `browse` backend and client, so desktop and phone use in-app directory browsing.
 
-- 不支持手机本地运行 dsh；电脑休眠、Host 退出或网络不可达时无法继续远程操作。
-- 配对地址发现使用 IPv4，不支持 IPv6-only 配对。Android 手机链路仅使用 host:port WebSocket，不包含 iroh JNI；仓库保留的 iroh sidecar 只用于可选桌面实验。
-- 模型设置是原生页面，不展示 Qoder 等插件自定义卡片；第三方页面通过插件详情的独立入口打开，Electron／桌面原生 API、设备文件选择和下载等能力不受支持。
-- 终端恢复依赖 Host 仍保留对应 Shell，不是进程快照。自动化投递成功也不等于模型执行完成。
-- 上游仍为 alpha，能力与内部 API 可能变化。升级时应同时关注 App、桥接和 dsh 版本；详细边界见 [Android 说明](app/README.md) 与 [功能对齐清单](docs/feature-parity.md)。
+### Pair the phone
 
-## 开发与文档导航
+1. On the computer, open **Settings → Phone connection**, choose LAN or Tailscale, and open the pairing window. The first start with no paired devices opens the window automatically and prints the 6-digit code in the Host log.
+2. On the phone, open the host row at the bottom of the session drawer, then Connection management. Use **Scan**, **Enter address**, or **Nearby devices** on the same LAN.
+3. Scan the QR code or enter `dshpocket://pair?h=<host:port>&c=<6-digit-code>`. Leave the name empty to use the host address.
+4. After the connection succeeds, select a workspace or session. Model providers and credentials are owned by the Host; phone model settings edit that Host.
 
-| 路径 | 内容 |
-|---|---|
-| [app/](app/README.md) | Android 工程、使用说明、构建与测试入口；`core/protocol` 为纯 Kotlin/JVM 协议模块，`app` 为 Compose 应用 |
-| [plugin/](plugin/README.md) | Host 桥接、安装配置、配对与协议契约、插件开发 |
-| [docs/feature-parity.md](docs/feature-parity.md) | 功能对齐清单与原生能力边界 |
-| [docs/desktop-parity.md](docs/desktop-parity.md) | 桌面交互与移动端实现对照 |
-| [docs/trajectory-parity.md](docs/trajectory-parity.md) | 会话轨迹的数据与展示约定 |
-| [docs/design.md](docs/design.md)、[docs/api-notes.md](docs/api-notes.md) | 初始架构、协议设计及上游 API 研究；含历史规划，当前行为以代码和本项目说明为准 |
-| [.github/workflows/ci.yml](.github/workflows/ci.yml) | 插件检查、真实 Host 集成、Android 构建、模拟器测试及滚动发布配置 |
+The pairing code is valid for 10 minutes, allows at most 3 attempts, and is consumed on success. Legacy iroh forms (`n=` / `nodeId#code`) are rejected; re-pair from the desktop UI.
 
-CI 在 `main` push 时更新 `dsh-android-latest` 滚动预发布；PR 也运行检查，但不发布该 tag。构建签名需在仓库 Actions Secrets 配齐 `ANDROID_KEYSTORE_B64`、`ANDROID_KEYSTORE_PASSWORD`、`ANDROID_KEY_ALIAS`、`ANDROID_KEY_PASSWORD`；keystore 不应提交到仓库，CI 使用后会删除临时文件。Android 本地构建与签名环境变量见 [app/README.md](app/README.md)。
+Local owner CLI (from `plugin/`, default `ws://127.0.0.1:7690` and `$DSH_HOME/pocket/token`):
 
-## 致谢与第三方归属
+```bash
+node bin/pocket.js pair
+node bin/pocket.js devices
+node bin/pocket.js revoke <device-id>
+```
 
-- [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)：Host 能力、交互与视觉参考；部分文案、图标和动画沿用上游资产。
-- [dsh-mobile](https://github.com/saya-ch/dsh-mobile)：移动导航与远程连接等实现参考；改编部分的文件头保留归属说明。
-- [AndroidSVG](https://github.com/BigBadaboom/androidsvg)：原生渲染插件 SVG 图标。
+Do not give the owner token to the phone. A paired device can control sessions, the terminal, and Host configuration. Phone tokens are stored with an Android Keystore AES-256-GCM key. The Host stores SHA-256 hashes of device tokens in `$DSH_HOME/pocket/devices.json` (`0600`) and can revoke devices from Phone connection.
 
-相关许可证与资产归属见 [第三方声明](docs/THIRD_PARTY_NOTICES.md)。
+## Build from source
+
+### Android app
+
+Gradle root is `app/`. Requires JDK 17 and an Android SDK (`compileSdk` / `targetSdk` 35, `minSdk` 26). Use the wrapper in that directory and configure the SDK through Android Studio or `ANDROID_HOME`.
+
+```bash
+cd app
+./gradlew :core:protocol:test :app:testDebugUnitTest :app:assembleDebug :app:assembleRelease
+```
+
+Outputs (paths from the repository root):
+
+- `app/app/build/outputs/apk/debug/app-debug.apk`
+- `app/app/build/outputs/apk/release/app-release.apk`
+
+On a connected device or emulator:
+
+```bash
+cd app
+./gradlew :app:connectedDebugAndroidTest
+```
+
+`assembleRelease` uses a custom keystore only when all of `DSH_ANDROID_KEYSTORE_FILE`, `ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_ALIAS`, and `ANDROID_KEY_PASSWORD` are set and non-empty; otherwise it signs with the debug keystore. See [app/README.md](app/README.md) for the alternate `DSH_ANDROID_*` password and alias names.
+
+Modules:
+
+| Module | Role |
+| --- | --- |
+| `core/protocol` | Kotlin/JVM WebSocket client, protocol models, session folding, reconnect |
+| `app` | Compose UI, connection management, approval notification foreground service, Keystore token storage |
+
+### Host plugin
+
+```bash
+cd plugin
+npm install
+npm run build:client
+npm run lint
+npm test
+```
+
+`npm test` rebuilds the client in `pretest`. Real Host integration needs dsh and pnpm on `PATH`:
+
+```bash
+npm run test:integration
+```
+
+Android protocol tests against a temporary `dsh web` (JDK 17 required):
+
+```bash
+node test/integration/kotlin-live.mjs
+```
+
+The optional sidecar needs a Rust toolchain:
+
+```bash
+npm run build:iroh
+```
+
+## CI
+
+[`.github/workflows/ci.yml`](.github/workflows/ci.yml) runs on `main` pushes and on pull requests.
+
+| Job | What it does |
+| --- | --- |
+| `host-binaries` | Builds `pocket-host` for Linux x64 and macOS arm64 |
+| `plugin` | `npm run lint` and `npm test`, with the Linux sidecar on `PATH` |
+| `integration` | Real Host tests against `@deepseek-ai/dsh@0.2.1-alpha.2` |
+| `android` | `kotlin-live` protocol tests, unit tests, debug and R8 release APKs; rejects `libpocket_iroh.so`; release size gate 40 MiB |
+| `emulator` | API 34 connected tests and a release-APK install/startup check |
+
+Pushes to `main` force-update the `dsh-android-latest` prerelease (APKs plus the two `pocket-host` binaries). Pull requests run the same checks and do not publish that tag.
+
+Release signing Secrets, when all four are set: `ANDROID_KEYSTORE_B64`, `ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_ALIAS`, `ANDROID_KEY_PASSWORD`. The job writes a temporary keystore and deletes it afterwards. Do not commit keystore files.
+
+## Repository layout
+
+```text
+.
+├── app/                      Android Gradle project
+│   ├── app/                  Compose application (applicationId dev.dsh.pocket)
+│   └── core/protocol/        Pure Kotlin/JVM protocol client
+├── plugin/                   Host bridge (dsh-plugin-pocket)
+│   ├── src/                  Server, ops, pairing, management UI
+│   ├── bin/                  Local owner CLI (dsh-pocket)
+│   ├── iroh/                 Optional pocket-host / pocket-iroh crates
+│   └── test/                 Unit and Host integration tests
+├── contract/                 Shared pairing-URI cases
+├── docs/                     Design notes, parity lists, third-party notices, screenshots
+└── .github/workflows/ci.yml
+```
+
+Further reading:
+
+| Path | Contents |
+| --- | --- |
+| [app/README.md](app/README.md) | Android usage, build, and test entry points |
+| [plugin/README.md](plugin/README.md) | Bridge install, protocol contract, plugin development |
+| [docs/feature-parity.md](docs/feature-parity.md) | Feature checklist and native limits |
+| [docs/desktop-parity.md](docs/desktop-parity.md) | Desktop interaction versus mobile implementation |
+| [docs/trajectory-parity.md](docs/trajectory-parity.md) | Session-trajectory data and presentation |
+| [docs/design.md](docs/design.md), [docs/api-notes.md](docs/api-notes.md) | Early architecture and upstream API notes; current behavior is defined by the code and the documents above |
+
+## Limits
+
+- The phone cannot run dsh locally. Sleeping the computer, quitting the Host, or losing the network stops remote control.
+- Terminal resume requires the Host to still hold that shell; it is not a process snapshot. A successful automation delivery is not a completed model run.
+- The native Models page does not render third-party plugin cards (for example Qoder). Custom plugin pages open from plugin details through a 60-second single-use ticket exchanged for a 15-minute HttpOnly web session; Electron / desktop-native APIs, device file pickers, and downloads are not provided.
+- Upstream dsh is still alpha. Upgrade the app, the bridge, and dsh together.
+
+## Acknowledgements
+
+- [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness): Host behavior, interaction, and visual reference. Some copy, icons, and animation follow upstream assets.
+- [dsh-mobile](https://github.com/saya-ch/dsh-mobile): reference for mobile navigation and remote-connection patterns.
+- [AndroidSVG](https://github.com/BigBadaboom/androidsvg): native rendering of plugin SVG icons.
+
+Licenses and asset attribution: [Third-party notices](docs/THIRD_PARTY_NOTICES.md).

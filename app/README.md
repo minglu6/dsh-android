@@ -2,7 +2,7 @@
 
 使用 Kotlin / Jetpack Compose 实现的原生 Android 客户端：**高度复刻桌面版 DSH，让你像使用手机应用一样，操作电脑上的 DSH。** 功能入口与交互逻辑尽量保持桌面习惯，布局、触控与软键盘则针对手机适配；不是桌面画面的远程投屏，也不是精简的聊天替代品。
 
-模型、工作区文件、终端进程与自动化任务在电脑 Host 上运行；手机负责展示与控制。项目定位、APK 下载及 Host 安装见 [根 README](../README.md)。
+模型、工作区文件、终端进程与自动化任务在电脑 Host 上运行；手机负责展示与控制。项目定位、APK 下载及 Host 安装见 [根 README](../README.zh-CN.md)。
 
 ## 连接与日常使用
 
@@ -17,7 +17,7 @@
 
 ### 补充界面
 
-以下截图由当前 Compose 界面在 Robolectric 中使用演示数据渲染。聊天、工作区、模型、终端、插件和自动化的演示见 [项目首页](../README.md#界面演示)。
+以下截图由当前 Compose 界面在 Robolectric 中使用演示数据渲染。聊天、工作区、模型、终端、插件和自动化的演示见 [项目首页](../README.zh-CN.md#界面截图)。
 
 <table>
   <tr>
@@ -95,7 +95,7 @@
 
 ## 版本与能力限制
 
-App 在 `hello`／`pair` 交换版本信息，并根据 Host 公布的操作能力显示入口。新功能需要相应版本的桥接；仅安装新 APK 不会重载电脑插件。当前支持基线与网络前提见 [根 README](../README.md#下载与运行前提)。
+App 在 `hello`／`pair` 交换版本信息，并根据 Host 公布的操作能力显示入口。新功能需要相应版本的桥接；仅安装新 APK 不会重载电脑插件。当前支持基线与网络前提见 [根 README](../README.zh-CN.md#下载与安装)。
 
 详细对照见 [功能清单](../docs/feature-parity.md)、[桌面交互对照](../docs/desktop-parity.md) 和 [轨迹契约](../docs/trajectory-parity.md)。这些记录用于说明具体实现，不代表所有第三方插件都能在 Android 上使用。
 
@@ -155,4 +155,4 @@ E2E_FRAMES=/tmp/frames.json ./gradlew :core:protocol:test
 | `ANDROID_KEY_ALIAS` | key alias，也支持 `DSH_ANDROID_KEY_ALIAS` |
 | `ANDROID_KEY_PASSWORD` | key 密码，也支持 `DSH_ANDROID_KEY_PASSWORD` |
 
-CI 另用 `ANDROID_KEYSTORE_B64` Secret 生成临时文件，完整说明见 [根 README](../README.md#开发与文档导航)。不要提交 keystore、密钥或会话凭据；debug 与发布密钥不同可能导致 APK 无法覆盖安装。
+CI 另用 `ANDROID_KEYSTORE_B64` Secret 生成临时文件，完整说明见 [根 README](../README.zh-CN.md#ci)。不要提交 keystore、密钥或会话凭据；debug 与发布密钥不同可能导致 APK 无法覆盖安装。
