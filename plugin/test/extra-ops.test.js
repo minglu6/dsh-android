@@ -74,6 +74,54 @@ test('jobs.list returns first rows frame then stops', async () => {
   assert.equal(k.outcome, 'requested')
 })
 
+test('jobs.list empty rows frame is an empty roster, not unavailable', async () => {
+  const ops = jobsOps({
+    list: async function* () { yield { type: 'rows', jobs: [] } },
+  })
+  const r = await ops['jobs.list']({ sessionId: 's1' })
+  assert.deepEqual(r.jobs, [])
+})
+
+test('jobs.list abort and timeout throw instead of an empty roster', async () => {
+  const hang = async function* (_req, signal) {
+    yield { type: 'heartbeat' }
+    await new Promise((_, reject) => {
+      const fail = () => reject(Object.assign(new Error('aborted'), { name: 'AbortError' }))
+      if (signal.aborted) fail()
+      else signal.addEventListener('abort', fail, { once: true })
+    })
+  }
+  const ops = jobsOps({ list: hang })
+  await assert.rejects(
+    ops['jobs.list']({ sessionId: 's1' }, AbortSignal.abort()),
+    (err) => {
+      assert.equal(err.code, 'jobs/unavailable')
+      assert.match(err.message, /timed out or was aborted/)
+      return true
+    },
+  )
+  const ac = new AbortController()
+  const timer = setTimeout(() => ac.abort(), 20)
+  try {
+    await assert.rejects(
+      ops['jobs.list']({ sessionId: 's1' }, ac.signal),
+      (err) => err.code === 'jobs/unavailable',
+    )
+  } finally {
+    clearTimeout(timer)
+  }
+})
+
+test('jobs.list throws when the Host stream ends without a rows frame', async () => {
+  const ops = jobsOps({
+    list: async function* () { yield { type: 'heartbeat' } },
+  })
+  await assert.rejects(
+    ops['jobs.list']({ sessionId: 's1' }),
+    (err) => err.code === 'jobs/unavailable' && /without a rows frame/.test(err.message),
+  )
+})
+
 test('job output subscription forwards retained offsets and cancels its source on unfollow', async () => {
   let disposed
   const closed = new Promise((resolve) => { disposed = resolve })

@@ -1,3 +1,60 @@
+/** Overlay Host unread onto official sessionStatus; Host is source of truth for the green-dot bit. */
+export function overlayCompletionUnread(official, unread) {
+  const next = new Map()
+  const ids = new Set(unread)
+  if (official && typeof official.keys === 'function') {
+    for (const id of official.keys()) ids.add(id)
+  }
+  for (const id of ids) {
+    const base = official?.get?.(id)
+    next.set(id, {
+      running: base?.running,
+      pendingInteraction: base?.pendingInteraction,
+      completionUnread: unread.has(id),
+    })
+  }
+  return next
+}
+
+/**
+ * Official ui-session@0.2.1-alpha.2 has no setCompletionUnreadSource. Its public
+ * sessionStatus HostObservable (and the instance listener Set it closes over)
+ * is the mounted extension point: keep running/pending from official, replace
+ * completionUnread with the Host snapshot, and notify the same subscribers
+ * StateDot already uses. Missing that surface is a hard error — do not no-op.
+ */
+export function overlaySessionStatusCompletionUnread(sessionStatus, source, listenerSet) {
+  if (!sessionStatus || typeof sessionStatus.getSnapshot !== 'function' || typeof sessionStatus.subscribe !== 'function') {
+    throw new Error('uiSession.sessionStatus is not an overlayable HostObservable')
+  }
+  if (!(listenerSet instanceof Set)) {
+    throw new Error('uiSession status listeners are not reachable; cannot sync completion unread')
+  }
+  const origGet = sessionStatus.getSnapshot.bind(sessionStatus)
+  sessionStatus.getSnapshot = () => overlayCompletionUnread(origGet(), source.getSnapshot())
+  const notify = () => {
+    for (const listener of [...listenerSet]) listener()
+  }
+  const off = source.subscribe(notify)
+  notify()
+  return () => {
+    off()
+    sessionStatus.getSnapshot = origGet
+  }
+}
+
+/** Prefer an official hook when present; otherwise overlay mounted sessionStatus. */
+export function bindCompletionUnreadSource(uiSession, source) {
+  if (typeof uiSession?.setCompletionUnreadSource === 'function') {
+    return uiSession.setCompletionUnreadSource(source)
+  }
+  return overlaySessionStatusCompletionUnread(
+    uiSession?.sessionStatus,
+    source,
+    uiSession?.statusListeners,
+  )
+}
+
 /** Host completion snapshots and view presence, independent of rendering and transport mocks. */
 export function createCompletionSync({ connect, postView, installSource, visibleSession, reportError = console.error }) {
   let snapshot
@@ -143,7 +200,7 @@ export function installCompletionSync({ uiSession, sessions, layout, slots, wind
   const sync = createCompletionSync({
     visibleSession,
     reportError,
-    installSource: source => uiSession.setCompletionUnreadSource(source),
+    installSource: source => bindCompletionUnreadSource(uiSession, source),
     connect({ message, disconnect }) {
       const events = new Events('/pocket/completion/events')
       events.onmessage = event => {

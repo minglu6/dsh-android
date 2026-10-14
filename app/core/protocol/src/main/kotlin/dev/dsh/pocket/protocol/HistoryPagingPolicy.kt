@@ -13,7 +13,6 @@ data class HistoryPageRequest(
  */
 object HistoryPagingPolicy {
     const val PAGE_SIZE = 100
-    const val FOLLOW_MAX_MESSAGES = 50
 
     fun canLoadOlder(hasMore: Boolean, loadingOlder: Boolean, firstSeq: Long): Boolean =
         hasMore && !loadingOlder && firstSeq >= 0
