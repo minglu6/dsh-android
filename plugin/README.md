@@ -1,140 +1,197 @@
 # dsh-plugin-pocket
 
-dsh-android 的桌面端桥接插件。它运行在 dsh 进程里，直接调用 dsh 的会话服务，再通过 WebSocket 给手机提供一套简单的 JSON 协议。完整协议见 [../docs/design.md](../docs/design.md) 第 4 节。
+[dsh-android](../README.md) 的 Host 桥接插件。在电脑端 dsh 进程中调用官方会话、配置、工作区等服务，通过带鉴权的 JSON/WebSocket 协议供原生 Android 客户端使用。手机不运行另一套任务数据库、包管理器或模型执行引擎。
 
-## 安装
+## 安装与升级
+
+### 运行前提
+
+- Node.js：`^22.19.0 || >=24.0.0`，不包含 23.x。
+- dsh：当前 CI 使用 `@deepseek-ai/dsh@0.2.1-alpha.2`；session-controller peer 范围为 `>=0.2.1-alpha.2 <0.2.2-0`。该范围是依赖声明，不代表每个版本都经过测试。
+- `dsh plugin` 需要 PATH 中的 pnpm；CI 使用 `pnpm@10`。
+- 手机与电脑可通过局域网或 Tailscale 互访，防火墙允许桥接端口（默认 TCP `7690`）。
+
+### 从源码安装
+
+从仓库根目录执行；尚未安装 dsh／pnpm 时，可先执行根 README 中的 [环境安装命令](../README.md#快速开始)。不依赖该插件已发布到 npm。
 
 ```bash
-dsh plugin --profile web add dsh-plugin-pocket          # 发布到 npm 之后
-dsh plugin --profile web add /path/to/dsh-android/plugin # 从源码安装
+cd plugin
+npm install
+npm run build:client
+dsh plugin --profile web add "$PWD"
 dsh web
 ```
 
-启动后日志会出现 `[pocket] remote transport: tailscale (bind …)`，随后显示实际监听端口和默认配对地址。`tailscale` 是沿用的 WebSocket 传输标识，不代表必须安装 Tailscale。第一次运行时会生成 token，保存在 `$DSH_HOME/pocket/token`，文件权限 0600。
+桌面 App 使用 `desktop` profile，需在该 profile 安装，而不是只装到 `web`：
 
-## 配置（`$DSH_HOME/profiles/web/cordis.patch.yml`）
+```bash
+dsh plugin --profile desktop add "$PWD"
+```
+
+随后重启相应 Host。管理 UI 通过官方 client half（`dsh.client` 与 `exports["./client"]`）注册到 **设置 → 手机连接**；不修改官方账号菜单，也不使用 HTML 注入替换桌面入口。
+
+更新源码后重新安装依赖、执行 `npm run build:client`，按相同 profile 安装流程更新并重启 Host。尤其是修改 `src/client/**` 后必须重建 `lib/client.js`。**升级 APK 不会自动更新或重载电脑端桥接。**
+
+## 配置与网络
+
+以 Web profile 为例，在 `$DSH_HOME/profiles/web/cordis.patch.yml` 配置（默认 `DSH_HOME` 为 `~/.dsh`）；桌面使用对应的 `desktop` profile。所有配置项均可省略：
 
 ```yaml
 - id: dsh-pocket
   config:
-    # transport: tailscale     # 手机路径仅 host:port WS
-    # host:                    # 不写则默认局域网，可选 Tailscale；绑定默认 0.0.0.0
+    # host: 192.168.1.10       # 指定监听接口；不写则绑定 0.0.0.0
     # port: 7690
-    # token: 固定 token；不填则使用自动生成的那个
-    # iroh: true               # 可选：启动遗留 pocket-host sidecar（不参与手机配对）
+    # dataDir: /path/to/pocket # 覆盖默认 $DSH_HOME/pocket 数据目录
+    # token: <owner-token>    # 可选固定 owner token，通常使用自动生成值
+    # pair: true             # 启动时打开配对窗口
+    # iroh: true             # 仅用于遗留桌面 sidecar 实验
     # hostBinary: /path/to/pocket-host
 ```
 
-## 传输（Tailscale / 局域网）
+手机链路仅为 **host:port WebSocket**。内部的 `tailscale` 传输标识不代表必须安装 Tailscale：
 
-手机只走 **host:port WebSocket**。插件默认：
+- 未指定 `host` 时绑定 `0.0.0.0`，默认公布局域网 IPv4，没有局域网地址时使用可用的 Tailscale 地址。
+- 两类地址均可用时，「手机连接」可切换 **局域网 / Tailscale**；地址、二维码与复制链接随之变化，不重启服务或打断已配对连接。
+- 指定具体 `host` 会限制监听与公布的接口；希望两类网络均可连接时，应省略该项或使用 `0.0.0.0`。
+- 刷新重新发现网卡；明确选择的网络不可用时会报错，不静默切换到另一网络。没有可用地址时禁用配对。
+- 每类网络使用首个可用 IPv4，不支持 IPv6-only 配对。局域网需要关闭客户端隔离；Tailscale 需要双方处于可互访的 tailnet。
 
-1. 不配置 `host` 时，WS 绑定 `0.0.0.0`，默认使用局域网 IPv4；无局域网地址时使用可用的 Tailscale 地址。
-2. 同时有两类地址时，设置页显示「局域网 / Tailscale」切换；地址、二维码和复制的配对链接同步切换，不重启服务、不影响已配对设备。
-3. 配置具体 `host` 时，仅公布该监听接口的地址。若希望两类网络均可连接，请移除具体 `host` 配置；配置 `0.0.0.0` 也可。
-4. 仅有一种可用网络时不显示切换控件；无可用地址时禁用配对。刷新会重新发现网卡，明确选择的网络不可用时会报错，不悄悄生成另一网络的二维码。
+默认全接口监听不是公网部署方案。请用防火墙限制访问，跨网络使用 Tailscale 或已有可信加密链路；`ws://` 与 LAN HTTP 本身没有 TLS，配对不能防止未加密链路上的窃听。
 
-配对 URI：`dshpocket://pair?h=<host:port>&c=<6位码>`。每类网络使用第一个可用 IPv4 地址，不支持 IPv6-only 配对地址。
+插件的 `cordis.patch.yml` 还会禁用默认 `directory-picker` 自动选择条目，并加载官方 `browse` 后端和客户端。电脑与手机因此使用应用内目录浏览，电脑不再弹出 macOS 系统目录选择器。
 
-局域网连接无需 Tailscale；手机与电脑需在同一可互访网络，防火墙允许配对端口，Wi-Fi 不启用设备隔离。Tailscale 连接要求两端在可互访的 tailnet 中。
+## 配对、设备与诊断
 
-## 管理 UI（桌面 / `dsh web`）
+首次启动且没有已配对设备时会自动打开配对窗口，并在日志中打印 6 位码。配对码 **10 分钟有效、最多尝试 3 次、成功后单次作废**；请勿公开启动日志或配对二维码。
 
-插件通过官方 **client half**（`dsh.client` + `exports["./client"]`）挂到 dsh 的 slot 体系，**不**使用 `tapIndex` HTML 注入（桌面端 Electron 读自己的 `file://` index，只认结构化 index injection / client modules）。
+管理 UI 支持选择网络、复制地址、打开／关闭配对窗口、显示 QR、设备重命名与撤销，以及完整连接诊断。配对 URI：
 
-| 入口 | Slot | 作用 |
-|---|---|---|
-| 设置 →「手机连接」 | `settings.section` | 官方可叠加设置页：状态 / 配对码+QR / 设备重命名·撤销 |
-
-**账号菜单（设置 / 意见反馈 / 退出登录）无法插入「手机连接」。**  
-该弹层由 `@deepseek-ai/dsh-client-ui-settings-account` 的 `AccountMenu` 占用 `settings.launcher`（`kind: 'single'`）。菜单项是写死的数组（`settings` → `contact` → `signout`），**没有**类似 `settings.launcher.item` 的 list slot。替换整个 `settings.launcher` 会盖掉官方 AccountMenu，不算合法扩展。要在「设置」与「意见反馈」之间加一行，需要上游 dsh 新增扩展点。本插件因此**不**往侧栏 footer / 账号菜单乱挂入口。
-
-面板功能：
-- 简洁的服务状态、网络选择和可复制地址；主页面不显示版本、协议和操作说明
-- 打开配对窗口：6 位码、倒计时、二维码、复制配对链接及关闭/重新配对
-- 已配对设备：数量、名称、在线状态及简短时间；重命名、二次确认后解除配对
-- 「连接诊断」显示完整的版本、网络地址、实例 ID 和端口检查；「复制诊断报告」复制全文，也可选择报告文字单独复制
-
-文案走 `ctx.locale.register('pocket', { zh, en })`，跟随 dsh 的语言设置。样式只用 `--dsw-alias-*` 主题 token。
-
-桌面 App（`~/.dsh/profiles/desktop`）与 `dsh web` 共用同一套 client module 加载器：Host 把 `dsh.client` 包打进 boot 图（结构化 `IndexInjection`），Desktop 的 IPC fetch 仍能打到 Host 上的 `/pocket/*` 管理路由。因此本 UI **预期在桌面端同样可用**。
-
-开发时改完 `src/client/**` 后需 `npm run build:client` 生成 `lib/client.js`（lazy-CJS `window.__ModuleLoader__.load` 格式）。
-
-## 原生菜单能力与状态
-
-插件的 `cordis.patch.yml` 将工作区目录选择器固定为官方 `browse`：禁用 Web App 的 `directory-picker` 自动选择条目，再同时加载官方 browse Host 后端与客户端界面，避免重复注册服务和选择器。电脑与手机均使用应用内目录浏览交互；电脑不再弹出 macOS 系统文件夹选择框。桌面界面由官方客户端提供，手机使用对应的原生目录界面，两端共享同一 Host 的列目录与新建文件夹能力。
-
-手机以 `hello.ops` 及后续能力变更为准，不把 Host 上存在某个方法视为可用产品入口：
-
-- 工作区使用 `workspaceController` 的实体、成员关系与归档状态；归档有活动任务时保留官方拒绝详情，由手机确认是否停止活动后再次提交。
-- `workspace.directoryList` 只在官方目录选择器为 `browse` 时公布；同一条件下，Host 提供 `directoryPickerController.createDirectory` 才公布 `workspace.directoryCreate`。新建请求为 `{path, name}`（现有父目录绝对路径、单个非空白目录名），返回官方创建的绝对路径字符串；保留合法名称中的空格及官方重名、权限、非法路径等业务错误，不另行实现文件系统操作。macOS `native` 选择器不公布浏览和创建能力，手机仍可输入完整路径注册工作区，不弹出电脑系统选择器。
-- 指令目录来自当前 Agent 的 `commands.list`；目标修改使用官方目标的 `id/revision`，不靠目标文本猜测版本。
-- 后台任务输出通过 `jobs.follow` 推送 `job` / `job.end` / `job.error`，关闭订阅使用共享 `unfollow`，不会自动终止任务。
-- `workspace.changed`、`schedule.changed`、`plugins.changed` 驱动对应页面更新；预设名册和默认值从 Host 读取，配置写入携带观察到的 revision。
-- 模型密钥仅经提供商页面写入或清除，不提供独立凭证目录。删除提供商先完成配置 CAS，再清理该页面管理的密钥，避免冲突导致仍在使用的密钥丢失。
-- 模型设置订阅 `settings.changed`、`credentials.changed`、`models.changed` 和 `plugins.changed`，对应官方配置、凭据、适配器和插件事件。`credentials.describe {ref}` 仅返回 `ref/configured/source/writable`，不回传密钥值。插件自定义页面直接使用原有官方客户端 API，不维护提供商专属原生镜像。
-- 通用设置同样复用 `plugins.settingsDescribe/settingsMutate`，不维护手机独立配置。`settings/document-updated` 广播 `settings.changed {ns, revision}`，驱动手机语言、外观、字体、聊天展示、发送偏好、默认权限与 Session Log 镜像更新；手机写入携带版本并回读，桌面使用原有官方订阅更新。
-
-完整入口和原生边界见 [功能对齐清单](../docs/feature-parity.md)。升级 APK 不会自动重载已运行的桥接进程。
-
-## 配对（M1）
-
-首次启动且还没有任何已配对设备时，会自动打开一个配对窗口，日志里打印 6 位配对码。配对码 10 分钟内有效，最多试 3 次，用一次就作废。之后要再开窗口，有四种方式：
-- **管理 UI**：设置 →「手机连接」（推荐）
-- CLI：`node bin/pocket.js pair`，用本机的 owner token 连上插件后打开窗口；`node bin/pocket.js devices` 查看设备，`node bin/pocket.js revoke <id>` 撤销设备
-- dsh 网页端口上的管理路由（Host 必须是回环权威，拒绝 `sec-fetch-site: cross-site` 与跨站 Origin）：
-  - `GET /pocket/status[?network=lan|tailscale]` — 状态、可用 `networks`、实际选中的 `connectionType`、地址、版本、设备
-  - `POST /pocket/pair[?network=lan|tailscale]` 打开窗口；`GET` 支持相同选择并返回对应 URI；`DELETE` 关闭
-  - `network` 缺省时优先 LAN；未知值返回 400，不可用网络返回 503，均不打开配对窗口
-  - `GET /pocket/devices` 列表；`POST` `{id}` 撤销；`PATCH` `{id,name}` 重命名
-- 在 patch 配置里写 `pair: true`
-
-手机发送 `{"op":"pair","args":{"proto":1,"code":"123456","name":"Pixel"}}` 完成配对，会拿到 `{deviceId, token}`，之后用 `hello` 带这个 token 登录。服务端只保存 token 的 sha256，写在 `$DSH_HOME/pocket/devices.json`，权限 0600。owner token（文件 `pocket/token`）只给本机 CLI 用，只有它能打开配对窗口。
-
-## 审批（M1）
-
-dsh 发起 `approval/request` 时，如果有已登录的设备在线，插件会推送 `{"ev":"approval",approvalId,sessionId,toolName,callId?,reason?}`。设备用 `approval.answer {approvalId, outcome:"allowed-once"|"rejected"}` 答复。手机和网页端谁先答就算谁的：
-- 手机先答：网页端那张审批卡会收到 Gateway 发来的 cancel 并自动消失，这一点已在真实 dsh 上验证。
-- 网页端先答：手机收到 `approval.closed`，`by` 字段为 `chain`。
-
-工具那边取消时，结果为 `cancelled`。新连上的设备会补发还没处理的审批，也可以用 `approval.pending` 主动查询。
-
-## 断点续订
-
-`follow` 支持 `afterSeq`。手机断线重连后带上次 cursor 续订；服务端按 seq 补帧。
-
-手机的统计栏使用 Host `sessionStats`、`tokenUsage`、`contextPressure`、`contextBreakdown` 投影，当前权限使用 `permissions` 投影。桥接订阅 `sessionProjections.onChanged`，只向正在 follow 对应会话的已认证客户端发送：
-
-```json
-{"ev":"follow","subId":"s1","frame":{"type":"projection","sessionId":"…","key":"contextPressure","value":{"pressureTokens":15437,"projectedTokens":15501,"contextWindow":180000},"seq":22}}
+```text
+dshpocket://pair?h=<host:port>&c=<6位码>
 ```
 
-首个 snapshot/resume 发送前发生的变更按 key 暂存，先发送基线，再发送较新的投影。`seq` 是投影水位，不用于推进历史 cursor。
+### 本机 CLI
 
-`permissions.catalog` 返回完整 `options`、`defaultOptions`、`defaultPreset`。自动审查只在 Host 注册 `auto` 时可选，且不允许作为默认权限；`permissions.get/set` 保持既有 `{current: "…"}` 返回格式。Host 目录变化时广播 `{"ev":"permission-presets/catalog-changed"}`，客户端撤回旧选项并重新读取。新统计的实时更新与目录失效通知需要运行本版桥接；只更新 APK 不会自动重载电脑上的插件。
+在 `plugin/` 目录执行：
 
-## 插件与自动化管理
+```bash
+node bin/pocket.js pair
+node bin/pocket.js devices
+node bin/pocket.js revoke <device-id>
+```
 
-Android 页面直接使用官方 Host 服务，不另建定时任务数据库或包管理器：
+默认使用 `ws://127.0.0.1:7690` 和 `$DSH_HOME/pocket/token`。自定义端口或数据目录时可指定 `--url ws://127.0.0.1:<port>`、`--token-file /path/to/token`。CLI 使用本机 owner token，手机应使用配对所得设备 token，不应共享 owner token。
 
-- `plugins.list/setEnabled`：包与组件运行态；组件以 `entryId` 关联。
-- `plugins.inventory`：独立注入官方 `pluginInventory`，返回全局 `entries` 与会话预设 `agentPresets[].rows`；不依赖包管理服务，也不把预设声明转成全局启停操作。
-- `plugins.inspect/registries/install/cancelInstall/waitForInstall/uninstall`：检查来源、安装源选择、安装、取消核对和卸载。支持 npm、Git、tarball、**主机路径**；不读取手机本地插件目录。可选方法仅在 Host 支持时公布。
-- `plugins.settingsDescribe/settingsMutate`：调用官方 `settingsController`，读取经过脱敏的 schema/value/secrets；写入必须携带 `expectedRevision`。冲突需要重新读取，不能静默覆盖。
-- `schedule.catalog/list/create/update/delete/history`：保留官方记录、时区、投递历史和业务结果。Android“新建”进入会话，已有任务编辑携带完整 `expected` 记录。
+### 凭据与撤销
 
-`ok: true` 仅表示 RPC 返回：客户端仍需检查插件 `application`（含 `restart-required/overridden/failed/cancelled`）和任务 `updated/deleted/code`。安装等待最长 30 分钟，不沿用普通请求的 60 秒超时；不确定的安装保留 `requestId` 供核对，不自动重复提交。插件自定义 React 页面通过已认证的 Host Web 运行时加载，公开设置也可用原生或高级路径编辑。
+手机发送 `pair {proto:1, code, name}` 获得 `{deviceId, token}`，之后用 `hello` 携带设备 token 登录。默认存储如下；设置 `dataDir` 后位置随之变化：
+
+| 文件 | 内容与保护 |
+|---|---|
+| `$DSH_HOME/pocket/token` | 自动生成的 owner token，权限 `0600`；配置固定 `token` 时不生成该文件 |
+| `$DSH_HOME/pocket/devices.json` | 设备记录与设备 token 的 SHA-256，权限 `0600`，不保存设备 token 明文 |
+
+WebSocket 管理操作要求 owner 身份。管理 UI 通过受本机信任边界保护的 HTTP 路由操作；已配对手机不因此获得开配对窗口的 owner 凭据。撤销设备会断开其已认证连接。配对设备仍具有广泛的 Host 控制能力，包括会话、终端与配置，请按主机管理权限保护它。
+
+### 本机管理路由
+
+以下路由在 **dsh 网页端口**，不是普通手机 RPC；要求 Host 为回环 authority，并拒绝 `Sec-Fetch-Site: cross-site` 与跨站 Origin：
+
+| 路由 | 用途 |
+|---|---|
+| `GET /pocket/status[?network=lan|tailscale]` | 状态、网络候选、选中连接类型、地址、版本与设备 |
+| `POST /pocket/pair[?network=lan|tailscale]` | 打开配对窗口 |
+| `GET /pocket/pair[?network=lan|tailscale]` | 查询窗口与对应网络的 URI |
+| `DELETE /pocket/pair` | 关闭窗口 |
+| `GET /pocket/devices` | 设备列表 |
+| `POST /pocket/devices`，body `{id}` | 撤销设备 |
+| `PATCH /pocket/devices`，body `{id,name}` | 重命名设备 |
+
+`network` 缺省时优先 LAN；未知值返回 400，不可用网络返回 503，均不打开配对窗口。诊断报告包含完整地址、实例 ID、版本及端口检查结果，可复制全文或局部内容；分享前需检查敏感信息。
+
+## Host 能力与操作结果
+
+客户端以 `hello.ops` 及后续能力变更为准，不把 Host 上存在某个方法视为必定可用的产品入口。
+
+| 领域 | 必须保留的契约 |
+|---|---|
+| 工作区 | 使用官方实体、成员关系和归档状态；有活动任务时保留官方拒绝详情，由用户确认停止后再提交。 |
+| 目录选择 | `workspace.directoryList` 仅在官方 `browse` 模式公布；后端支持创建时才公布 `workspace.directoryCreate {path,name}`。返回官方绝对路径，保留空格及业务错误，不另写文件系统实现。仅有 `native` 时手机可输入完整路径，不弹电脑系统窗口。 |
+| 指令与目标 | 指令来自当前 Agent 的 `commands.list`；目标更新使用官方 `id/revision`，不能从文本猜版本。 |
+| 后台任务 | `jobs.follow` 推送 `job` / `job.end` / `job.error`，共享 `unfollow` 只取消订阅，不终止任务。 |
+| 页面更新 | `workspace.changed`、`schedule.changed`、`plugins.changed` 驱动对应页面；预设目录和默认值来自 Host。 |
+| 共享设置 | `plugins.settingsDescribe/settingsMutate` 复用官方配置；写入携带 `expectedRevision`，冲突重新读取，不静默覆盖。`settings.changed {ns,revision}` 通知手机更新镜像。 |
+| 模型与凭据 | 订阅 `settings.changed`、`credentials.changed`、`models.changed`、`plugins.changed`。`credentials.describe {ref}` 仅返回状态元数据，不回传密钥；删除提供商先完成配置 CAS，再清理该页面管理的密钥。 |
+| 插件目录 | `plugins.inventory` 独立返回全局 `entries` 和 `agentPresets[].rows`，不依赖包管理，也不将会话预设声明转成全局开关。 |
+| 插件管理 | `plugins.list/setEnabled` 以 `entryId` 关联组件；检查、安装、取消、等待与卸载按 Host 可用方法公布。来源支持 npm、Git、tarball 和主机路径，不是手机本地目录。 |
+| 自动化 | `schedule.catalog/list/create/update/delete/history` 保留官方记录、时区与业务结果；编辑带完整 `expected` 记录。手机新建入口进入会话，投递成功不表示模型执行完成。 |
+
+`ok: true` 只表示 RPC 返回。客户端还需检查插件 `application`（如 `restart-required/overridden/failed/cancelled`）与任务 `updated/deleted/code`。安装等待最长 30 分钟，不沿用普通 RPC 的 60 秒超时；不确定的安装保留 `requestId` 供核对，不能自动重复提交。
+
+完整原生入口与限制见 [功能对齐清单](../docs/feature-parity.md) 和 [Android 使用说明](../app/README.md)。
+
+## 会话流、审批与恢复
+
+- `follow` 支持 `afterSeq`，断线重连携带上次 cursor 续订，Host 按序补帧。手机的排队消息以 Host 收件箱为准；`queue` 等待后续轮次，`steer` 引导当前轮次，详见 [发送语义](../app/README.md#排队与插话)。
+- Host 发起 `approval/request` 时向在线设备推送 `approval`。`approval.answer` 接受 `allowed-once` 或 `rejected`，手机与网页谁先答谁生效；另一端收到关闭／取消通知。工具取消对应 `cancelled`，新连接补发待审批项，也可用 `approval.pending` 查询。
+- 用量与权限来自 `sessionStats`、`tokenUsage`、`contextPressure`、`contextBreakdown`、`permissions` 等 Host 投影，仅推送给已认证且订阅该会话的客户端。
+- 首个 snapshot/resume 前的投影变更按 key 暂存，先发基线再发较新投影。**投影 `seq` 是投影水位，不用于推进历史 cursor。**
+- `permissions.catalog` 返回 `options/defaultOptions/defaultPreset`；自动审查只在 Host 注册 `auto` 时可选，且不能作为默认权限。`permissions.get/set` 保持 `{current:"…"}` 格式，目录变更通过 `permission-presets/catalog-changed` 通知客户端重新读取。
+
+上述实时通知需要运行相应版本桥接；只更新 App 无法让旧 Host 产生新事件。
 
 ## 插件自定义 Web 界面
 
-- Host 同时提供 `webServer` 与 `connection` 时，桥接公布 `ui.open({section?})` 和 `ui.close({ticket?})`。`ui.open` 返回 `{ticket,path:"/pocket-ui/open"}`；原生以表单 POST 单次票据，兑换 `dsh-pocket-web` HttpOnly/SameSite=Strict cookie 和无票据的 303 页面地址。票据 60 秒、网页会话 15 分钟，绑定已配对设备、当前 WS 连接及 authority；普通连接关闭、设备撤销、服务卸载会结束 HTTP/SSE/WS。
-- `/`、官方 assets/plugins/API 和 `/api/remote.mux` 由同一手机端口代理到固定的本机 Host listener。Host 启动 URL 只在服务端兑换内部 cookie，不回传启动令牌、Host cookie 或敏感重定向。`/pocket/*`、`/open-in-app/*`、任意上游 URL、路径绕过和跨站请求均拒绝。
-- `/?pocket-ui=1&section=models` 使用官方模型设置与第三方卡片；无 section 时保留完整官方客户端。设置深链等待 session baseline，避免官方初始 onboarding 关闭刚打开的设置；不替换根组件，也不更改正常桌面窗口。窄屏设置导航横向滚动。
-- 已鉴权的手机页面在官方客户端启动前注入独立的 `__DSH_TRANSPORT__={ownsHost:true}`，声明与原生已配对连接相同的 Host 管理能力。否则官方 settings mirror 会把 LAN/Tailscale 地址判为普通远程网页并拒绝模型设置。上游原有 transport/native/recovery 声明仍被剥离，不继承 `streamBaseUrl`、函数、进程令牌或 Host cookie；未鉴权请求无法取得该页面。验收必须覆盖非回环地址，不能只测 USB `127.0.0.1`。
-- 桥接按 `Accept-Encoding` 协商 gzip 压缩 HTML、JavaScript、CSS 和 JSON，减少蜂窝/Tailscale 中转链路上的首屏资源传输；HTML 先脱敏再压缩。SSE、Range/206、HEAD 和上游已压缩的响应不重新编码。
-- 自定义页面的请求/WS 由 CSP 限定为当前手机端口 origin。既有 LAN HTTP 不增加传输加密；跨网络使用 Tailscale 或已有安全链路。没有第三方脚本到 Android 的 JavaScript bridge，也不提供 Electron 专属 API、设备文件选择或下载。
+这是插件详情的可选入口，不是原生模型设置或内置插件目录的默认实现。仅当 Host 提供 `webServer` 与 `connection` 时公布 `ui.open({section?})` / `ui.close({ticket?})`。
 
-## 遗留 iroh sidecar
+1. `ui.open` 返回 `{ticket,path:"/pocket-ui/open"}`；原生以表单 POST 兑换 `dsh-pocket-web` HttpOnly / SameSite=Strict cookie，并跳转至不带票据的 303 地址。
+2. 单次票据有效 60 秒，网页会话 15 分钟，绑定设备、当前 WS 连接与 authority；断连、撤销或卸载结束相关 HTTP/SSE/WS 会话。
+3. 根页面、官方 assets/plugins/API 及 `/api/remote.mux` 代理到固定本机 Host listener。启动令牌只在服务端兑换内部 cookie，不向手机页面回传 Host 启动令牌、Host cookie 或敏感重定向。
+4. 拒绝 `/pocket/*`、`/open-in-app/*`、任意上游 URL、路径绕过和跨站请求。页面请求与 WS 由 CSP 限定为当前手机端口 origin；不提供第三方脚本到 Android 的 JavaScript bridge、Electron API、设备文件选择或下载。
 
-`plugin/iroh`（`pocket-host`）仍可在 `config.iroh: true` 时启动，供桌面侧实验；**不**再参与手机配对，Android APK 也不再打包 `libpocket_iroh.so` / JNI。
+`/?pocket-ui=1&section=models` 可打开官方模型设置及第三方卡片；无 section 保留完整官方客户端。设置深链等待 session baseline，不替换根组件或影响正常桌面窗口。
+
+已认证页面在官方客户端启动前注入独立的 `__DSH_TRANSPORT__={ownsHost:true}`，使 LAN／Tailscale 页面具备与原生已配对连接相同的 Host 管理声明。上游 transport/native/recovery 声明被剥离，不继承其函数、`streamBaseUrl`、进程令牌或 Host cookie；未认证请求无法取得该页面。修改这条链路时必须验证非回环地址，不能只测 USB `127.0.0.1`。
+
+HTML 在脱敏后按 `Accept-Encoding` 协商 gzip，JavaScript/CSS/JSON 同样可压缩；SSE、Range/206、HEAD 与上游已压缩响应不重编码。以上措施**不增加 LAN HTTP 的传输加密**，也不保证任意第三方插件兼容或可信。Android WebView 的 cookie 存储仍为应用级共享；服务端仅接受唯一有效且匹配当前 authority 的会话。
+
+## 开发与测试
+
+在 `plugin/` 目录执行：
+
+```bash
+npm install
+npm run build:client
+npm run lint
+npm test
+```
+
+`npm test` 的 `pretest` 会重建客户端。若需覆盖遗留 sidecar 相关测试，先准备 Rust 工具链并执行 `npm run build:iroh`；CI 会先构建 sidecar，再将二进制提供给插件测试。
+
+真实 Host 集成测试需要 PATH 中的 dsh 与 pnpm：
+
+```bash
+npm run test:integration
+```
+
+Android 协议联调还需 JDK 17 与 Android 开发环境：
+
+```bash
+node test/integration/kotlin-live.mjs
+```
+
+该脚本启动临时真实 `dsh web` 并执行 Kotlin 协议测试。真实模型测试需要额外凭据，会调用模型与工具，仅供显式本地执行，见 [Android 测试说明](../app/README.md#构建与测试入口)。
+
+### 协议与源码导航
+
+- [设计文档第 4 节](../docs/design.md#4-protocol-spec-v1-json-over-websocket-text-frames)：协议 envelope 与早期核心操作；该文档含历史规划，不是全部当前 RPC 的清单。
+- [上游 API 笔记](../docs/api-notes.md)：dsh Remote RPC、会话事件及权限模型研究。
+- [`src/server.js`](src/server.js)：鉴权、操作分发与会话订阅；[`src/parity-ops.js`](src/parity-ops.js)、[`src/settings-ops.js`](src/settings-ops.js)、[`src/extra-ops.js`](src/extra-ops.js)：扩展操作。
+- [`src/host-ui.js`](src/host-ui.js)：插件自定义页面的 Host 代理；[`src/manage.js`](src/manage.js)：本机管理路由。
+- [Android `PocketClient.kt`](../app/core/protocol/src/main/kotlin/dev/dsh/pocket/protocol/PocketClient.kt)：当前客户端协议调用入口。
+- [CI 配置](../.github/workflows/ci.yml)：固定 dsh 版本、插件检查与 Android 联调流程；[第三方声明](../docs/THIRD_PARTY_NOTICES.md)：上游参考与资产归属。
+
+## 遗留桌面 sidecar
+
+`iroh/` 中的 `pocket-host` 仅在 `config.iroh: true` 时启动，供桌面侧实验，不参与手机配对。Android APK 不包含 `libpocket_iroh.so`／JNI。普通 Android 使用者无需构建或安装它；CI 仍构建 Linux x64 与 macOS arm64 二进制供相关测试和可选发布产物使用。

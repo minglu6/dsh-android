@@ -10,3 +10,4 @@ app/app/src/main/jniLibs/
 .vscode/
 .kotlin/
 /app/core/protocol/bin/
+/.pi/hindsight/
