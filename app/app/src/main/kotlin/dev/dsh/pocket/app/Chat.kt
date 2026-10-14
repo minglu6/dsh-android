@@ -372,7 +372,7 @@ fun ChatRoot(
                 if (tab == 0) Transcript(
                     st,
                     onTool = { tool = it },
-                    canFork = chat != null && firstPrompt == null && "sessions.fork" in ops && !st.running,
+                    canFork = chat != null && firstPrompt == null && "sessions.fork" in ops,
                     onFork = { seq -> Pocket.forkSession(seq) },
                     feedback = feedbackMap,
                     onLike = { id ->
@@ -704,8 +704,6 @@ internal fun Transcript(
     val revealIndex = remember(rows, revealItemKey) { revealItemKey?.let { inspectorRowIndex(rows, it) } ?: -1 }
     val n = rows.size
     val lastLen = (st.items.lastOrNull() as? Item.Text)?.text?.length ?: 0
-    // Desktop: branch only on the last message of a completed turn.
-    val branchKey = rows.lastOrNull { it is ChatRow.User || it is ChatRow.Answer }?.key
     val inspection = LocalInspectionMode.current
     val skipMotion = inspection || !ValueAnimator.areAnimatorsEnabled()
     // Inspection/tests: pin a new LazyListState at the target. scrollToItem and
@@ -813,12 +811,15 @@ internal fun Transcript(
                     }
                 }
                 is ChatRow.Answer -> {
-                    val branchHere = canFork && row.key == branchKey && !row.item.live
                     val mid = row.item.messageId
                     val rating = mid?.let { feedback[it]?.rating }
                     val turn = row.item.turn
+                    val turnRecord = st.turns.firstOrNull { it.turn == turn }
                     val showActions = !row.item.live && if (turn == null) !st.running else
-                        st.turns.firstOrNull { it.turn == turn }?.closed == true && lastAnswers[turn] == row.key
+                        turnRecord?.closed == true && lastAnswers[turn] == row.key
+                    // Fork each completed turn at its own closing event, even while a later turn runs.
+                    val branchSeq = turnRecord?.endSeq
+                    val branchHere = canFork && showActions && branchSeq != null
                     val usage = if (detailedUsage && turn != null) st.turnTokenUsage[turn] else null
                     Column(Modifier.fillMaxWidth()) {
                         MarkdownView(row.item.text, streaming = row.item.live)
@@ -828,7 +829,7 @@ internal fun Transcript(
                             clock = MessageClock.End,
                             branchEnabled = branchHere,
                             branchUnavailable = canFork && !branchHere,
-                            onBranch = if (canFork) ({ onFork(row.item.seq) }) else null,
+                            onBranch = if (canFork) ({ branchSeq?.let(onFork) }) else null,
                             messageId = mid,
                             rating = rating,
                             onLike = mid?.let { { onLike(it) } },

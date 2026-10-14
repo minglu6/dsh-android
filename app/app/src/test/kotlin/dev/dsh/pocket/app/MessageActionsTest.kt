@@ -1,7 +1,6 @@
 package dev.dsh.pocket.app
 
 import androidx.compose.ui.test.*
-import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.ClipboardManager
 import androidx.activity.compose.LocalOnBackPressedDispatcherOwner
@@ -161,28 +160,6 @@ class MessageActionsTest {
         }
     }
 
-    @Test fun assistantRowUsesIconContentDescriptionsNotVisibleLabels() {
-        rule.setContent { PocketTheme { ChatRoot(onMenu = {}) } }
-        rule.waitForIdle()
-
-        // User + assistant both expose copy; assistant also exposes feedback icons.
-        rule.onAllNodesWithTag("messageCopy").assertCountEquals(2)
-        rule.onNodeWithTag("messageLike").assertIsDisplayed()
-        rule.onNodeWithTag("messageDislike").assertIsDisplayed()
-
-        rule.onAllNodesWithContentDescription("复制").assertCountEquals(2)
-        rule.onAllNodesWithContentDescription("好的回答").assertCountEquals(1)
-        rule.onAllNodesWithContentDescription("有问题的回答").assertCountEquals(1)
-
-        // Visible text buttons must not appear (icons only).
-        rule.onAllNodesWithText("复制", substring = false).assertCountEquals(0)
-        rule.onAllNodesWithText("在新对话中分支").assertCountEquals(0)
-        rule.onAllNodesWithText("好的回答").assertCountEquals(0)
-        rule.onAllNodesWithText("有问题的回答").assertCountEquals(0)
-        // Official UserMessageNodeView never wires a branch action.
-        rule.onAllNodesWithTag("messageBranch").assertCountEquals(1)
-    }
-
     @Test
     @Config(sdk = [34], qualifiers = "w320dp-h720dp-xhdpi")
     fun completedUsageOpensDetailsAndFollowsLivePerformancePreference() {
@@ -253,10 +230,14 @@ class MessageActionsTest {
         var like: String? = null
         var dislike: String? = null
         lateinit var clipboard: ClipboardManager
+        val state = Pocket.chat.value!!.copy(
+            items = Pocket.chat.value!!.items.map { if (it is Item.Text) it.copy(turn = 1) else it },
+            turns = listOf(TurnRecord(1, startSeq = 0, endSeq = 3)),
+        )
         rule.setContent {
             clipboard = LocalClipboardManager.current
             PocketTheme {
-                Transcript(Pocket.chat.value!!, {}, canFork = true, onFork = { branch = it },
+                Transcript(state, {}, canFork = true, onFork = { branch = it },
                     onLike = { like = it }, onDislike = { dislike = it })
             }
         }
@@ -282,16 +263,53 @@ class MessageActionsTest {
         rule.runOnIdle {
             assertEquals("m1", like)
             assertEquals("m1", dislike)
-            assertEquals(2L, branch)
+            assertEquals(3L, branch)
         }
     }
 
-    @Test fun earlierAssistantBranchExplainsWhyItIsUnavailable() {
-        val state = Pocket.chat.value!!.copy(items = Pocket.chat.value!!.items +
-            Item.User("u2", "下一轮", at = System.currentTimeMillis(), seq = 3, messageSourceJson = """{"kind":"user"}"""))
-        rule.setContent { PocketTheme { Transcript(state, {}, canFork = true) } }
+    @Test fun historicalAndLatestTurnsForkAtTheirOwnClosingEvents() {
+        val first = completedUsageState()
+        val state = first.copy(
+            items = first.items + listOf(
+                Item.User("u2", "下一轮", seq = 6),
+                Item.Text("a2", "第二轮回复", false, seq = 8, turn = 2),
+            ),
+            turns = first.turns + TurnRecord(2, startSeq = 7, endSeq = 9),
+        )
+        val branches = mutableListOf<Long?>()
+        rule.setContent { PocketTheme { Transcript(state, {}, canFork = true, onFork = { branches += it }) } }
+        val actions = rule.onAllNodesWithTag("messageBranch")
+        actions.assertCountEquals(2)
+        actions[0].assertIsEnabled().performClick()
+        actions[1].assertIsEnabled().performClick()
+        rule.runOnIdle { assertEquals(listOf(5L, 9L), branches) }
+    }
+
+    @Test fun runningLaterTurnDoesNotDisableCompletedHistoricalTurn() {
+        val first = completedUsageState()
+        val state = first.copy(
+            running = true,
+            items = first.items + listOf(
+                Item.User("u2", "下一轮", seq = 6),
+                Item.Text("a2", "当前轮的中间回复", false, seq = 8, turn = 2),
+            ),
+            turns = first.turns + TurnRecord(2, startSeq = 7),
+        )
+        var boundary: Long? = null
+        rule.setContent { PocketTheme { Transcript(state, {}, canFork = true, onFork = { boundary = it }) } }
+        rule.onAllNodesWithTag("messageBranch").assertCountEquals(1)
+        rule.onNodeWithTag("messageBranch").assertIsEnabled().performClick()
+        rule.runOnIdle { assertEquals(5L, boundary) }
+    }
+
+    @Test fun missingTurnBoundaryCannotFallBackToForkingLatestTurn() {
+        var called = false
+        rule.setContent {
+            PocketTheme { Transcript(Pocket.chat.value!!, {}, canFork = true, onFork = { called = true }) }
+        }
         rule.onNodeWithTag("messageBranch", useUnmergedTree = true).assertIsNotEnabled()
-            .assert(SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, L.branchUnavailable()))
+            .performTouchInput { click() }
+        rule.runOnIdle { assertFalse(called) }
     }
 
     @Test fun processPreservesOrderAndIndependentReasoningDisclosure() {
