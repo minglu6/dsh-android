@@ -48,6 +48,15 @@ Android: `Markdown.kt` covers the common subset; keep aligning to desktop tokeni
 
 Inline code preserves its full literal text and is not promoted to a file chip based on slashes or extensions; directory paths therefore remain non-navigating. Explicit local Markdown links still open file previews. Desktop additionally resolves inline mentions through an owner-supplied file vocabulary; Android does not infer that vocabulary from path-shaped text.
 
+Paragraphs use one native text layout across emphasis, links and inline chips. Bold labels and their following punctuation/body share the same line; code and explicit file links retain their inline appearance and interaction. Quotes draw their rule without intrinsic measurement so nested rich text remains supported.
+
+Headings and strong emphasis request Android's native bold weight rather than copying CSS's numeric 600: the OnePlus system font renders 600 as regular, while 700 preserves the desktop's visibly bold hierarchy. This is a rendering choice, not a change to the shared font preferences.
+`MarkdownRenderingInstrumentedTest` compares actual glyph ink on-device so an OEM mapping that silently drops emphasis cannot pass only by retaining a 600-valued style in the AST.
+
+Tables use content-sized columns instead of fixed 140/200dp cells. Fewer than four columns fill the message width while preserving a readable minimum; wider tables scroll horizontally. Every row, including the final row, has a full-width hairline inside an explicitly bounded table. Narrow-phone light/dark rendering and inline code/link interactions are covered by `MarkdownLayoutTest` and `MarkdownInteractionTest`.
+
+Rendering evidence: [narrow/light](screenshots/markdown-comparison-light.png), [narrow/dark](screenshots/markdown-comparison-dark.png). The existing “介绍 Claude” response was also checked on OnePlus without resending its prompt; native bold ink is verified separately by the instrumented regression.
+
 ### 1.3 Thinking blocks
 
 - Reasoning uses the official Think icon and a one-line `思考 · preview` disclosure. Expanding one reasoning row renders its recorded Markdown independently; it does not open all reasoning blocks.

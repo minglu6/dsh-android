@@ -6,15 +6,16 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.test.assertHasClickAction
+import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.test.assertHasNoClickAction
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.click
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onRoot
-import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.text.TextLayoutResult
 import com.github.takahirom.roborazzi.ExperimentalRoborazziApi
 import com.github.takahirom.roborazzi.captureRoboImage
 import org.junit.Assert.assertEquals
@@ -51,10 +52,13 @@ class MarkdownInteractionTest {
                     }
                 }
             }
-            rule.onNodeWithText(directory).assertIsDisplayed().assertHasNoClickAction()
+            rule.onNodeWithText(directory, useUnmergedTree = true).assertIsDisplayed().assertHasNoClickAction()
                 .performTouchInput { click() }
             rule.runOnIdle { assertEquals(emptyList<String>(), opened) }
-            rule.onNodeWithText("查看文件").assertHasClickAction().performClick()
+            val layouts = mutableListOf<TextLayoutResult>()
+            val fileLink = rule.onNodeWithText("查看文件")
+            fileLink.performSemanticsAction(SemanticsActions.GetTextLayoutResult) { it(layouts) }
+            fileLink.performTouchInput { click(layouts.single().placeholderRects.single()!!.center) }
             rule.runOnIdle { assertEquals(listOf("src/Main.kt"), opened) }
             rule.onRoot().captureRoboImage("build/screenshots/markdown-directory-${appearance.name.lowercase()}.png")
         } finally {

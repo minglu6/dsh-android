@@ -8,19 +8,18 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.ExperimentalLayoutApi
-import androidx.compose.foundation.layout.FlowRow
-import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.text.InlineTextContent
+import androidx.compose.foundation.text.appendInlineContent
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -38,19 +37,29 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalUriHandler
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.LinkAnnotation
+import androidx.compose.ui.text.Placeholder
+import androidx.compose.ui.text.PlaceholderVerticalAlign
+import androidx.compose.ui.text.TextLinkStyles
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.rememberTextMeasurer
+import androidx.compose.ui.text.style.TextDecoration
+import androidx.compose.ui.text.withLink
 import androidx.compose.ui.text.withStyle
+import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -333,7 +342,7 @@ private fun MdBlockView(block: MdBlock, bodySp: TextUnit, bodyColor: Color) {
             }
             InlineRichText(
                 block.spans,
-                TextStyle(fontSize = size, lineHeight = (size.value + 8).sp, fontWeight = FontWeight.SemiBold, color = bodyColor),
+                TextStyle(fontSize = size, lineHeight = (size.value + 8).sp, fontWeight = FontWeight.Bold, color = bodyColor),
             )
         }
         is MdBlock.BulletList -> Column {
@@ -354,9 +363,13 @@ private fun MdBlockView(block: MdBlock, bodySp: TextUnit, bodyColor: Color) {
                 }
             }
         }
-        is MdBlock.Quote -> Row(Modifier.fillMaxWidth().height(IntrinsicSize.Min)) {
-            Box(Modifier.width(2.dp).fillMaxHeight().background(T.Caption))
-            Column(Modifier.padding(start = 14.dp).weight(1f)) {
+        is MdBlock.Quote -> {
+            val ruleColor = T.Caption
+            Column(
+                Modifier.fillMaxWidth().drawBehind {
+                    drawRect(ruleColor, size = androidx.compose.ui.geometry.Size(2.dp.toPx(), size.height))
+                }.padding(start = 16.dp),
+            ) {
                 block.children.forEachIndexed { i, child ->
                     if (i > 0) Spacer(Modifier.height(8.dp))
                     MdBlockView(child, bodySp, bodyColor)
@@ -364,7 +377,7 @@ private fun MdBlockView(block: MdBlock, bodySp: TextUnit, bodyColor: Color) {
             }
         }
         is MdBlock.Code -> FencedCode(block.language, block.literal, block.incomplete)
-        is MdBlock.Table -> GfmTable(block, bodyColor)
+        is MdBlock.Table -> GfmTable(block, bodySp, bodyColor)
         is MdBlock.Rule -> HorizontalDivider(color = T.Border, thickness = 0.5.dp, modifier = Modifier.padding(vertical = 8.dp))
     }
 }
@@ -467,95 +480,169 @@ private fun CodeHeaderIcon(
 }
 
 @Composable
-private fun GfmTable(table: MdBlock.Table, bodyColor: Color) {
+private fun GfmTable(table: MdBlock.Table, bodySp: TextUnit, bodyColor: Color) {
     val scroll = rememberScrollState()
-    Column(Modifier.fillMaxWidth().horizontalScroll(scroll)) {
-        if (table.headers.isNotEmpty()) {
-            table.headers.forEach { header ->
-                TableRowView(header, header = true, bodyColor = bodyColor)
-                HorizontalDivider(color = T.Border, thickness = 0.5.dp)
+    val measurer = rememberTextMeasurer()
+    val density = LocalDensity.current
+    val style = TextStyle(
+        fontFamily = LocalFonts.text,
+        fontSize = bodySp,
+        lineHeight = (bodySp.value + 8).sp,
+        color = bodyColor,
+    )
+    val rows = remember(table) { table.headers + table.rows }
+    val columns = rows.maxOfOrNull { it.size } ?: return
+    if (columns == 0) return
+    BoxWithConstraints(Modifier.fillMaxWidth()) {
+        // Desktop's narrow tables fill the message; wide tables retain their
+        // natural widths and scroll. Short labels must not steal prose space.
+        val widths = remember(rows, maxWidth, style, density) {
+            val minimum = List(columns) { i ->
+                100f + (if (i == 0) 0f else 16f) + (if (i == columns - 1) 0f else 16f)
+            }
+            val preferred = List(columns) { i ->
+                val textWidth = rows.maxOf { row ->
+                    val text = row.getOrNull(i).orEmpty().joinToString("") { span ->
+                        when (span) {
+                            is MdSpan.Text -> span.text
+                            is MdSpan.Code -> span.text
+                            is MdSpan.Link -> span.text
+                            is MdSpan.FileChip -> "</> ${span.label}"
+                        }
+                    }
+                    with(density) { measurer.measure(text, style, softWrap = false).size.width.toDp().value }
+                }
+                textWidth.coerceIn(100f, 320f) + minimum[i] - 100f
+            }
+            if (columns >= 4) preferred.map { it.dp } else {
+                val available = maxWidth.value.coerceAtLeast(minimum.sum())
+                val extra = available - minimum.sum()
+                val flexibility = preferred.sum() - minimum.sum()
+                List(columns) { i ->
+                    (minimum[i] + if (flexibility > 0f) {
+                        extra * (preferred[i] - minimum[i]) / flexibility
+                    } else extra / columns).dp
+                }
             }
         }
-        table.rows.forEachIndexed { i, row ->
-            TableRowView(row, header = false, bodyColor = bodyColor)
-            if (i != table.rows.lastIndex) HorizontalDivider(color = T.Border, thickness = 0.5.dp)
+        Column(Modifier.horizontalScroll(scroll)) {
+            Column(Modifier.width(widths.fold(0.dp) { sum, width -> sum + width })) {
+                rows.forEach { row ->
+                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                        widths.forEachIndexed { i, width ->
+                            Box(
+                                Modifier.width(width).padding(
+                                    start = if (i == 0) 0.dp else 16.dp,
+                                    end = if (i == columns - 1) 0.dp else 16.dp,
+                                    top = 10.dp,
+                                    bottom = 10.dp,
+                                ),
+                            ) {
+                                InlineRichText(row.getOrNull(i).orEmpty(), style)
+                            }
+                        }
+                    }
+                    // A bounded width is essential: fillMaxWidth inside an
+                    // unbounded horizontal scroller otherwise draws no rule.
+                    HorizontalDivider(color = T.Border, thickness = 0.5.dp)
+                }
+            }
         }
     }
 }
 
-@Composable
-private fun TableRowView(cells: List<List<MdSpan>>, header: Boolean, bodyColor: Color) {
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        cells.forEachIndexed { i, cell ->
-            Box(
-                Modifier
-                    .width(if (i == 0) 140.dp else 200.dp)
-                    .padding(vertical = 10.dp, horizontal = if (i == 0) 0.dp else 12.dp),
-            ) {
-                InlineRichText(
-                    cell,
-                    TextStyle(
-                        fontSize = Pocket.prefs.fontSize.sp,
-                        lineHeight = (Pocket.prefs.fontSize + 8).sp,
-                        fontWeight = if (header) FontWeight.SemiBold else FontWeight.Normal,
-                        color = bodyColor,
-                    ),
-                )
-            }
-        }
-    }
-}
-
-@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun InlineRichText(spans: List<MdSpan>, style: TextStyle) {
     val uri = LocalUriHandler.current
     val ctx = LocalContext.current
-    FlowRow(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.Start,
-        verticalArrangement = Arrangement.Center,
-    ) {
-        for (s in spans) when (s) {
-            is MdSpan.Text -> Text(
-                s.text,
-                style = style.copy(
-                    fontFamily = LocalFonts.text,
-                    fontWeight = if (s.bold) FontWeight.SemiBold else style.fontWeight,
-                    fontStyle = if (s.italic) FontStyle.Italic else FontStyle.Normal,
-                ),
-            )
-            is MdSpan.Code -> InlineCodeChip(s.text)
-            is MdSpan.FileChip -> FileLinkChip(s.path, s.label)
-            is MdSpan.Link -> Text(
-                s.text,
-                style = style.copy(fontFamily = LocalFonts.text, color = T.Accent, fontWeight = FontWeight.Medium),
-                modifier = Modifier.clickable {
-                    runCatching { uri.openUri(s.dest) }.recoverCatching {
-                        ctx.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(s.dest)))
-                    }
-                },
-            )
-        }
-    }
-}
-
-@Composable
-private fun InlineCodeChip(text: String) {
-    Text(
-        text,
-        style = TextStyle(
-            fontFamily = LocalFonts.code,
-            fontSize = (Pocket.prefs.codeFontSize + 1).sp,
-            color = T.Ink,
-        ),
-        modifier = Modifier
-            .padding(horizontal = 1.dp, vertical = 1.dp)
-            .clip(T.R4)
-            .background(T.Fill)
-            .border(0.5.dp, T.Border, T.R4)
-            .padding(horizontal = 5.dp, vertical = 1.dp),
+    val openFile = LocalOpenFilePreview.current
+    val density = LocalDensity.current
+    val measurer = rememberTextMeasurer()
+    val textStyle = style.copy(fontFamily = LocalFonts.text)
+    val codeStyle = TextStyle(
+        fontFamily = LocalFonts.code,
+        fontSize = (style.fontSize.value * 0.875f).sp,
+        color = style.color,
     )
+    val fileStyle = TextStyle(fontSize = 13.sp, fontWeight = FontWeight.Medium)
+    BoxWithConstraints(Modifier.fillMaxWidth()) {
+        val inlineContent = mutableMapOf<String, InlineTextContent>()
+        val annotated = buildAnnotatedString {
+            spans.forEachIndexed { i, span ->
+                when (span) {
+                    is MdSpan.Text -> withStyle(
+                        SpanStyle(
+                            // Android system fonts may map CSS's 600 to regular
+                            // (observed on OnePlus); request native bold semantics.
+                            fontWeight = if (span.bold) FontWeight.Bold else style.fontWeight,
+                            fontStyle = if (span.italic) FontStyle.Italic else FontStyle.Normal,
+                        ),
+                    ) { append(span.text) }
+                    is MdSpan.Link -> withLink(
+                        LinkAnnotation.Clickable(
+                            "link-$i",
+                            TextLinkStyles(SpanStyle(color = T.Link, fontWeight = FontWeight.Medium, textDecoration = TextDecoration.None)),
+                        ) {
+                            runCatching { uri.openUri(span.dest) }.recoverCatching {
+                                ctx.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(span.dest)))
+                            }
+                        },
+                    ) { append(span.text) }
+                    is MdSpan.Code, is MdSpan.FileChip -> {
+                        val isCode = span is MdSpan.Code
+                        val label = when (span) {
+                            is MdSpan.Code -> span.text
+                            is MdSpan.FileChip -> span.label
+                            else -> error("Not inline content")
+                        }
+                        val chipStyle = if (isCode) codeStyle else fileStyle
+                        val padding = if (isCode) 12.dp else 45.dp
+                        val measured = measurer.measure(
+                            label,
+                            chipStyle,
+                            constraints = Constraints(maxWidth = with(density) {
+                                (maxWidth - padding).coerceAtLeast(1.dp).roundToPx()
+                            }),
+                            maxLines = if (isCode) Int.MAX_VALUE else 1,
+                        )
+                        val width = with(density) { (measured.size.width.toDp() + padding).coerceAtMost(maxWidth).toSp() }
+                        val height = with(density) { (measured.size.height.toDp() + 4.dp).toSp() }
+                        val id = "chip-$i"
+                        inlineContent[id] = InlineTextContent(
+                            Placeholder(width, height, PlaceholderVerticalAlign.TextCenter),
+                        ) {
+                            when (span) {
+                                is MdSpan.Code -> Text(
+                                    span.text,
+                                    style = codeStyle,
+                                    modifier = Modifier.clip(T.R4).background(T.Fill)
+                                        .border(0.5.dp, T.Border, T.R4)
+                                        .padding(horizontal = 5.dp, vertical = 1.dp),
+                                )
+                                is MdSpan.FileChip -> androidx.compose.runtime.CompositionLocalProvider(LocalOpenFilePreview provides null) {
+                                    FileLinkChip(span.path, span.label)
+                                }
+                                else -> Unit
+                            }
+                        }
+                        if (span is MdSpan.FileChip && openFile != null) {
+                            withLink(LinkAnnotation.Clickable(
+                                "file-$i",
+                                TextLinkStyles(SpanStyle(textDecoration = TextDecoration.None)),
+                            ) { openFile(span.path) }) {
+                                appendInlineContent(id, label)
+                            }
+                        } else {
+                            appendInlineContent(id, label)
+                        }
+                    }
+                }
+            }
+        }
+        // One text layout owns wrapping, selection and baselines across style
+        // boundaries. A FlowRow treats the rest of a paragraph as one box.
+        Text(annotated, style = textStyle, inlineContent = inlineContent, modifier = Modifier.fillMaxWidth())
+    }
 }
 
 @Composable
