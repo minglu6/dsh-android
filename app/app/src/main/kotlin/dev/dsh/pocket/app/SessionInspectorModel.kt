@@ -255,6 +255,8 @@ internal fun inspectorGroupRows(st: ChatState, policy: PresentationPolicy): List
             is ChatRow.Tool -> listOf(row.item)
             is ChatRow.Reasoning -> listOf(row.item)
             is ChatRow.Notice -> listOf(row.item)
+            is ChatRow.Retry -> listOf(row.item)
+            is ChatRow.TurnFailure -> listOf(row.item)
             is ChatRow.Deliverable -> listOf(row.item)
             is ChatRow.Changes -> listOf(row.item)
         }
@@ -305,6 +307,13 @@ private fun inspectorItemRow(item: Item): InspectorRow {
         is Item.System -> jsonOf("label" to item.label, "text" to item.text, "at" to item.at,
             "previousText" to item.previousText, "toolsJson" to item.toolsJson, "previousToolsJson" to item.previousToolsJson)
         is Item.Notice -> jsonOf("text" to item.text, "turn" to item.turn)
+        is Item.Retry -> jsonOf("retryId" to item.retryId, "turn" to item.turn, "step" to item.step,
+            "attempts" to item.attempts.map { attempt ->
+                jsonOf("seq" to attempt.seq, "retry" to attempt.retry, "maxRetries" to attempt.maxRetries,
+                    "mode" to attempt.mode, "delayMs" to attempt.delayMs, "message" to attempt.message,
+                    "code" to attempt.code, "state" to attempt.state.name)
+            })
+        is Item.TurnFailure -> jsonOf("message" to item.message, "code" to item.code, "turn" to item.turn)
         is Item.Compacted -> jsonOf("compactionId" to item.compactionId, "status" to item.status.name,
             "summary" to item.summary, "error" to item.error, "interrupted" to item.interrupted,
             "startedAt" to item.startedAt, "endedAt" to item.endedAt, "turn" to item.turn)
@@ -320,6 +329,8 @@ private fun inspectorItemRow(item: Item): InspectorRow {
         is Item.Context -> "Item.Context"
         is Item.System -> "Item.System"
         is Item.Notice -> "Item.Notice"
+        is Item.Retry -> "Item.Retry"
+        is Item.TurnFailure -> "Item.TurnFailure"
         is Item.Compacted -> "Item.Compacted"
         is Item.Deliverable -> "Item.Deliverable"
         is Item.Changes -> "Item.Changes"
@@ -336,6 +347,7 @@ private fun Item.inspectorSeq(): Long? = when (this) {
     is Item.Text -> seq
     is Item.Reasoning -> seq
     is Item.Changes -> seq
+    is Item.Retry -> attempts.firstOrNull()?.seq
     else -> null
 }
 
@@ -344,6 +356,8 @@ private fun Item.inspectorTurn(): Int? = when (this) {
     is Item.Reasoning -> turn
     is Item.Tool -> turn
     is Item.Notice -> turn
+    is Item.Retry -> turn
+    is Item.TurnFailure -> turn
     is Item.Compacted -> turn
     is Item.Deliverable -> turn
     is Item.Changes -> turn
@@ -354,6 +368,7 @@ private fun Item.inspectorStep(): Int? = when (this) {
     is Item.Text -> step
     is Item.Reasoning -> step
     is Item.Tool -> step
+    is Item.Retry -> step
     else -> null
 }
 

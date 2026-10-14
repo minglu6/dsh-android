@@ -31,6 +31,19 @@ sealed interface QueueAction {
     data object Steer : QueueAction
 }
 
+enum class RetryState { Scheduled, Started, Cancelled }
+
+data class RetryAttempt(
+    val seq: Long,
+    val retry: Int,
+    val maxRetries: Int?,
+    val mode: String,
+    val delayMs: Long,
+    val message: String,
+    val code: String?,
+    val state: RetryState,
+)
+
 /** One rendered row of a conversation. */
 sealed interface Item {
     val key: String
@@ -84,6 +97,19 @@ sealed interface Item {
         val parentCallId: String? = null,
     ) : Item
     data class Notice(override val key: String, val text: String, val turn: Int? = null) : Item
+    data class Retry(
+        override val key: String,
+        val retryId: String,
+        val turn: Int?,
+        val step: Int?,
+        val attempts: List<RetryAttempt>,
+    ) : Item
+    data class TurnFailure(
+        override val key: String,
+        val message: String,
+        val code: String?,
+        val turn: Int?,
+    ) : Item
     /**
      * Injected user-role / developer context (runtime-context, skills, memory, time sampled, …).
      * Shown on the Trajectory tab as 上下文; omitted from the chat transcript.
@@ -354,6 +380,11 @@ class TranscriptReducer {
     private var systemPromptSeen = false
     /** Open compaction requests keyed by compactionId. */
     private val compactIndex = HashMap<String, Int>()
+    private data class RetryIdentity(val id: String, val turn: Int?, val step: Int?)
+    private val retryIndex = HashMap<RetryIdentity, Int>()
+    /** Endpoints may arrive in a newer history page than the scheduled attempt. */
+    private val retryStarts = HashMap<RetryIdentity, MutableMap<Int, Long>>()
+    private val closedSteps = HashMap<Pair<Int, Int>, Long>()
     /** Pending `llm/retry` facts for the open step (desktop assistant retry state). */
     private var openRetry: Int? = null
     private var openMaxRetries: Int? = null
@@ -451,6 +482,7 @@ class TranscriptReducer {
                     } else known
                     earlier?.let { fact.withEarlier(it) } ?: fact
                 }
+                refreshRetries()
             }
             "resume" -> {
                 records(frame["records"])
@@ -511,15 +543,31 @@ class TranscriptReducer {
                 later.resultAt = earlier.resultAt ?: later.resultAt
             }
         }
+        for ((identity, starts) in prior.retryStarts) {
+            val known = retryStarts.getOrPut(identity) { HashMap() }
+            for ((retry, seq) in starts) known[retry] = maxOf(known[retry] ?: -1, seq)
+        }
+        for ((step, seq) in prior.closedSteps) closedSteps[step] = maxOf(closedSteps[step] ?: -1, seq)
         val changedTurns = committed.filterIsInstance<Item.Changes>().mapTo(HashSet()) { it.turn }
-        val older = prior.items().filterNot { it is Item.Changes && it.turn in changedTurns }
+        val mergedRetries = HashSet<RetryIdentity>()
+        val older = prior.items().filterNot { it is Item.Changes && it.turn in changedTurns }.map { item ->
+            if (item !is Item.Retry) item else {
+                val identity = item.identity()
+                val later = retryIndex[identity]?.let { committed[it] as Item.Retry }
+                if (later == null) item else {
+                    mergedRetries += identity
+                    item.copy(attempts = (item.attempts + later.attempts).distinctBy { it.seq }.sortedBy { it.seq })
+                }
+            }
+        }
         val olderSteps = prior.stepRecords()
         val shift = older.size
         if (shift > 0) {
+            committed.removeAll { it is Item.Retry && it.identity() in mergedRetries }
             committed.addAll(0, older)
             rebuildIndexes()
-            // User identities are rebuilt along with tool/compaction indexes.
         }
+        refreshRetries()
         if (olderSteps.isNotEmpty()) {
             settledSteps.addAll(0, olderSteps)
         }
@@ -530,18 +578,21 @@ class TranscriptReducer {
         val min = filtered.mapNotNull { it["event"]["seq"].long() }.minOrNull()
         if (min != null) firstSeq = if (firstSeq < 0) min else minOf(firstSeq, min)
         return shift > 0 || olderSteps.isNotEmpty() || olderHeaders.isNotEmpty() ||
-            prior.toolTimings.isNotEmpty() || prior.turnFacts.isNotEmpty() || olderTurnUsage
+            prior.toolTimings.isNotEmpty() || prior.turnFacts.isNotEmpty() || olderTurnUsage ||
+            prior.retryStarts.isNotEmpty() || prior.closedSteps.isNotEmpty()
     }
 
     private fun rebuildIndexes() {
         toolIndex.clear()
         compactIndex.clear()
+        retryIndex.clear()
         userByRpc.clear()
         userByMessage.clear()
         committed.forEachIndexed { i, item ->
             when (item) {
                 is Item.Tool -> if (item.callId.isNotEmpty()) toolIndex[item.callId] = i
                 is Item.Compacted -> compactIndex[item.compactionId] = i
+                is Item.Retry -> retryIndex[item.identity()] = i
                 is Item.User -> {
                     item.requestId?.let { userByRpc[it] = i }
                     item.messageId?.let { userByMessage[it] = i }
@@ -559,6 +610,7 @@ class TranscriptReducer {
     private fun reset() {
         committed.clear(); toolIndex.clear(); compactIndex.clear(); approvalCall.clear(); userByRpc.clear(); localEchoes.clear()
         userByMessage.clear()
+        retryIndex.clear(); retryStarts.clear(); closedSteps.clear()
         inbox.values.forEach { it.clear() }
         inboxSeq = -1L
         toolTimings.clear()
@@ -650,18 +702,15 @@ class TranscriptReducer {
                         endSeq = seq, endedAt = e["time"].long(), endReason = reason["kind"].str(),
                     )
                 }
+                refreshRetries()
                 openTurn = null
                 openStep = null
                 when (reason["kind"].str()) {
                     "error" -> {
                         val err = reason["error"]
-                        val code = err["code"].str()
-                        val msg = when (code) {
-                            "AUTH_ERROR", "INVALID_API_KEY" -> "API 密钥无效"
-                            "QUOTA_EXCEEDED", "RATE_LIMIT" -> "当前请求的额度已用尽"
-                            else -> err["message"].str()?.takeIf { it.isNotBlank() } ?: "本轮运行失败"
-                        }
-                        committed += Item.Notice("te$seq", msg, turn = turn)
+                        committed += Item.TurnFailure(
+                            "te$seq", err["message"].str().orEmpty(), err["code"].str(), turn,
+                        )
                     }
                     "aborted" -> {
                         val hook = reason["reason"]
@@ -698,6 +747,12 @@ class TranscriptReducer {
                 openRetry = null; openMaxRetries = null; openRetryDelayMs = null; openLastAttemptError = null
                 e["time"].long()?.let { stepStartTimes["$turn:$step"] = it }
             }
+            "step/end" -> {
+                val turn = data["turn"].long()?.toInt() ?: openTurn
+                val step = data["step"].long()?.toInt() ?: openStep
+                if (turn != null && step != null) closedSteps[turn to step] = seq
+                refreshRetries()
+            }
             // Desktop ui-trajectory: index EpochHeader.tools + config for Request inspector.
             "request/header" -> indexRequestHeader(e, data, seq)
             "llm/retry" -> {
@@ -707,20 +762,12 @@ class TranscriptReducer {
                     ?: data["maximum"].long()?.toInt()
                     ?: openMaxRetries
                 openRetryDelayMs = data["delayMs"].long() ?: data["retryDelayMs"].long() ?: openRetryDelayMs
-                openLastAttemptError = data["error"]["message"].str()
+                openLastAttemptError = data["failure"]["message"].str()
+                    ?: data["error"]["message"].str()
                     ?: data["error"]["reason"].str()
                     ?: data["error"].str()
                     ?: openLastAttemptError
-                // Chat notice (desktop message.retry.*).
-                val retry = openRetry
-                val maximum = openMaxRetries
-                val seconds = openRetryDelayMs?.let { (it / 1000).coerceAtLeast(0) }
-                    ?: data["delaySeconds"].long()
-                val label = "等待重试模型请求"
-                val text = if (retry != null && maximum != null && seconds != null) {
-                    "$label（$retry/$maximum） · ${seconds}s"
-                } else label
-                committed += Item.Notice("n$seq", text, turn = openTurn)
+                scheduleRetry(data, seq)
             }
             "user/message" -> {
                 val msg = if (data["content"] != null) data else data["message"]
@@ -861,7 +908,14 @@ class TranscriptReducer {
                     committed[i] = if (outcome == "allowed-once") t.copy(status = ToolStatus.Running) else t.copy(status = ToolStatus.Error, error = outcome)
                 }
             }
-            "llm/retry-started" -> committed += Item.Notice("ns$seq", "正在重试模型请求")
+            "llm/retry-started" -> {
+                val identity = retryIdentity(data)
+                val retry = data["retry"].long()?.toInt()
+                if (identity != null && retry != null) {
+                    retryStarts.getOrPut(identity) { HashMap() }[retry] = seq
+                    retryIndex[identity]?.let { i -> committed[i] = projectRetry(committed[i] as Item.Retry) }
+                }
+            }
             "deliverables/presented" -> {
                 val files = data["files"].arr().orEmpty().mapNotNull { f ->
                     val path = f["path"].str()?.takeIf { it.isNotBlank() } ?: return@mapNotNull null
@@ -884,6 +938,68 @@ class TranscriptReducer {
                 if (previous >= 0) committed[previous] = change else committed += change
             }
         }
+    }
+
+    private fun Item.Retry.identity() = RetryIdentity(retryId, turn, step)
+
+    private fun retryIdentity(data: JsonElement?): RetryIdentity? {
+        val id = data["retryId"].str()?.takeIf { it.isNotEmpty() } ?: return null
+        return RetryIdentity(id, data["turn"].long()?.toInt(), data["step"].long()?.toInt())
+    }
+
+    private fun scheduleRetry(data: JsonElement?, seq: Long) {
+        val identity = retryIdentity(data) ?: return
+        val retry = data["retry"].long()?.toInt() ?: return
+        val attempt = RetryAttempt(
+            seq = seq,
+            retry = retry,
+            maxRetries = data["maxRetries"].long()?.toInt(),
+            mode = data["mode"].str().orEmpty(),
+            delayMs = data["delayMs"].long() ?: 0,
+            message = data["failure"]["message"].str().orEmpty(),
+            code = data["failure"]["code"].str(),
+            state = RetryState.Scheduled,
+        )
+        val index = retryIndex[identity]
+        val item = if (index == null) {
+            Item.Retry(
+                key = "retry:${identity.turn}:${identity.step}:${identity.id}",
+                retryId = identity.id, turn = identity.turn, step = identity.step, attempts = listOf(attempt),
+            )
+        } else {
+            val previous = committed[index] as Item.Retry
+            previous.copy(attempts = previous.attempts + attempt)
+        }
+        if (index == null) {
+            retryIndex[identity] = committed.size
+            committed += projectRetry(item)
+        } else committed[index] = projectRetry(item)
+    }
+
+    private fun projectRetry(item: Item.Retry): Item.Retry {
+        val starts = retryStarts[item.identity()]
+        val closedAt = maxOf(
+            item.turn?.let { turnFacts[it]?.endSeq } ?: -1,
+            if (item.turn != null && item.step != null) closedSteps[item.turn to item.step] ?: -1 else -1,
+        )
+        var updated: MutableList<RetryAttempt>? = null
+        item.attempts.forEachIndexed { index, attempt ->
+            val state = when {
+                attempt.state == RetryState.Started || (starts?.get(attempt.retry) ?: -1) > attempt.seq ->
+                    RetryState.Started
+                index == item.attempts.lastIndex && closedAt > attempt.seq -> RetryState.Cancelled
+                else -> attempt.state
+            }
+            if (state != attempt.state) {
+                val attempts = updated ?: item.attempts.toMutableList().also { updated = it }
+                attempts[index] = attempt.copy(state = state)
+            }
+        }
+        return updated?.let { item.copy(attempts = it) } ?: item
+    }
+
+    private fun refreshRetries() {
+        for (index in retryIndex.values) committed[index] = projectRetry(committed[index] as Item.Retry)
     }
 
     /** Only what a person typed: dsh also injects user-role context (runtime-context, time, skills, memory plugins). */

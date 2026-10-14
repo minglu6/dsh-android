@@ -1,6 +1,8 @@
 package dev.dsh.pocket.app
 
 import dev.dsh.pocket.protocol.Item
+import dev.dsh.pocket.protocol.RetryAttempt
+import dev.dsh.pocket.protocol.RetryState
 import dev.dsh.pocket.protocol.ToolStatus
 import dev.dsh.pocket.protocol.TurnRecord
 import dev.dsh.pocket.protocol.TranscriptReducer
@@ -22,6 +24,71 @@ class ChatProcessTest {
     private fun List<ChatRow>.controls() = filterIsInstance<ChatRow.Process>().filter { it.turnSummary }
     private fun List<ChatRow>.itemKeys(): List<String> = flatMap { row ->
         if (row is ChatRow.Process) row.members.map { it.key } else listOf(row.key)
+    }
+
+    private fun retry(state: RetryState = RetryState.Scheduled, seq: Long = 2L) = Item.Retry(
+        "retry:1:1:request", "request", 1, 1,
+        listOf(RetryAttempt(seq, 1, 5, "normal", 1500L, "upstream unavailable", "HTTP_503", state)),
+    )
+
+    @Test fun retryOnlyFailureAnchorsTurnHeaderBeforeBothPersistentRowsInEveryMode() {
+        val retry = retry(RetryState.Started)
+        val failure = Item.TurnFailure("failure", "upstream unavailable", "HTTP_503", 1)
+        for (mode in TranscriptView.entries) {
+            val rows = foldChatItems(listOf(retry, failure), presentationPolicyFor(mode), false,
+                listOf(completed(reason = "error")))
+            assertEquals(listOf("turn-1-process", retry.key, failure.key), rows.map { it.key })
+            assertTrue(rows[1] is ChatRow.Retry)
+            assertTrue(rows[2] is ChatRow.TurnFailure)
+            assertTrue(rows.controls().single().controlledKeys.isEmpty())
+            assertEquals(rows, visibleChatRows(rows, mapOf("turn-1-process" to false)))
+        }
+    }
+
+    @Test fun retryAndFailureNeverBecomeMembersOfCollapsedProcessOrTurnControls() {
+        val retry = retry()
+        val failure = Item.TurnFailure("failure", "unavailable", "HTTP_503", 1)
+        for (mode in TranscriptView.entries) {
+            val rows = foldChatItems(listOf(thought(), retry, tool(), failure, answer()),
+                presentationPolicyFor(mode), false, listOf(completed()))
+            assertEquals(listOf("r", retry.key, "t", failure.key, "answer"), rows.itemKeys())
+            assertEquals(listOf(listOf("r"), listOf("t")), rows.groups().map { it.members.map(Item::key) })
+            val control = rows.controls().single()
+            assertFalse(retry.key in control.controlledKeys)
+            assertFalse(failure.key in control.controlledKeys)
+            val visible = visibleChatRows(rows, mapOf(control.key to false))
+            assertTrue(visible.any { it.key == retry.key })
+            assertTrue(visible.any { it.key == failure.key })
+        }
+    }
+
+    @Test fun retryCountdownRoundsUpAndWaitsAtOneUntilHostAdvancesState() {
+        assertEquals(1L, retrySeconds(-1))
+        assertEquals(1L, retrySeconds(0))
+        assertEquals(1L, retrySeconds(1000))
+        assertEquals(2L, retrySeconds(1001))
+        assertEquals(2L, retrySeconds(2000))
+        assertEquals(Long.MAX_VALUE / 1000L + 1L, retrySeconds(Long.MAX_VALUE))
+        assertEquals(2L, retryRemainingSeconds(1500, 0))
+        assertEquals(1L, retryRemainingSeconds(1500, 500))
+        assertEquals(1L, retryRemainingSeconds(1500, 9000))
+        assertEquals(1L, retryRemainingSeconds(-1, Long.MAX_VALUE))
+        assertEquals(2L, retryRemainingSeconds(1500, -1000))
+    }
+
+    @Test fun failureLocalizationPreservesUnknownAndRateLimitReasonsAndRetainsLegacyAliases() {
+        for (en in listOf(false, true)) {
+            val raw = "429: temporary request rate limit, retry later"
+            for (code in listOf(null, "RATE_LIMIT", "HTTP_429", "UNRECOGNIZED")) {
+                assertEquals(raw, chatFailureMessage(raw, code, en))
+            }
+            assertEquals(chatFailureMessage(raw, "AUTH", en), chatFailureMessage(raw, "AUTH_ERROR", en))
+            assertEquals(chatFailureMessage(raw, "AUTH", en), chatFailureMessage(raw, "INVALID_API_KEY", en))
+            assertEquals(chatFailureMessage(raw, "QUOTA", en), chatFailureMessage(raw, "ACCOUNT_QUOTA", en))
+            assertEquals(chatFailureMessage(raw, "QUOTA", en), chatFailureMessage(raw, "QUOTA_EXCEEDED", en))
+            assertNotEquals(chatFailureMessage(raw, "ACCOUNT_SIGNED_OUT", en),
+                chatFailureMessage(raw, "ACCOUNT_SIGN_IN_REQUIRED", en))
+        }
     }
 
     @Test fun invisibleAssistantWhitespaceDoesNotCreateResponseBoundaries() {

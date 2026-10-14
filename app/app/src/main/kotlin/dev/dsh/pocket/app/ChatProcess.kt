@@ -64,6 +64,14 @@ sealed interface ChatRow {
         override val key get() = item.key
     }
 
+    data class Retry(val item: Item.Retry) : ChatRow {
+        override val key get() = item.key
+    }
+
+    data class TurnFailure(val item: Item.TurnFailure) : ChatRow {
+        override val key get() = item.key
+    }
+
     /** Verbose / live detail: one tool card. */
     data class Tool(val item: Item.Tool) : ChatRow {
         override val key get() = item.key
@@ -283,6 +291,8 @@ private fun Item.processTurn(): Int? = when (this) {
     is Item.Reasoning -> turn
     is Item.Text -> turn
     is Item.Notice -> turn
+    is Item.Retry -> turn
+    is Item.TurnFailure -> turn
     is Item.Deliverable -> turn
     is Item.Changes -> turn
     else -> null
@@ -292,6 +302,7 @@ private fun Item.processStep(): Int? = when (this) {
     is Item.Tool -> step
     is Item.Reasoning -> step
     is Item.Text -> step
+    is Item.Retry -> step
     else -> null
 }
 
@@ -387,6 +398,8 @@ fun foldChatItems(
         is ChatRow.Process -> row.turn
         is ChatRow.Answer -> row.item.turn
         is ChatRow.Notice -> row.item.turn
+        is ChatRow.Retry -> row.item.turn
+        is ChatRow.TurnFailure -> row.item.turn
         is ChatRow.Deliverable -> row.item.turn
         is ChatRow.Changes -> row.item.turn
         else -> null
@@ -470,6 +483,8 @@ private fun emitPlain(out: MutableList<ChatRow>, item: Item) {
         is Item.Reasoning -> out += ChatRow.Reasoning(item)
         is Item.Text -> out += ChatRow.Answer(item)
         is Item.Notice -> out += ChatRow.Notice(item)
+        is Item.Retry -> out += ChatRow.Retry(item)
+        is Item.TurnFailure -> out += ChatRow.TurnFailure(item)
         is Item.Deliverable -> out += ChatRow.Deliverable(item)
         is Item.Changes -> out += ChatRow.Changes(item)
         else -> Unit

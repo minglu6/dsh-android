@@ -149,6 +149,12 @@ Slash menu pick consumes the typed `/` (desktop `slash/input-consume-token`) the
 
 Retry is **display** of Host `llm/retry` chains (`message.retry.*`), not a user button.
 
+Android projects each producer-correlated retry chain into one stable row keyed by `retryId` and its owning turn/step. Scheduled/started events update the row in place; its disclosure starts closed and retains expansion across attempt updates. The summary shows the current attempt/limit (`∞` in always mode), a locally anchored waiting countdown, and started/cancelled state. Details show the current delay and failure reason, not a list of repeated notices. Step/turn closure cancels only a pending wait; completed retry attempts remain historical.
+
+Terminal failures are separate persistent rows with an error dot, red title, original/localized reason and muted monospace code. On phones the code occupies its own line to leave room for long errors. Retry and failure rows remain visible outside process folding; diagnostics retain structured attempts and raw error fields. Snapshot/resume and cross-page history merge the same chain without duplicate rows. The Host retry policy and bridge are unchanged.
+
+Verification: reducer replay covers exhaustion, recovery, cancellation, chain isolation and history boundaries. Native Compose rendering and disclosure interaction were exercised at 393dp light and 320dp dark/English with long errors; this is Robolectric/Roborazzi evidence, not a production-Host or installed-phone acceptance run.
+
 Assistant completion actions wait for the Host Turn to close and belong to its last answer, not every durable intermediate reply. The running process therefore does not gain a copy/time/action row merely because one assistant step has committed.
 
 Turn usage follows the desktop token meter's durable attempt lifecycle, including billed failed attempts and retries. Final message usage overrides streaming samples; missing boundaries, unsafe counts or contradictory totals hide the entire disclosure. Optional cache/reasoning buckets and model routes appear only when every attempt reports them. History paging can complete a partial turn; snapshots and duplicate events never reuse or double-count old totals. Switching to Compact removes both the pill and any open details dialog. The phone bridge is unchanged.

@@ -859,6 +859,8 @@ internal fun Transcript(
                 is ChatRow.Notice -> SelectableOutput {
                     Text(row.item.text.breakAnywhere(), fontSize = 13.sp, color = T.Text3, softWrap = true, modifier = Modifier.fillMaxWidth())
                 }
+                is ChatRow.Retry -> RetryRow(row.item)
+                is ChatRow.TurnFailure -> TurnFailureRow(row.item)
                 is ChatRow.Tool -> ToolCard(row.item) { onTool(row.item) }
                 is ChatRow.Reasoning -> ReasoningRow(row.item)
                 is ChatRow.Process -> ProcessGroupRow(

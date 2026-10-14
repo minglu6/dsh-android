@@ -22,11 +22,14 @@ class TodoAndForkEventsTest {
         assertEquals(listOf(TodoItem("从投影来", "pending")), r.todos())
     }
 
-    @Test fun turnEndErrorAndMaxTokensUseDesktopCopy() {
+    @Test fun turnEndRetainsFailureAndMaxTokensNotice() {
         val r = TranscriptReducer()
         r.apply(el("""{"type":"event","event":{"type":"turn/start","seq":1,"time":0,"data":{"turn":1}}}"""))
         r.apply(el("""{"type":"event","event":{"type":"turn/end","seq":2,"time":1,"data":{"turn":1,"reason":{"kind":"error","error":{"code":"AUTH_ERROR","message":"bad key"}}}}}"""))
-        assertTrue(r.items().any { it is Item.Notice && it.text == "API 密钥无效" })
+        val failure = r.items().filterIsInstance<Item.TurnFailure>().single()
+        assertEquals("bad key", failure.message)
+        assertEquals("AUTH_ERROR", failure.code)
+        assertEquals(1, failure.turn)
 
         val r2 = TranscriptReducer()
         r2.apply(el("""{"type":"event","event":{"type":"turn/start","seq":1,"time":0,"data":{"turn":1}}}"""))

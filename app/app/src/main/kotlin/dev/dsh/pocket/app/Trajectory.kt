@@ -339,6 +339,8 @@ fun buildTrajectory(items: List<Item>, steps: List<StepRecord> = emptyList()): L
     for (item in items) {
         when (item) {
             is Item.Deliverable, is Item.Changes -> Unit // chat cards; trajectory uses tool/present rows
+            // Retry chains and terminal failures belong to chat, not invented system ledger rows.
+            is Item.Retry, is Item.TurnFailure -> Unit
             is Item.System -> addPrefixOrRow(
                 TrajRow(
                     item.key, 0, TrajL.kindSystem, item.label,
