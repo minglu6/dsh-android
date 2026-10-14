@@ -136,8 +136,7 @@ internal fun BuiltInPluginsScreen(onBack: () -> Unit) {
             }
         }) {
             InventoryNote(inventoryText("查看内置部署的插件列表", "View plugins in the built-in deployment"))
-            if (!online) InventoryNote(inventoryText("主机已断开连接", "Host disconnected"), true)
-            else if (!supported) InventoryNote(inventoryText("主机未提供内置插件目录，请检查主机插件是否已加载。", "The host does not provide a built-in plugin inventory. Check that its plugin is loaded."), true)
+            if (online && !supported) InventoryNote(inventoryText("主机未提供内置插件目录，请检查主机插件是否已加载。", "The host does not provide a built-in plugin inventory. Check that its plugin is loaded."), true)
             state.error?.let { InventoryNote(it.message ?: inventoryText("读取插件列表失败", "Could not load plugin inventory"), true) }
             if (state.loading) LinearProgressIndicator(Modifier.fillMaxWidth().padding(horizontal = 18.dp))
             state.snapshot?.let { PluginInventoryContent(it) }

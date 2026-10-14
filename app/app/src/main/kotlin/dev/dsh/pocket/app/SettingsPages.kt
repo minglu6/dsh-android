@@ -13,6 +13,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.Color
@@ -132,6 +133,8 @@ internal fun SettingsScaffold(
     content: @Composable ColumnScope.() -> Unit,
 ) {
     BackHandler(onBack = onBack)
+    val active by Pocket.active.collectAsState()
+    val statuses by Pocket.status.collectAsState()
     CompositionLocalProvider(LocalContentColor provides T.Ink) {
         Column(
             Modifier
@@ -149,6 +152,9 @@ internal fun SettingsScaffold(
                 }
                 Text(title, fontSize = 20.sp, color = T.Ink, modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
                 actions()
+            }
+            if (statuses[active] != Dot.Online) {
+                SettingsMessage(st("Host 未连接，需连接的操作暂不可用", "Host disconnected. Actions requiring a connection are unavailable."))
             }
             Column(Modifier.weight(1f).fillMaxWidth().verticalScroll(rememberScrollState()), content = content)
         }
@@ -175,10 +181,12 @@ internal fun SettingsNavRow(
     icon: ImageVector? = null,
     value: String? = null,
     divider: Boolean = true,
+    enabled: Boolean = true,
     onClick: () -> Unit,
 ) {
     Row(
-        Modifier.fillMaxWidth().heightIn(min = 48.dp).clickable(onClick = onClick).padding(horizontal = 16.dp, vertical = 15.dp),
+        Modifier.fillMaxWidth().heightIn(min = 48.dp).clickable(enabled = enabled, onClick = onClick)
+            .alpha(if (enabled) 1f else 0.5f).padding(horizontal = 16.dp, vertical = 15.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         icon?.let {
@@ -234,12 +242,12 @@ fun SettingsTextField(value: String, onChange: (String) -> Unit, hint: String = 
 }
 
 @Composable
-internal fun ErrorOrEmpty(message: String, onRetry: (() -> Unit)? = null) {
+internal fun ErrorOrEmpty(message: String, retryEnabled: Boolean = true, onRetry: (() -> Unit)? = null) {
     Column(Modifier.fillMaxWidth().padding(24.dp), horizontalAlignment = Alignment.CenterHorizontally) {
         Text(message, color = T.Text3, fontSize = 14.sp)
         if (onRetry != null) {
             Spacer(Modifier.height(12.dp))
-            TextButton(onRetry) { Text(L.retry(), color = T.Accent) }
+            TextButton(onRetry, enabled = retryEnabled) { Text(L.retry(), color = if (retryEnabled) T.Accent else T.Caption) }
         }
     }
 }
@@ -258,7 +266,7 @@ internal fun collapseText(value: CollapseTiming): String = when (value) {
 }
 
 @Composable
-internal fun AppearanceCards(current: Appearance, onPick: (Appearance) -> Unit) {
+internal fun AppearanceCards(current: Appearance, enabled: Boolean = true, onPick: (Appearance) -> Unit) {
     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         Appearance.entries.forEach { value ->
             val label = when (value) { Appearance.Light -> L.light(); Appearance.Dark -> L.dark(); Appearance.System -> L.followSystem() }
@@ -268,7 +276,8 @@ internal fun AppearanceCards(current: Appearance, onPick: (Appearance) -> Unit) 
                     .background(if (current == value) T.Fill2 else Color.Transparent)
                     .border(0.5.dp, if (current == value) Color(0xFFADB2B8) else T.BorderStrong, T.R20)
                     .semantics { selected = current == value }
-                    .clickable(role = Role.Button) { onPick(value) }
+                    .clickable(enabled = enabled, role = Role.Button) { onPick(value) }
+                    .alpha(if (enabled) 1f else 0.5f)
                     .padding(horizontal = 4.dp, vertical = 20.dp),
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.Center,
@@ -289,6 +298,7 @@ internal fun SettingsFontRow(
     range: IntRange,
     expanded: Boolean? = null,
     onToggle: (() -> Unit)? = null,
+    enabled: Boolean = true,
     onChange: (Int) -> Unit,
 ) {
     Row(
@@ -300,23 +310,23 @@ internal fun SettingsFontRow(
             Text(title, color = T.Ink, fontSize = 14.sp)
             Text(description, color = T.Text3, fontSize = 12.sp, lineHeight = 18.sp)
         }
-        Box(Modifier.width(72.dp).height(56.dp), contentAlignment = Alignment.Center) {
+        Box(Modifier.width(72.dp).height(56.dp).alpha(if (enabled) 1f else 0.5f), contentAlignment = Alignment.Center) {
             Box(Modifier.fillMaxWidth().height(36.dp).clip(T.R8).background(T.Fill2))
             Text("$value", color = T.Ink, fontSize = 14.sp)
             Column(Modifier.width(32.dp).align(Alignment.CenterEnd)) {
                 // Keep the desktop pill size; enlarge the arrows' transparent, disjoint touch areas.
                 repeat(2) { index ->
                     val delta = if (index == 0) 1 else -1
-                    val enabled = value + delta in range
+                    val canStep = enabled && value + delta in range
                     Box(
                         Modifier.size(width = 32.dp, height = 28.dp)
                             .semantics { contentDescription = "$title：${if (delta > 0) st("增大字号", "Increase font size") else st("减小字号", "Decrease font size")}" }
-                            .clickable(enabled = enabled, role = Role.Button) { onChange(value + delta) },
+                            .clickable(enabled = canStep, role = Role.Button) { onChange(value + delta) },
                         contentAlignment = Alignment.Center,
                     ) {
                         Box(Modifier.size(width = 17.dp, height = 12.dp).clip(T.R4)
                             .background(T.Surface.copy(alpha = 0.75f)), contentAlignment = Alignment.Center) {
-                            Icon(D.chevronDown, null, tint = if (enabled) T.Ink else T.Caption,
+                            Icon(D.chevronDown, null, tint = if (canStep) T.Ink else T.Caption,
                                 modifier = Modifier.size(10.dp).rotate(if (delta > 0) 180f else 0f))
                         }
                     }
@@ -336,7 +346,7 @@ internal fun SettingsFontRow(
 }
 
 @Composable
-internal fun SettingsFontFamilyRow(title: String, description: String, value: String, tag: String, onChange: (String) -> Unit) {
+internal fun SettingsFontFamilyRow(title: String, description: String, value: String, tag: String, enabled: Boolean = true, onChange: (String) -> Unit) {
     val host by Pocket.active.collectAsState()
     var draft by remember(host) { mutableStateOf(TextFieldValue(value)) }
     var dirty by remember(host) { mutableStateOf(false) }
@@ -347,7 +357,7 @@ internal fun SettingsFontFamilyRow(title: String, description: String, value: St
     }
     val focus = LocalFocusManager.current
     fun commit() {
-        if (draft.composition != null) return
+        if (!enabled || draft.composition != null) return
         if (!dirty) return
         val normalized = normalizeFontFamily(draft.text)
         draft = TextFieldValue(normalized)
@@ -367,11 +377,12 @@ internal fun SettingsFontFamilyRow(title: String, description: String, value: St
             value = draft,
             onValueChange = { if (it.text.length <= 200) { draft = it; dirty = true } },
             singleLine = true,
+            enabled = enabled,
             textStyle = MaterialTheme.typography.bodyMedium.copy(color = T.Ink, fontSize = 14.sp),
             cursorBrush = SolidColor(T.Accent),
             keyboardOptions = KeyboardOptions(autoCorrectEnabled = false, imeAction = ImeAction.Done),
             keyboardActions = KeyboardActions(onDone = { if (draft.composition == null) { commit(); focus.clearFocus() } }),
-            modifier = Modifier.weight(1f).heightIn(min = 48.dp).testTag(tag)
+            modifier = Modifier.weight(1f).heightIn(min = 48.dp).alpha(if (enabled) 1f else 0.5f).testTag(tag)
                 .semantics { contentDescription = title }
                 .onFocusChanged { state ->
                     if (hadFocus && !state.isFocused) commit()
@@ -403,10 +414,12 @@ internal fun GeneralPreferenceRow(
     onClick: (() -> Unit)? = null,
     divider: Boolean = true,
     trailing: (@Composable () -> Unit)? = null,
+    enabled: Boolean = true,
 ) {
     Row(
         Modifier.fillMaxWidth().heightIn(min = 56.dp)
-            .then(if (onClick != null) Modifier.clickable(role = Role.Button, onClick = onClick) else Modifier)
+            .then(if (onClick != null) Modifier.clickable(enabled = enabled, role = Role.Button, onClick = onClick) else Modifier)
+            .alpha(if (enabled) 1f else 0.5f)
             .padding(horizontal = 16.dp, vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(12.dp),

@@ -25,6 +25,7 @@ class AgentPresetSettingsTest {
     private var previousClient: Any? = null
     private var previousHost: String? = null
     private var previousOps = emptySet<String>()
+    private var previousStatus = emptyMap<String, Dot>()
     private var previousRoster = emptyList<JsonObject>()
     private var previousSettingsRevision = 0L
     private val clients = mutableListOf<PocketClient>()
@@ -46,12 +47,14 @@ class AgentPresetSettingsTest {
         previousClient = clientField.get(Pocket)
         previousHost = Pocket.active.value
         previousOps = Pocket.ops.value
+        previousStatus = Pocket.status.value
         previousRoster = Pocket.presetRoster.value
         previousSettingsRevision = Pocket.modelSettingsRevision.value
         preferences = installHostSettingsFixture()
         preferences.desktopSet(SharedSetting.CodeWork, JsonPrimitive(true))
         Pocket.active.value = "preset-test"
-        Pocket.ops.value = setOf("presets.settings", "presets.read", "models.settingsMutate")
+        Pocket.status.value = mapOf("preset-test" to Dot.Online)
+        Pocket.ops.value = setOf("presets.settings", "presets.read", "models.settingsMutate", "sessions.create")
         clientField.set(Pocket, client { request ->
             requests += request
             when (request["op"].str()) {
@@ -68,6 +71,7 @@ class AgentPresetSettingsTest {
         clientField.set(Pocket, previousClient)
         Pocket.active.value = previousHost
         Pocket.ops.value = previousOps
+        Pocket.status.value = previousStatus
         Pocket.presetRoster.value = previousRoster
         Pocket.modelSettingsRevision.value = previousSettingsRevision
     }
@@ -303,6 +307,7 @@ class AgentPresetSettingsTest {
         rule.runOnIdle {
             clientField.set(Pocket, next)
             Pocket.active.value = "other-host"
+            Pocket.status.value = mapOf("other-host" to Dot.Online)
         }
         rule.onNodeWithTag("preset-select-other").assertIsSelected()
         rule.runOnIdle { release.complete(Unit) }
@@ -328,6 +333,45 @@ class AgentPresetSettingsTest {
         assertFalse(isBuiltInPreset(jsonOf("id" to "standard", "name" to "My standard")))
         assertFalse(presetRequiresCodingTools(jsonOf("id" to "ptc", "name" to "My PTC")))
         assertFalse(isBuiltInPreset(jsonOf("id" to "unknown")))
+    }
+
+    @Test fun disconnectDisablesRemoteActionsButRetainsConfigurationAndHelp() {
+        var created = 0
+        mount(onCreator = { created++ })
+        rule.onNodeWithTag("preset-view-standard").performScrollTo().performClick()
+        val requestCount = requests.size
+        rule.runOnIdle {
+            Pocket.status.value = mapOf("preset-test" to Dot.Offline)
+            Pocket.ops.value = emptySet()
+        }
+        rule.onNodeWithTag("preset-configuration-dialog").assertExists()
+        rule.onNodeWithText("- id: standard\n  config: {}").assertExists()
+        rule.onNodeWithTag("preset-configuration-close").performClick()
+        rule.onNodeWithTag("preset-select-ptc").performScrollTo().assertIsNotEnabled()
+        rule.onNodeWithTag("preset-view-ptc").assertIsNotEnabled()
+        rule.onNodeWithTag("preset-creator").performScrollTo().assertIsNotEnabled()
+        rule.onNodeWithText("当前主机仅支持查看预设，默认设置为只读").assertDoesNotExist()
+        rule.onNodeWithTag("preset-usage-standard").performScrollTo().performClick()
+        rule.onNodeWithTag("presetGuideDialog").assertExists()
+        rule.onNodeWithTag("presetGuideClose").performClick()
+        assertEquals(requestCount, requests.size)
+        assertEquals(0, created)
+        assertTrue(writes().isEmpty())
+    }
+
+    @Test fun reconnectRefreshesRevisionWithoutResubmittingSelection() {
+        mount()
+        rule.runOnIdle { Pocket.status.value = mapOf("preset-test" to Dot.Offline) }
+        rule.onNodeWithTag("preset-select-ptc").assertIsNotEnabled()
+        rule.runOnIdle {
+            revision = 12L
+            default = "minimal"
+            Pocket.status.value = mapOf("preset-test" to Dot.Online)
+        }
+        rule.onNodeWithTag("preset-select-minimal").assertIsSelected()
+        assertTrue(writes().isEmpty())
+        select("ptc")
+        assertEquals(12L, (writes().single()["args"]["expectedRevision"] as JsonPrimitive).long)
     }
 
     @Test fun narrowScreenUsesSingleColumn() {

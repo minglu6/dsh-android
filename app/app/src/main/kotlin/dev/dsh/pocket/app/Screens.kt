@@ -176,6 +176,10 @@ private fun SessionDrawerBody(
     val archived by Pocket.archivedIds.collectAsState()
     val pinned by Pocket.pinnedIds.collectAsState()
     val ops by Pocket.ops.collectAsState()
+    val online = status[active] == Dot.Online
+    var lastOps by remember(active) { mutableStateOf(ops) }
+    SideEffect { if (online && ops.isNotEmpty()) lastOps = ops }
+    val visibleOps = if (online) ops else lastOps
     val activities = rememberSidebarActivities()
     val lifecycle = LocalLifecycleOwner.current.lifecycle
     val now by produceState(System.currentTimeMillis(), lifecycle) {
@@ -325,14 +329,14 @@ private fun SessionDrawerBody(
         }
         Spacer(Modifier.height(12.dp))
         Column(Modifier.padding(horizontal = 10.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-            if ("plugins.list" in ops) {
-                DrawerPanelRow(D.pluginPinwheel, L.pluginsNav(), onClick = onPlugins)
+            if ("plugins.list" in visibleOps) {
+                DrawerPanelRow(D.pluginPinwheel, L.pluginsNav(), enabled = online, onClick = onPlugins)
             }
-            if ("schedule.catalog" in ops) {
-                DrawerPanelRow(D.clock, L.scheduleTitle(), onClick = onSchedule)
+            if ("schedule.catalog" in visibleOps) {
+                DrawerPanelRow(D.clock, L.scheduleTitle(), enabled = online, onClick = onSchedule)
             }
         }
-        if ("plugins.list" in ops || "schedule.catalog" in ops) {
+        if ("plugins.list" in visibleOps || "schedule.catalog" in visibleOps) {
             Spacer(Modifier.height(8.dp))
         }
         Row(
@@ -441,9 +445,10 @@ private fun SessionDrawerBody(
 
 /** Desktop `.panelRow`: 16px icon, 8px gap, 14px label, min-height 36. */
 @Composable
-private fun DrawerPanelRow(icon: ImageVector, text: String, onClick: () -> Unit) {
+private fun DrawerPanelRow(icon: ImageVector, text: String, enabled: Boolean = true, onClick: () -> Unit) {
     Row(
-        Modifier.fillMaxWidth().heightIn(min = 48.dp).clip(T.R12).clickable(onClick = onClick).padding(horizontal = 8.dp, vertical = 7.dp).testTag("drawerPanel:$text"),
+        Modifier.fillMaxWidth().heightIn(min = 48.dp).clip(T.R12).clickable(enabled = enabled, onClick = onClick)
+            .alpha(if (enabled) 1f else 0.5f).padding(horizontal = 8.dp, vertical = 7.dp).testTag("drawerPanel:$text"),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Icon(icon, null, Modifier.size(16.dp), tint = T.Ink)
@@ -519,6 +524,9 @@ private fun SessionRow(
     onMenuOpenChange: (Boolean) -> Unit,
 ) {
     val ops by Pocket.ops.collectAsState()
+    val active by Pocket.active.collectAsState()
+    val statuses by Pocket.status.collectAsState()
+    val online = statuses[active] == Dot.Online
     val archivedIds by Pocket.archivedIds.collectAsState()
     val pinnedIds by Pocket.pinnedIds.collectAsState()
     val completionUnread by Pocket.completionUnread.collectAsState()
@@ -595,31 +603,37 @@ private fun SessionRow(
                             text = { Text(pinLabel) },
                             leadingIcon = { Icon(pinIcon, null, Modifier.size(16.dp)) },
                             onClick = ::togglePin,
+                            enabled = online,
                         )
                         if ("sessions.rename" in ops && !isArchived) DropdownMenuItem(
                             text = { Text(L.rename()) },
                             leadingIcon = { Icon(D.edit, null, Modifier.size(16.dp)) },
                             onClick = { onMenuOpenChange(false); renameOpen = true },
+                            enabled = online,
                         )
                         if ("sessions.fork" in ops && !isArchived) DropdownMenuItem(
                             text = { Text(navText("分叉会话", "Fork session")) },
                             leadingIcon = { Icon(D.branch, null, Modifier.size(16.dp)) },
                             onClick = { onMenuOpenChange(false); Pocket.forkSessionFrom(s.sessionId) },
+                            enabled = online,
                         )
                         if ("workspace.archiveSession" in ops) DropdownMenuItem(
                             text = { Text(archiveLabel) },
                             leadingIcon = { Icon(archiveIcon, null, Modifier.size(16.dp)) },
                             onClick = ::toggleArchive,
+                            enabled = online,
                         )
                     }
                 }
                 if (showActions && "workspace.archiveSession" in ops) IconButton(
                     ::toggleArchive, Modifier.size(48.dp).testTag("sessionArchive:${s.sessionId}"),
+                    enabled = online,
                 ) {
                     Icon(archiveIcon, archiveLabel, Modifier.size(14.dp), tint = T.Caption)
                 }
                 if (showActions && "workspace.pinSession" in ops && !isArchived) IconButton(
                     ::togglePin, Modifier.size(48.dp).testTag("sessionPin:${s.sessionId}"),
+                    enabled = online,
                 ) {
                     Icon(pinIcon, pinLabel, Modifier.size(14.dp), tint = T.Caption)
                 } else if (isPinned && !isArchived) {
@@ -635,7 +649,7 @@ private fun SessionRow(
         confirmButton = { TextButton({
             busy = true
             Pocket.rename(s.sessionId, renameTitle.trim()) { ok -> busy = false; if (ok) renameOpen = false }
-        }, enabled = renameTitle.isNotBlank() && !busy) { Text(if (busy) navText("保存中…", "Saving…") else L.save()) } },
+        }, enabled = online && "sessions.rename" in ops && renameTitle.isNotBlank() && !busy) { Text(if (busy) navText("保存中…", "Saving…") else L.save()) } },
         dismissButton = { TextButton({ renameOpen = false }, enabled = !busy) { Text(L.cancel()) } },
     )
     if (archiveConfirm) AlertDialog(
@@ -648,7 +662,7 @@ private fun SessionRow(
         confirmButton = { TextButton({
             busy = true
             Pocket.archiveSession(s.sessionId, stopActivity = true, onResult = { ok -> busy = false; if (ok) archiveConfirm = false })
-        }, enabled = !busy) { Text(L.archiveSession()) } },
+        }, enabled = online && "workspace.archiveSession" in ops && !busy) { Text(L.archiveSession()) } },
         dismissButton = { TextButton({ archiveConfirm = false }, enabled = !busy) { Text(L.cancel()) } },
     )
     if (restoreConfirm) AlertDialog(
@@ -658,7 +672,7 @@ private fun SessionRow(
         confirmButton = { TextButton({
             busy = true
             Pocket.unarchiveSession(s.sessionId) { ok -> busy = false; if (ok) { restoreConfirm = false; onPick() } }
-        }, enabled = !busy) { Text(L.unarchiveSession()) } },
+        }, enabled = online && "workspace.unarchiveSession" in ops && !busy) { Text(L.unarchiveSession()) } },
         dismissButton = { TextButton({ restoreConfirm = false }, enabled = !busy) { Text(L.cancel()) } },
     )
 }
@@ -1361,20 +1375,26 @@ fun SettingsScreen(
 ) {
     val profile = Pocket.activeProfile
     val ops by Pocket.ops.collectAsState()
+    val active by Pocket.active.collectAsState()
+    val statuses by Pocket.status.collectAsState()
+    val online = statuses[active] == Dot.Online
+    var lastOps by remember(active) { mutableStateOf(ops) }
+    SideEffect { if (online && ops.isNotEmpty()) lastOps = ops }
+    val visibleOps = if (online) ops else lastOps
     var notify by remember { mutableStateOf(Pocket.prefs.approvalNotify) }
     var presets by remember { mutableStateOf(false) }
     var diagnostics by remember { mutableStateOf(false) }
     if (presets) {
-        AgentPresetSettingsScreen(onBack = { presets = false }, onCreator = onCreatePreset?.takeIf { "sessions.create" in ops })
+        AgentPresetSettingsScreen(onBack = { presets = false }, onCreator = onCreatePreset)
         return
     }
     SettingsScaffold(L.settings(), onBack) {
         SettingsCard {
             SettingsNavRow(L.generalNav(), D.settings, onClick = onGeneral)
-            SettingsNavRow(L.modelsNav(), D.dataMedium, onClick = onModels)
-            if ("plugins.inventory" in ops) SettingsNavRow(st("内置插件", "Built-in plugins"), D.personalization, onClick = onPlugins)
-            if ("schedule.catalog" in ops) SettingsNavRow(L.scheduleNav(), D.clock, onClick = onSchedule)
-            SettingsNavRow(st("Agent 预设", "Agent presets"), D.agentPreset, divider = false, onClick = { presets = true })
+            SettingsNavRow(L.modelsNav(), D.dataMedium, enabled = online, onClick = onModels)
+            if ("plugins.inventory" in visibleOps) SettingsNavRow(st("内置插件", "Built-in plugins"), D.personalization, enabled = online, onClick = onPlugins)
+            if ("schedule.catalog" in visibleOps) SettingsNavRow(L.scheduleNav(), D.clock, enabled = online, onClick = onSchedule)
+            SettingsNavRow(st("Agent 预设", "Agent presets"), D.agentPreset, divider = false, enabled = online, onClick = { presets = true })
         }
         Text(st("移动端", "Mobile"), fontSize = 13.sp, color = T.Text3, modifier = Modifier.padding(start = 22.dp, top = 12.dp, bottom = 2.dp))
         Card {
@@ -1484,7 +1504,7 @@ fun GeneralSettingsScreen(onBack: () -> Unit) {
         SettingsMessage(when {
             shared.saving -> st("保存中…", "Saving…")
             shared.loading -> L.loading()
-            !shared.ready -> L.unavailable()
+            shared.online && !shared.ready -> L.unavailable()
             else -> null
         })
         SettingsMessage(shared.error, error = true)
@@ -1495,44 +1515,45 @@ fun GeneralSettingsScreen(onBack: () -> Unit) {
             ) { Text(L.retry()) }
         }
         if ("permissions.catalog" in ops) {
-            GeneralPreferenceRow(st("权限", "Permission"), st("选择新会话的默认权限模式", "Choose the default permission mode for new sessions"), value = permissionLabel(perm, permissionDirectory?.find(perm)), onClick = { sheet = "perm" })
+            GeneralPreferenceRow(st("权限", "Permission"), st("选择新会话的默认权限模式", "Choose the default permission mode for new sessions"), value = permissionLabel(perm, permissionDirectory?.find(perm)), enabled = permissionOnline && shared.writable(SharedSetting.Permission), onClick = { sheet = "perm" })
         }
-        GeneralPreferenceRow(L.language(), value = lang.label, onClick = { sheet = "lang" })
+        GeneralPreferenceRow(L.language(), value = lang.label, enabled = shared.writable(SharedSetting.Language), onClick = { sheet = "lang" })
         Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Text(L.appearance(), fontSize = 14.sp, color = T.Ink)
-            AppearanceCards(appearance) { Pocket.prefs.appearance = it }
+            AppearanceCards(appearance, enabled = shared.writable(SharedSetting.Appearance)) { Pocket.prefs.appearance = it }
         }
         HorizontalDivider(Modifier.padding(horizontal = 16.dp), color = T.Border)
         SettingsFontRow(
             st("字号大小", "Font size"), st("仅影响会话内容的字号", "Only affects conversation content"), fontSize, 10..22,
             expanded = fontsExpanded, onToggle = { fontsExpanded = !fontsExpanded },
+            enabled = shared.writable(SharedSetting.FontSize),
         ) { Pocket.prefs.fontSize = it }
         if (fontsExpanded) {
             SettingsFontFamilyRow(
                 st("正文字体", "Text font"),
                 st("用于界面与会话正文。多个字体用逗号分隔，留空使用默认字体", "Interface and conversation text. Separate fonts with commas; leave empty for defaults."),
-                Pocket.prefs.textFontFamily, "textFontFamily",
+                Pocket.prefs.textFontFamily, "textFontFamily", enabled = shared.writable(SharedSetting.TextFontFamily),
             ) { Pocket.prefs.textFontFamily = it }
             SettingsFontFamilyRow(
                 st("代码字体", "Code font"),
                 st("用于代码块、行内代码与工具输出。多个字体用逗号分隔，留空使用默认字体", "Code blocks, inline code, and tool output. Separate fonts with commas; leave empty for defaults."),
-                Pocket.prefs.codeFontFamily, "codeFontFamily",
+                Pocket.prefs.codeFontFamily, "codeFontFamily", enabled = shared.writable(SharedSetting.CodeFontFamily),
             ) { Pocket.prefs.codeFontFamily = it }
-            SettingsFontRow(st("代码字号", "Code font size"), st("用于代码块、行内代码与工具输出", "Used for code blocks, inline code, and tool output"), codeFontSize, 10..16) { Pocket.prefs.codeFontSize = it }
+            SettingsFontRow(st("代码字号", "Code font size"), st("用于代码块、行内代码与工具输出", "Used for code blocks, inline code, and tool output"), codeFontSize, 10..16, enabled = shared.writable(SharedSetting.CodeFontSize)) { Pocket.prefs.codeFontSize = it }
             SettingsFontFamilyRow(
                 st("终端字体", "Terminal font"),
                 st("用于侧栏终端。多个字体用逗号分隔，留空使用默认字体", "Sidebar terminal. Separate fonts with commas; leave empty for defaults."),
-                Pocket.prefs.terminalFontFamily, "terminalFontFamily",
+                Pocket.prefs.terminalFontFamily, "terminalFontFamily", enabled = shared.writable(SharedSetting.TerminalFontFamily),
             ) { Pocket.prefs.terminalFontFamily = it }
-            SettingsFontRow(st("终端字号", "Terminal font size"), st("用于侧栏终端", "Used for the sidebar terminal"), terminalFontSize, 10..20) { Pocket.prefs.terminalFontSize = it }
+            SettingsFontRow(st("终端字号", "Terminal font size"), st("用于侧栏终端", "Used for the sidebar terminal"), terminalFontSize, 10..20, enabled = shared.writable(SharedSetting.TerminalFontSize)) { Pocket.prefs.terminalFontSize = it }
         }
-        GeneralPreferenceRow(st("工作步骤展示", "Work details"), st("选择希望看到多少工具调用细节", "Choose how much detail to show for tool calls"), value = transcriptText(transcript), onClick = { sheet = "transcript" })
+        GeneralPreferenceRow(st("工作步骤展示", "Work details"), st("选择希望看到多少工具调用细节", "Choose how much detail to show for tool calls"), value = transcriptText(transcript), enabled = shared.writable(SharedSetting.Transcript), onClick = { sheet = "transcript" })
         GeneralPreferenceRow(st("工作步骤收起时机", "When to Collapse Work Details"), st("选择何时自动收起工作步骤", "Choose when to automatically collapse work details"), value = collapseText(collapse), onClick = { sheet = "collapse" })
         GeneralPreferenceRow(st("显示代码工作视图", "Show coding view"), st("开启后，显示轨迹、本轮代码差异，可选择完整的 Agent 预设切换", "Shows trajectory, code diffs, and all Agent presets"), trailing = {
             Switch(codeWork, { Pocket.prefs.showCodeWorkView = it }, enabled = shared.writable(SharedSetting.CodeWork), colors = SwitchDefaults.colors(checkedTrackColor = T.PrimaryButton, checkedThumbColor = T.OnPrimary))
         })
-        GeneralPreferenceRow(st("繁忙时的发送行为", "Send behavior while busy"), st("智能体运行时 Enter 键和发送按钮的行为；Cmd/Ctrl+Enter 使用另一行为", "What Enter and the Send button do while the agent is running; Cmd/Ctrl+Enter uses the other behavior"), value = if (busy == BusySend.Queue) L.queueSend() else L.steerSend(), onClick = { sheet = "busy" })
-        GeneralPreferenceRow(st("性能与用量", "Performance & usage"), st("选择性能与用量信息展示的详细程度", "Choose how much performance and usage information to show"), value = if (perf == PerformanceUsage.Compact) st("简洁", "Compact") else st("详细", "Detailed"), onClick = { sheet = "perf" })
+        GeneralPreferenceRow(st("繁忙时的发送行为", "Send behavior while busy"), st("智能体运行时 Enter 键和发送按钮的行为；Cmd/Ctrl+Enter 使用另一行为", "What Enter and the Send button do while the agent is running; Cmd/Ctrl+Enter uses the other behavior"), value = if (busy == BusySend.Queue) L.queueSend() else L.steerSend(), enabled = shared.writable(SharedSetting.BusySend), onClick = { sheet = "busy" })
+        GeneralPreferenceRow(st("性能与用量", "Performance & usage"), st("选择性能与用量信息展示的详细程度", "Choose how much performance and usage information to show"), value = if (perf == PerformanceUsage.Compact) st("简洁", "Compact") else st("详细", "Detailed"), enabled = shared.writable(SharedSetting.Performance), onClick = { sheet = "perf" })
         SessionLogUploadPreference()
         GeneralPreferenceRow(st("代码自动换行", "Wrap code"), divider = false, trailing = {
             Switch(codeWrap, { codeWrap = it; Pocket.prefs.codeWordWrap = it }, colors = SwitchDefaults.colors(checkedTrackColor = T.PrimaryButton, checkedThumbColor = T.OnPrimary))
@@ -1562,11 +1583,11 @@ fun GeneralSettingsScreen(onBack: () -> Unit) {
         )
         "lang" -> PocketSheet({ sheet = null }) {
             SheetTitle(L.language())
-            AppLanguage.entries.forEach { o -> OptionRow(o.label, selected = lang == o) { save(SharedSetting.Language, o.name.lowercase()) } }
+            AppLanguage.entries.forEach { o -> OptionRow(o.label, selected = lang == o, enabled = shared.writable(SharedSetting.Language)) { save(SharedSetting.Language, o.name.lowercase()) } }
         }
         "transcript" -> PocketSheet({ sheet = null }) {
             SheetTitle(st("工作步骤展示", "Work details"))
-            TranscriptView.entries.forEach { o -> OptionRow(transcriptText(o), selected = transcript == o) { save(SharedSetting.Transcript, o.name.lowercase()) } }
+            TranscriptView.entries.forEach { o -> OptionRow(transcriptText(o), selected = transcript == o, enabled = shared.writable(SharedSetting.Transcript)) { save(SharedSetting.Transcript, o.name.lowercase()) } }
         }
         "collapse" -> PocketSheet({ sheet = null }) {
             SheetTitle(st("工作步骤收起时机", "When to Collapse Work Details"))
@@ -1574,12 +1595,12 @@ fun GeneralSettingsScreen(onBack: () -> Unit) {
         }
         "busy" -> PocketSheet({ sheet = null }) {
             SheetTitle(st("繁忙时的发送行为", "Send behavior while busy"))
-            OptionRow(L.queueSend(), selected = busy == BusySend.Queue) { save(SharedSetting.BusySend, "queue") }
-            OptionRow(L.steerSend(), selected = busy == BusySend.Steer) { save(SharedSetting.BusySend, "steer") }
+            OptionRow(L.queueSend(), selected = busy == BusySend.Queue, enabled = shared.writable(SharedSetting.BusySend)) { save(SharedSetting.BusySend, "queue") }
+            OptionRow(L.steerSend(), selected = busy == BusySend.Steer, enabled = shared.writable(SharedSetting.BusySend)) { save(SharedSetting.BusySend, "steer") }
         }
         "perf" -> PocketSheet({ sheet = null }) {
             SheetTitle(st("性能与用量", "Performance & usage"))
-            PerformanceUsage.entries.forEach { o -> OptionRow(if (o == PerformanceUsage.Compact) st("简洁", "Compact") else st("详细", "Detailed"), selected = perf == o) { save(SharedSetting.Performance, o.name.lowercase()) } }
+            PerformanceUsage.entries.forEach { o -> OptionRow(if (o == PerformanceUsage.Compact) st("简洁", "Compact") else st("详细", "Detailed"), selected = perf == o, enabled = shared.writable(SharedSetting.Performance)) { save(SharedSetting.Performance, o.name.lowercase()) } }
         }
     }
     if (shared.error != null && sheet != null) AlertDialog(

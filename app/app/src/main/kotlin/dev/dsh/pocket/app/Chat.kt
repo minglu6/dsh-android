@@ -440,8 +440,8 @@ fun ChatRoot(
                 ) else TrajectoryView(st)
             }
             if (questionVisible) UserQuestionCard(question!!, questionDrafts.getOrPut(question.questionId) { mutableStateMapOf() },
-                onDismiss = { hiddenQuestion = question.questionId })
-            else if (approval != null) ApprovalCard(approval)
+                onDismiss = { hiddenQuestion = question.questionId }, enabled = dot == Dot.Online)
+            else if (approval != null) ApprovalCard(approval, enabled = dot == Dot.Online)
             if (question != null && !questionVisible) TextButton({ hiddenQuestion = null }, Modifier.fillMaxWidth()) {
                 Text("问题等待回答 · 重新打开")
             }
@@ -1330,10 +1330,10 @@ private fun ToolCard(t: Item.Tool, onClick: () -> Unit) {
 
 
 @Composable
-internal fun ApprovalCard(a: Approval, onAnswer: (String, String, (Boolean) -> Unit) -> Unit = { id, outcome, done -> Pocket.answer(id, outcome, done) }) {
+internal fun ApprovalCard(a: Approval, enabled: Boolean = true, onAnswer: (String, String, (Boolean) -> Unit) -> Unit = { id, outcome, done -> Pocket.answer(id, outcome, done) }) {
     var busy by remember(a.approvalId) { mutableStateOf(false) }
     fun answer(outcome: String) {
-        if (busy) return
+        if (busy || !enabled) return
         busy = true
         onAnswer(a.approvalId, outcome) { success -> if (!success) busy = false }
     }
@@ -1361,9 +1361,9 @@ internal fun ApprovalCard(a: Approval, onAnswer: (String, String, (Boolean) -> U
             }
             Spacer(Modifier.height(16.dp))
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                OutlinedButton({ answer("rejected") }, Modifier.weight(1f).height(52.dp), enabled = !busy, shape = T.R12, border = BorderStroke(1.dp, T.Border),
+                OutlinedButton({ answer("rejected") }, Modifier.weight(1f).height(52.dp), enabled = enabled && !busy, shape = T.R12, border = BorderStroke(1.dp, T.Border),
                     colors = ButtonDefaults.outlinedButtonColors(contentColor = T.Ink)) { Text("拒绝", fontSize = 16.sp) }
-                Button({ answer("allowed-once") }, Modifier.weight(1f).height(52.dp), enabled = !busy, shape = T.R12,
+                Button({ answer("allowed-once") }, Modifier.weight(1f).height(52.dp), enabled = enabled && !busy, shape = T.R12,
                     colors = PrimaryColors()) { Text(if (busy) "提交中…" else "允许一次", fontSize = 16.sp) }
             }
         }
@@ -1460,6 +1460,7 @@ internal fun UserQuestionCard(
     q: UserQuestion,
     drafts: MutableMap<String, QuestionDraft>,
     onDismiss: () -> Unit,
+    enabled: Boolean = true,
     onAnswer: (String, List<kotlinx.serialization.json.JsonObject>, (Boolean) -> Unit) -> Unit = { id, answers, done -> Pocket.answerUserQuestion(id, answers, done) },
 ) {
     if (q.questions.isEmpty()) return
@@ -1471,7 +1472,7 @@ internal fun UserQuestionCard(
     val isPlan = q.questions.size == 1 && item.intentKind == "plan-review" &&
         !item.multiSelect && item.options.size <= 2 && item.options.any { it.label == item.approveLabel }
     fun submit() {
-        if (busy) return
+        if (busy || !enabled) return
         busy = true; err = null
         onAnswer(q.callId ?: q.questionId, questionAnswers(q, drafts)) { success ->
             if (!success) { busy = false; err = "提交失败，答案已保留，请重试" }
@@ -1525,7 +1526,7 @@ internal fun UserQuestionCard(
             if (isPlan) {
                 Button({
                     drafts[item.id] = QuestionDraft(setOf(item.approveLabel!!)); submit()
-                }, Modifier.fillMaxWidth().heightIn(min = 48.dp), enabled = !busy, shape = T.R12, colors = PrimaryColors()) { Text(L.approvePlan()) }
+                }, Modifier.fillMaxWidth().heightIn(min = 48.dp), enabled = enabled && !busy, shape = T.R12, colors = PrimaryColors()) { Text(L.approvePlan()) }
                 OutlinedButton(onDismiss, Modifier.fillMaxWidth().heightIn(min = 48.dp), enabled = !busy, shape = T.R12) {
                     Text("继续讨论")
                 }
@@ -1535,13 +1536,13 @@ internal fun UserQuestionCard(
                     TextButton({
                         drafts[item.id] = QuestionDraft()
                         if (index < q.questions.lastIndex) index++ else submit()
-                    }, enabled = !busy) { Text(L.skip()) }
+                    }, enabled = !busy && (index < q.questions.lastIndex || enabled)) { Text(L.skip()) }
                     Spacer(Modifier.weight(1f))
                     Button({
                         if (!draft.answered) { err = L.completeQuestionFirst() }
                         else if (index < q.questions.lastIndex) { index++; err = null }
                         else submit()
-                    }, enabled = !busy, shape = T.R12, colors = PrimaryColors()) {
+                    }, enabled = !busy && (index < q.questions.lastIndex || enabled), shape = T.R12, colors = PrimaryColors()) {
                         Text(if (index < q.questions.lastIndex) L.nextQuestion() else "提交答案")
                     }
                 }

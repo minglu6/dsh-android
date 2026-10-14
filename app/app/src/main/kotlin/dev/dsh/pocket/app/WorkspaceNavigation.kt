@@ -73,6 +73,9 @@ private fun WorkspaceGroupHeader(
     active: Boolean = false,
 ) {
     val ops by Pocket.ops.collectAsState()
+    val host by Pocket.active.collectAsState()
+    val status by Pocket.status.collectAsState()
+    val online = host != null && status[host] == Dot.Online
     val scope = rememberCoroutineScope()
     var menu by remember { mutableStateOf(false) }
     var rename by remember { mutableStateOf(false) }
@@ -99,14 +102,15 @@ private fun WorkspaceGroupHeader(
         }
         if (workspace != null) {
             if ("workspace.rename" in ops || "workspace.delete" in ops) Box {
-                IconButton({ menu = !menu }, Modifier.size(48.dp).testTag("workspaceMenu:${workspace.workspaceId}"), enabled = !busy) {
-                    Icon(D.ellipsis, L.moreActions(), Modifier.size(16.dp), tint = T.Text2)
+                IconButton({ menu = !menu }, Modifier.size(48.dp).testTag("workspaceMenu:${workspace.workspaceId}"), enabled = online && !busy) {
+                    Icon(D.ellipsis, L.moreActions(), Modifier.size(16.dp), tint = if (online && !busy) T.Text2 else T.Caption)
                 }
                 DropdownMenu(menu, { menu = false }, modifier = Modifier.widthIn(min = 192.dp),
                     containerColor = T.Surface, shape = T.R16) {
                     if ("workspace.rename" in ops) DropdownMenuItem(
                         text = { Text(L.rename()) },
                         leadingIcon = { Icon(D.edit, null, Modifier.size(16.dp)) },
+                        enabled = online && !busy,
                         onClick = {
                             menu = false
                             draft = workspace.title.takeIf { it.isNotBlank() } ?: title
@@ -118,6 +122,7 @@ private fun WorkspaceGroupHeader(
                         text = { Text(navText("删除工作区", "Delete workspace")) },
                         leadingIcon = { Icon(D.trash, null, Modifier.size(16.dp)) },
                         colors = MenuDefaults.itemColors(textColor = T.Err, leadingIconColor = T.Err),
+                        enabled = online && !busy,
                         onClick = { menu = false; error = null; remove = true },
                     )
                 }
@@ -125,9 +130,10 @@ private fun WorkspaceGroupHeader(
             IconButton(
                 { action { onPick(Pocket.startWorkspaceSession(workspace.workspaceId)) } },
                 Modifier.size(48.dp).testTag("workspaceNewSession:${workspace.workspaceId}"),
-                enabled = !busy,
+                enabled = online && "sessions.create" in ops && !busy,
             ) {
-                Icon(D.newChat, navText("新会话", "New session"), Modifier.size(18.dp), tint = T.Text2)
+                Icon(D.newChat, navText("新会话", "New session"), Modifier.size(18.dp),
+                    tint = if (online && "sessions.create" in ops && !busy) T.Text2 else T.Caption)
             }
         }
     }
@@ -135,13 +141,13 @@ private fun WorkspaceGroupHeader(
     if (rename && workspace != null) AlertDialog(
         onDismissRequest = { if (!busy) rename = false }, title = { Text(L.rename()) },
         text = { Column { OutlinedTextField(draft, { draft = it; error = null }, singleLine = true, enabled = !busy); error?.let { Text(it, color = T.Err) } } },
-        confirmButton = { TextButton({ action { Pocket.renameWorkspace(workspace.workspaceId, draft.trim()); rename = false } }, enabled = !busy && draft.isNotBlank()) { Text(L.save()) } },
+        confirmButton = { TextButton({ action { Pocket.renameWorkspace(workspace.workspaceId, draft.trim()); rename = false } }, enabled = online && "workspace.rename" in ops && !busy && draft.isNotBlank()) { Text(L.save()) } },
         dismissButton = { TextButton({ rename = false }, enabled = !busy) { Text(L.cancel()) } },
     )
     if (remove && workspace != null) AlertDialog(
         onDismissRequest = { if (!busy) remove = false }, title = { Text(navText("删除工作区", "Delete workspace")) },
         text = { Column { Text(navText("将把“$title”从工作区列表中移除。文件夹与会话记录会保留，其会话将显示在“未分组”下。", "This removes “$title” from the workspace list. The folder and session logs will be kept. Its sessions will appear under Ungrouped.")); error?.let { Text(it, color = T.Err) } } },
-        confirmButton = { TextButton({ action { Pocket.deleteWorkspace(workspace.workspaceId); remove = false } }, enabled = !busy,
+        confirmButton = { TextButton({ action { Pocket.deleteWorkspace(workspace.workspaceId); remove = false } }, enabled = online && "workspace.delete" in ops && !busy,
             colors = ButtonDefaults.textButtonColors(contentColor = T.Err)) { Text(navText("删除工作区", "Delete workspace")) } },
         dismissButton = { TextButton({ remove = false }, enabled = !busy) { Text(L.cancel()) } },
     )

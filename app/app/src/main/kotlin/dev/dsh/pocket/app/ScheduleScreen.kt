@@ -213,7 +213,7 @@ private fun ScheduleCatalogScreen(onBack: () -> Unit, onNewTask: () -> Unit, onO
     var notice by remember { mutableStateOf<String?>(null) }
     val now = scheduleClock()
     suspend fun reload() {
-        if (loading) return
+        if (loading || !online) return
         loading = true
         try {
             check("schedule.catalog" in Pocket.ops.value) { L.unavailable() }
@@ -254,13 +254,15 @@ private fun ScheduleCatalogScreen(onBack: () -> Unit, onNewTask: () -> Unit, onO
             listOf("title", "prompt", "sessionId").any { row[it].str().orEmpty().contains(query.trim(), ignoreCase = true) }
     }.sortedBy { row -> try { Instant.parse(row["scheduledAt"].str()) } catch (_: Exception) { Instant.MAX } }
     ScheduleCatalogScaffold(onBack, onNewTask, online) {
+        if (!online) Text(st("主机未连接，连接恢复后可继续操作。", "Host disconnected. Reconnect to continue."),
+            Modifier.padding(horizontal = 18.dp, vertical = 10.dp), color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp)
         Row(Modifier.fillMaxWidth().padding(horizontal = 18.dp), verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(6.dp)) {
             listOf("all" to st("全部", "All"), "active" to st("已开启", "Enabled"), "inactive" to st("已结束", "Inactive")).forEach { (value, label) ->
                 ScheduleTab(label, filter == value) { filter = value }
             }
             Spacer(Modifier.weight(1f))
-            TextButton({ scope.launch { reload() } }, enabled = !loading,
+            TextButton({ scope.launch { reload() } }, enabled = online && !loading && "schedule.catalog" in ops,
                 colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.onSurfaceVariant),
                 contentPadding = PaddingValues(horizontal = 4.dp)) { Text(st("刷新", "Refresh"), fontSize = 12.sp) }
         }
@@ -275,7 +277,7 @@ private fun ScheduleCatalogScreen(onBack: () -> Unit, onNewTask: () -> Unit, onO
                 cursorBrush = SolidColor(MaterialTheme.colorScheme.onSurface))
         }
         notice?.let { Text(it, Modifier.padding(18.dp), color = MaterialTheme.colorScheme.onSurfaceVariant) }
-        error?.let { ErrorOrEmpty(it) { scope.launch { reload() } } }
+        error?.let { ErrorOrEmpty(it, retryEnabled = online && !loading && "schedule.catalog" in ops) { scope.launch { reload() } } }
         if (loading) LinearProgressIndicator(Modifier.fillMaxWidth().padding(18.dp), color = MaterialTheme.colorScheme.onSurface)
         if (loaded && visible.isEmpty()) {
             ErrorOrEmpty(when {
@@ -355,17 +357,18 @@ private fun ScheduleDetailScreen(row: JsonObject, authoritative: Boolean, online
                 ScheduleTab(label, tab == index) { tab = index }
             }
         }
-        catalogError?.let { ErrorOrEmpty(it, onRefresh) }
-        if (!authoritative && !loading) ErrorOrEmpty(st("任务已不可用，可能已被删除", "Task unavailable. It may have been deleted."), onRefresh)
-        error?.let { ErrorOrEmpty(it, onRefresh) }
+        catalogError?.let { ErrorOrEmpty(it, retryEnabled = online && !loading && "schedule.catalog" in ops, onRetry = onRefresh) }
+        if (!authoritative && !loading) ErrorOrEmpty(st("任务已不可用，可能已被删除", "Task unavailable. It may have been deleted."),
+            retryEnabled = online && "schedule.catalog" in ops, onRetry = onRefresh)
+        error?.let { ErrorOrEmpty(it, retryEnabled = online && !loading && "schedule.catalog" in ops, onRetry = onRefresh) }
         if (tab == 1) {
             key(id, sessionId) { ScheduleHistoryScreen(sessionId, id, row["timeZone"].str(), row["lastDelivery"]["messageId"].str(), online) }
         } else {
             ScheduleCard {
                 Text(if (isActive) st("已开启", "Enabled") else st("已结束", "Inactive"), color = MaterialTheme.colorScheme.onSurfaceVariant)
                 if (editing != null) {
-                    ScheduleField(st("自动化任务名称", "Automation task name"), title, !busy, onChange = { title = it })
-                    ScheduleField(st("自动化任务内容", "Automation task instruction"), prompt, !busy, multiline = true, onChange = { prompt = it })
+                    ScheduleField(st("自动化任务名称", "Automation task name"), title, online && !busy && authoritative && isActive && "schedule.update" in ops, onChange = { title = it })
+                    ScheduleField(st("自动化任务内容", "Automation task instruction"), prompt, online && !busy && authoritative && isActive && "schedule.update" in ops, multiline = true, onChange = { prompt = it })
                 } else {
                     Text(st("自动化任务内容", "Automation task instruction"), style = MaterialTheme.typography.labelMedium)
                     Text(row["prompt"].str().orEmpty())
@@ -381,7 +384,7 @@ private fun ScheduleDetailScreen(row: JsonObject, authoritative: Boolean, online
             }
             ScheduleCard {
                 Text(st("运行时间", "Run time"), style = MaterialTheme.typography.titleMedium)
-                if (editing != null) ScheduleTimingEditor(draft, !busy) { draft = it }
+                if (editing != null) ScheduleTimingEditor(draft, online && !busy && authoritative && isActive && "schedule.update" in ops) { draft = it }
                 else {
                     Text(scheduleSummary(row))
                     HorizontalDivider(thickness = 0.5.dp)
@@ -424,7 +427,7 @@ private fun ScheduleDetailScreen(row: JsonObject, authoritative: Boolean, online
         title = { Text(st("删除此任务？", "Delete this task?")) },
         text = { Text(st("任务将停止触发，并连同其已保存的任务运行记录一并删除。原会话及其消息仍然保留；已排队的消息不会被撤回。",
             "This stops the task from triggering and deletes it together with its saved delivery records. The original session and its messages remain; queued messages are not withdrawn.")) },
-        confirmButton = { TextButton(enabled = !busy && online, onClick = {
+        confirmButton = { TextButton(enabled = !busy && online && authoritative && "schedule.delete" in ops, onClick = {
             if (!busy) {
                 busy = true
                 error = null
@@ -448,6 +451,7 @@ private fun ScheduleTimingEditor(draft: ScheduleTimingDraft, enabled: Boolean, o
     val context = LocalContext.current
     var nativePicker by remember { mutableStateOf<android.app.Dialog?>(null) }
     DisposableEffect(Unit) { onDispose { nativePicker?.dismiss() } }
+    LaunchedEffect(enabled) { if (!enabled) nativePicker?.dismiss() }
     var preciseClock by remember { mutableStateOf(false) }
     var commonZoneMenu by remember { mutableStateOf(false) }
     var menu by remember { mutableStateOf(false) }
@@ -463,7 +467,7 @@ private fun ScheduleTimingEditor(draft: ScheduleTimingDraft, enabled: Boolean, o
     Box {
         ScheduleButton(st("重复：", "Repeat: ") + choiceLabel(if (draft.kind == "every") "every-${draft.unit}" else draft.kind), enabled) { menu = true }
         DropdownMenu(menu, { menu = false }) {
-            choices.forEach { choice -> DropdownMenuItem(text = { Text(choiceLabel(choice)) }, onClick = {
+            choices.forEach { choice -> DropdownMenuItem(text = { Text(choiceLabel(choice)) }, enabled = enabled, onClick = {
                 menu = false
                 unitError = null
                 if (choice.startsWith("every-")) {
@@ -531,7 +535,7 @@ private fun ScheduleTimingEditor(draft: ScheduleTimingDraft, enabled: Boolean, o
                 (listOf(ZoneId.systemDefault().id, "UTC", "Asia/Shanghai", "Asia/Hong_Kong", "Asia/Tokyo",
                     "Asia/Singapore", "Europe/London", "Europe/Berlin", "America/New_York",
                     "America/Los_Angeles", "Australia/Sydney") + draft.zone).distinct().forEach { zone ->
-                    DropdownMenuItem(text = { Text(zone) }, onClick = {
+                    DropdownMenuItem(text = { Text(zone) }, enabled = enabled, onClick = {
                         onChange(draft.copy(zone = zone)); commonZoneMenu = false; zoneExpanded = false
                     })
                 }
@@ -557,6 +561,7 @@ private fun ScheduleCronEditor(expression: String, enabled: Boolean, onChange: (
     var menu by remember { mutableStateOf(false) }
     var picker by remember { mutableStateOf<android.app.Dialog?>(null) }
     DisposableEffect(Unit) { onDispose { picker?.dismiss() } }
+    LaunchedEffect(enabled) { if (!enabled) picker?.dismiss() }
     fun label(kind: String) = when (kind) {
         "minutely" -> st("每 N 分钟", "Every N minutes")
         "hourly" -> st("每 N 小时", "Every N hours")
@@ -568,7 +573,7 @@ private fun ScheduleCronEditor(expression: String, enabled: Boolean, onChange: (
         ScheduleButton(st("常用规则：", "Common rule: ") + (shape?.let { label(it.kind) } ?: st("高级表达式", "Advanced expression")), enabled) { menu = true }
         DropdownMenu(menu, { menu = false }) {
             listOf("minutely", "hourly", "daily", "weekly", "monthly").forEach { kind ->
-                DropdownMenuItem(text = { Text(label(kind)) }, onClick = {
+                DropdownMenuItem(text = { Text(label(kind)) }, enabled = enabled, onClick = {
                     menu = false
                     advanced = false
                     if (shape?.kind != kind) onChange(scheduleCronExpression(ScheduleCronShape(kind,
@@ -591,7 +596,7 @@ private fun ScheduleCronEditor(expression: String, enabled: Boolean, onChange: (
             Box {
                 ScheduleButton(st("每小时第 ${shape.minute} 分", "At minute ${shape.minute}"), enabled) { minuteMenu = true }
                 DropdownMenu(minuteMenu, { minuteMenu = false }) {
-                    (0..59).forEach { minute -> DropdownMenuItem(text = { Text(minute.toString()) }, onClick = {
+                    (0..59).forEach { minute -> DropdownMenuItem(text = { Text(minute.toString()) }, enabled = enabled, onClick = {
                         minuteMenu = false
                         if (minute != shape.minute) onChange(scheduleCronExpression(shape.copy(minute = minute)))
                     }) }
@@ -638,6 +643,7 @@ private fun ScheduleCronEditor(expression: String, enabled: Boolean, onChange: (
 @Composable
 private fun ScheduleHistoryScreen(sessionId: String, id: String, zone: String?, latestMessage: String?, online: Boolean) {
     val scope = rememberCoroutineScope()
+    val ops by Pocket.ops.collectAsState()
     var records by remember { mutableStateOf<List<JsonObject>>(emptyList()) }
     var nextBefore by remember { mutableStateOf<String?>(null) }
     var failedBefore by remember { mutableStateOf<String?>(null) }
@@ -650,7 +656,7 @@ private fun ScheduleHistoryScreen(sessionId: String, id: String, zone: String?, 
     var showRetention by remember { mutableStateOf(false) }
     var requestEpoch by remember { mutableIntStateOf(0) }
     suspend fun load(before: String? = null) {
-        if (loading && before != null) return
+        if (!online || (loading && before != null)) return
         val epoch = ++requestEpoch
         loading = true
         error = null
@@ -680,13 +686,13 @@ private fun ScheduleHistoryScreen(sessionId: String, id: String, zone: String?, 
         }
     }
     // Re-mounting the tab starts a fresh page; subsequent catalog receipts refresh it too.
-    LaunchedEffect(latestMessage, online) { load() }
+    LaunchedEffect(latestMessage, online, ops) { load() }
     Column(Modifier.fillMaxWidth().padding(horizontal = 18.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
         Text(st("以下记录仅确认提醒已写入原会话收件箱，不代表模型已执行或任务已完成。", "These receipts confirm inbox delivery to the original session, not model execution or task completion."),
             style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        ScheduleButton(st("刷新", "Refresh"), !loading) { scope.launch { load() } }
+        ScheduleButton(st("刷新", "Refresh"), online && !loading && "schedule.history" in ops) { scope.launch { load() } }
         if (loading) LinearProgressIndicator(Modifier.fillMaxWidth(), color = MaterialTheme.colorScheme.onSurface)
-        error?.let { ErrorOrEmpty(it) { scope.launch { load(failedBefore) } } }
+        error?.let { ErrorOrEmpty(it, retryEnabled = online && !loading && "schedule.history" in ops) { scope.launch { load(failedBefore) } } }
         if (loaded && records.isEmpty() && error == null) ErrorOrEmpty(st("暂无任务运行记录", "No delivery record available"))
         records.forEach { record ->
             key(record["messageId"].str()) {
@@ -705,7 +711,7 @@ private fun ScheduleHistoryScreen(sessionId: String, id: String, zone: String?, 
                 HorizontalDivider(thickness = 0.5.dp)
             }
         }
-        if (nextBefore != null && error == null) ScheduleButton(st("加载更多", "Load more"), !loading) { scope.launch { load(nextBefore) } }
+        if (nextBefore != null && error == null) ScheduleButton(st("加载更多", "Load more"), online && !loading && "schedule.history" in ops) { scope.launch { load(nextBefore) } }
         if (records.isNotEmpty() && nextBefore == null && !loading && error == null && (pruned || unavailable)) {
             Text(if (pruned) st("更早的运行记录已清理", "Earlier delivery records have been cleared")
                 else st("更早的任务运行记录不可用", "Earlier delivery records are unavailable"), style = MaterialTheme.typography.bodySmall)

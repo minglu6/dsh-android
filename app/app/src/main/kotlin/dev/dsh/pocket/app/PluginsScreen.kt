@@ -306,6 +306,7 @@ private fun PluginsPage(profile: String?, onBack: () -> Unit) {
         val ns = config!!["ns"].str().orEmpty()
         key(ns) {
             PluginConfiguration(config!!, online && writable && "plugins.settingsMutate" in ops, { config = null },
+                canReload = online && "plugins.settingsDescribe" in ops,
                 refresh = {
                     val r = client().pluginsSettingsDescribe()
                     writable = r["writable"].bool() == true
@@ -319,20 +320,19 @@ private fun PluginsPage(profile: String?, onBack: () -> Unit) {
         SettingsScaffold(selected?.let(::pluginTitle) ?: if (moreOptional) pt("实验性插件", "Experimental plugins") else pt("插件", "Plugins"), ::back, actions = {
             IconButton(::reload, enabled = online && !locked) { Icon(D.refresh, pt("刷新", "Refresh")) }
             if ((selected == null && !moreOptional && managementAvailable && "plugins.install" in ops) || installRequest != null) {
-                Button({ openInstall() }, enabled = online && (installRequest != null || !locked),
+                Button({ openInstall() }, enabled = installRequest != null || (online && !locked),
                     shape = T.R8, contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp)) {
                     Text(if (installRequest != null) pt("安装任务", "Installation") else pt("添加插件", "Add plugin"), fontSize = 13.sp)
                 }
             }
         }) {
-            if (!online) PluginMessage(pt("主机已断开连接；草稿已保留，连接恢复后可重试。", "Host disconnected. Drafts are retained; retry after reconnecting."), true)
             error?.let { PluginMessage(it, true) }
             outcome?.let { PluginOutcome(it) }
             if (loading || busy) LinearProgressIndicator(Modifier.fillMaxWidth().padding(horizontal = 18.dp))
             if ("ui.open" in ops) SettingsCard {
                 SettingsNavRow(pt("打开插件自定义界面", "Open plugin interfaces"), D.pluginPinwheel,
                     value = pt("与桌面共用", "Shared with desktop"), divider = false,
-                    onClick = { if (!locked && online) hostUi = true })
+                    enabled = online && !locked, onClick = { hostUi = true })
             }
             if (selected == null) {
                 if (!moreOptional) {
@@ -699,7 +699,7 @@ private fun configurationFieldLabel(field: PluginSchemaField): String = when (fi
 private fun settingsValue(root: JsonElement?, path: List<String>): JsonElement? = path.fold(root) { current, key -> current[key] }
 
 @Composable
-private fun PluginConfiguration(initial: JsonElement, writable: Boolean, onBack: () -> Unit, refresh: suspend () -> JsonElement, save: suspend (JsonArray, Int) -> JsonElement) {
+private fun PluginConfiguration(initial: JsonElement, writable: Boolean, onBack: () -> Unit, canReload: Boolean, refresh: suspend () -> JsonElement, save: suspend (JsonArray, Int) -> JsonElement) {
     var snapshot by remember { mutableStateOf(initial) }
     var advanced by remember { mutableStateOf(false) }
     var drafts by remember { mutableStateOf<Map<List<String>, String>>(emptyMap()) }
@@ -767,12 +767,12 @@ private fun PluginConfiguration(initial: JsonElement, writable: Boolean, onBack:
     }
     if (advanced) {
         BackHandler { advanced = false }
-        PluginAdvancedConfiguration(snapshot, writable, { advanced = false }, refresh = { refresh().also { snapshot = it } }, save = { operations, revision -> save(operations, revision).also { snapshot = it } })
+        PluginAdvancedConfiguration(snapshot, writable, { advanced = false }, canReload, refresh = { refresh().also { snapshot = it } }, save = { operations, revision -> save(operations, revision).also { snapshot = it } })
         return
     }
     SettingsScaffold(configurationTitle(ns, emptyList()), onBack) {
         PluginMessage(configurationDescription(ns))
-        if (!writable) PluginMessage(pt("配置当前只读或主机断线", "Settings are read-only or the host is disconnected"), true)
+        if (canReload && !writable) PluginMessage(pt("配置当前只读", "Settings are read-only"))
         if (busy) LinearProgressIndicator(Modifier.fillMaxWidth().padding(horizontal = 18.dp))
         message?.let { PluginMessage(it, failed) }
         fields.forEach { field ->
@@ -793,7 +793,7 @@ private fun PluginConfiguration(initial: JsonElement, writable: Boolean, onBack:
                                 Box {
                                     OutlinedButton({ expanded = true }, enabled = writable && !busy) { Text(field.choices.firstOrNull { it.toString() == current }?.let { (it as? JsonPrimitive)?.content ?: it.toString() } ?: pt("使用默认值", "Use default")) }
                                     DropdownMenu(expanded, { expanded = false }) {
-                                        field.choices.forEach { choice -> DropdownMenuItem(text = { Text((choice as? JsonPrimitive)?.content ?: choice.toString()) }, onClick = { change(field, choice.toString()); expanded = false }) }
+                                        field.choices.forEach { choice -> DropdownMenuItem(text = { Text((choice as? JsonPrimitive)?.content ?: choice.toString()) }, enabled = writable && !busy, onClick = { change(field, choice.toString()); expanded = false }) }
                                     }
                                 }
                             }
@@ -824,7 +824,7 @@ private fun PluginConfiguration(initial: JsonElement, writable: Boolean, onBack:
                     catch (e: Exception) { failed = true; message = e.message }
                     finally { busy = false }
                 } }
-            }, enabled = !busy) { Text(pt("重新读取", "Reload")) }
+            }, enabled = canReload && !busy) { Text(pt("重新读取", "Reload")) }
         }
         TextButton({ advanced = true }, enabled = !busy, modifier = Modifier.padding(horizontal = 18.dp)) { Text(pt("高级编辑（JSON / schema）", "Advanced editor (JSON / schema)")) }
         if (ns == "web-search-deepseek") PluginMessage(pt("API Key 由主机凭据服务管理；apiKeyEnv 是引用名，不是密钥值。", "API keys are managed by host credentials; apiKeyEnv names a reference, not the key value."))
@@ -833,7 +833,7 @@ private fun PluginConfiguration(initial: JsonElement, writable: Boolean, onBack:
 }
 
 @Composable
-private fun PluginAdvancedConfiguration(initial: JsonElement, writable: Boolean, onBack: () -> Unit, refresh: suspend () -> JsonElement, save: suspend (JsonArray, Int) -> JsonElement) {
+private fun PluginAdvancedConfiguration(initial: JsonElement, writable: Boolean, onBack: () -> Unit, canReload: Boolean, refresh: suspend () -> JsonElement, save: suspend (JsonArray, Int) -> JsonElement) {
     var snapshot by remember { mutableStateOf(initial) }
     var pathDraft by remember { mutableStateOf("[]") }
     var valueDraft by remember { mutableStateOf("") }
@@ -868,7 +868,7 @@ private fun PluginAdvancedConfiguration(initial: JsonElement, writable: Boolean,
     }
     SettingsScaffold(snapshot["ns"].str().orEmpty(), onBack) {
         PluginMessage(pt("基于主机 schema 的结构化编辑。每次只修改指定路径，并携带修订号；插件专用页面可从「插件自定义界面」打开。", "Structured editing from the host schema. Each write changes only the selected path with a revision fence. Plugin-specific pages are available through Plugin interfaces."))
-        if (!writable) PluginMessage(pt("配置当前只读或主机断线", "Settings are read-only or the host is disconnected"), true)
+        if (canReload && !writable) PluginMessage(pt("配置当前只读", "Settings are read-only"))
         if (busy) LinearProgressIndicator(Modifier.fillMaxWidth().padding(horizontal = 18.dp))
         message?.let { PluginMessage(it, failed) }
         SettingsCard {
@@ -885,7 +885,7 @@ private fun PluginAdvancedConfiguration(initial: JsonElement, writable: Boolean,
                         catch (e: Exception) { failed = true; message = e.message }
                         finally { busy = false }
                     } }
-                }, enabled = !busy) { Text(pt("重新读取（保留草稿）", "Reload (keep draft)")) }
+                }, enabled = canReload && !busy) { Text(pt("重新读取（保留草稿）", "Reload (keep draft)")) }
             }
         }
         SettingsCard {
@@ -905,7 +905,7 @@ private fun PluginAdvancedConfiguration(initial: JsonElement, writable: Boolean,
                 }
                 OutlinedTextField(pathDraft, { pathDraft = it; valueDraft = "" }, enabled = !busy, label = { Text(pt("路径（JSON 字符串数组）", "Path (JSON string array)")) }, supportingText = { Text("[\"options\", \"timeout\"]") }, modifier = Modifier.fillMaxWidth(), isError = path == null)
                 if (parentOfSecret) Text(pt("此路径包含隐藏的敏感字段，不能整体替换或清除。请选择具体字段。", "This path contains redacted secrets. Select a specific field instead of replacing/removing its parent."), color = MaterialTheme.colorScheme.error, fontSize = 12.sp)
-                OutlinedTextField(valueDraft, { valueDraft = it }, enabled = !busy && !parentOfSecret, label = { Text(if (secret) pt("新的敏感值（纯文本）", "New secret (plain text)") else pt("新值（合法 JSON）", "New value (valid JSON)")) }, modifier = Modifier.fillMaxWidth(), minLines = if (secret) 1 else 3, visualTransformation = if (secret) PasswordVisualTransformation() else VisualTransformation.None)
+                OutlinedTextField(valueDraft, { valueDraft = it }, enabled = writable && !busy && !parentOfSecret, label = { Text(if (secret) pt("新的敏感值（纯文本）", "New secret (plain text)") else pt("新值（合法 JSON）", "New value (valid JSON)")) }, modifier = Modifier.fillMaxWidth(), minLines = if (secret) 1 else 3, visualTransformation = if (secret) PasswordVisualTransformation() else VisualTransformation.None)
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     Button({ submit(false) }, enabled = writable && !busy && path != null && !parentOfSecret && valueDraft.isNotBlank()) { Text(pt("保存", "Save")) }
                     OutlinedButton({ submit(true) }, enabled = writable && !busy && path != null && !parentOfSecret) { Text(pt("清除覆盖值", "Unset override")) }

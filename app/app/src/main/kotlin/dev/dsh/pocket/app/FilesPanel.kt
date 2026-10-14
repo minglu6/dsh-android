@@ -57,10 +57,16 @@ fun FilesSheet(sessionId: String, onDismiss: () -> Unit, onBack: (() -> Unit)? =
     var previewPath by remember(sessionId) { mutableStateOf<String?>(null) }
     val listState = rememberLazyListState()
     val sessions by Pocket.sessions.collectAsState()
+    val host by Pocket.active.collectAsState()
+    val status by Pocket.status.collectAsState()
+    val ops by Pocket.ops.collectAsState()
+    val online = host != null && status[host] == Dot.Online
+    val canList = online && "files.list" in ops
     val cwd = sessions.firstOrNull { it.sessionId == sessionId }?.cwd
     val reloadLabel = ft("重新读取", "Reload")
 
     fun load(target: String) {
+        if (!canList) return
         requestedPath = target
         path = target
         loading = true
@@ -69,6 +75,10 @@ fun FilesSheet(sessionId: String, onDismiss: () -> Unit, onBack: (() -> Unit)? =
     }
 
     LaunchedEffect(sessionId, generation, cwd) {
+        if (!canList) {
+            loading = false
+            return@LaunchedEffect
+        }
         val requestGeneration = generation
         val target = requestedPath
         loading = true
@@ -126,35 +136,35 @@ fun FilesSheet(sessionId: String, onDismiss: () -> Unit, onBack: (() -> Unit)? =
     RightPanelFrame(
         title = ft("工作区文件", "Workspace files"),
         onDismiss = onDismiss,
-        onBack = if (parentPath != null) ({ load(parentPath) }) else onBack,
+        onBack = if (parentPath != null && canList) ({ load(parentPath) }) else onBack,
     ) {
         Row(
             Modifier.fillMaxWidth().padding(start = 12.dp, end = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             val parent = workspaceFilesParentPath(path)
-            IconButton(onClick = { parent?.let(::load) }, enabled = parent != null) {
+            IconButton(onClick = { parent?.let(::load) }, enabled = canList && parent != null) {
                 Icon(
                     D.chevronLeft,
                     contentDescription = ft("上级目录", "Parent directory"),
-                    tint = if (parent != null) T.Text2 else T.Text3.copy(alpha = 0.45f),
+                    tint = if (canList && parent != null) T.Text2 else T.Text3.copy(alpha = 0.45f),
                     modifier = Modifier.size(18.dp),
                 )
             }
             Row(Modifier.weight(1f).horizontalScroll(rememberScrollState()), verticalAlignment = Alignment.CenterVertically) {
-                TextButton(onClick = { load("") }, enabled = !loading && !cwd.isNullOrBlank()) {
+                TextButton(onClick = { load("") }, enabled = canList && !loading && !cwd.isNullOrBlank()) {
                     Text(cwd?.trimEnd('/', '\\')?.substringAfterLast('/')?.ifEmpty { "/" } ?: ft("无工作区", "No workspace"),
-                        color = T.Text2, fontSize = 12.sp)
+                        color = if (canList && !loading && !cwd.isNullOrBlank()) T.Text2 else T.Caption, fontSize = 12.sp)
                 }
                 path.split('/').filter { it.isNotEmpty() }.forEachIndexed { index, part ->
                     Icon(D.chevronRight, null, tint = T.Text3, modifier = Modifier.size(12.dp))
-                    TextButton(onClick = { load(path.split('/').take(index + 1).joinToString("/")) }, enabled = !loading) {
-                        Text(part, color = T.Text2, fontSize = 12.sp)
+                    TextButton(onClick = { load(path.split('/').take(index + 1).joinToString("/")) }, enabled = canList && !loading) {
+                        Text(part, color = if (canList && !loading) T.Text2 else T.Caption, fontSize = 12.sp)
                     }
                 }
             }
-            IconButton(onClick = { load(path) }, enabled = !loading && !cwd.isNullOrBlank()) {
-                Icon(D.refresh, reloadLabel, tint = if (loading) T.Text3 else T.Text2, modifier = Modifier.size(18.dp))
+            IconButton(onClick = { load(path) }, enabled = canList && !loading && !cwd.isNullOrBlank()) {
+                Icon(D.refresh, reloadLabel, tint = if (canList && !loading && !cwd.isNullOrBlank()) T.Text2 else T.Caption, modifier = Modifier.size(18.dp))
             }
         }
         HorizontalDivider(color = T.Border, thickness = 0.5.dp)
@@ -183,7 +193,7 @@ fun FilesSheet(sessionId: String, onDismiss: () -> Unit, onBack: (() -> Unit)? =
                         SelectableOutput {
                             Text(failure.orEmpty(), color = T.Err, fontSize = 13.sp, lineHeight = 20.sp)
                         }
-                        TextButton(onClick = { load(path) }) { Text(reloadLabel, color = T.Accent) }
+                        TextButton(onClick = { load(path) }, enabled = canList) { Text(reloadLabel, color = if (canList) T.Accent else T.Caption) }
                     }
                 }
                 else -> {
@@ -196,10 +206,11 @@ fun FilesSheet(sessionId: String, onDismiss: () -> Unit, onBack: (() -> Unit)? =
                     items(entries, key = { it.name }) { entry ->
                         val directory = entry.type == "directory"
                         val openable = directory || entry.type == "file"
+                        val enabled = online && openable && (!directory || canList)
                         val otherLabel = ft("这不是文件或目录，没法打开。", "Not a file or a directory, so it cannot be opened.")
                         Row(
                             Modifier.fillMaxWidth()
-                                .clickable(enabled = openable, role = Role.Button) {
+                                .clickable(enabled = enabled, role = Role.Button) {
                                     val child = if (path.isEmpty()) entry.name else "$path/${entry.name}"
                                     if (directory) load(child) else previewPath = child
                                 }
@@ -212,7 +223,7 @@ fun FilesSheet(sessionId: String, onDismiss: () -> Unit, onBack: (() -> Unit)? =
                             if (openable) FileTypeIcon(entry.name, directory, Modifier.size(20.dp))
                             else Icon(D.warning, null, tint = T.Text3, modifier = Modifier.size(20.dp))
                             Text(
-                                entry.name, color = if (openable) T.Ink else T.Text3,
+                                entry.name, color = if (enabled) T.Ink else T.Text3,
                                 fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis,
                                 modifier = Modifier.weight(1f),
                             )

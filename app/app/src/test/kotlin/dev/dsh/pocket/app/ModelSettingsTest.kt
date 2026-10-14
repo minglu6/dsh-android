@@ -5,6 +5,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.*
 import dev.dsh.pocket.protocol.*
 import kotlinx.serialization.json.*
@@ -33,7 +34,7 @@ class ModelSettingsTest {
         installHostSettingsFixture()
         Pocket.prefs.language = AppLanguage.Zh
         Pocket.prefs.appearance = Appearance.Light
-        Pocket.ops.value = setOf("models.settingsMutate", "credentials.set")
+        Pocket.ops.value = setOf("models.providers", "models.providerGet", "models.settingsMutate", "credentials.set")
     }
 
     private fun mount(content: @Composable () -> Unit) {
@@ -79,6 +80,10 @@ class ModelSettingsTest {
         val field = Pocket.javaClass.getDeclaredField("client").apply { isAccessible = true }
         val previous = field.get(Pocket)
         val previousRevision = Pocket.modelSettingsRevision.value
+        val previousHost = Pocket.active.value
+        val previousStatus = Pocket.status.value
+        Pocket.active.value = "model-test"
+        Pocket.status.value = mapOf("model-test" to Dot.Online)
         field.set(Pocket, client)
         Pocket.ops.value += "models.providers"
         try {
@@ -96,11 +101,57 @@ class ModelSettingsTest {
             assertTrue("models.providers" in requests)
             assertTrue("models.providerGet" in requests)
             assertFalse("ui.open" in requests)
+            rule.onNodeWithContentDescription("API 密钥").performTextInput("draft-key")
+            val draftText = rule.onNodeWithContentDescription("API 密钥").fetchSemanticsNode().config[SemanticsProperties.EditableText]
+            val requestCount = requests.size
+            rule.runOnIdle { Pocket.status.value = mapOf("model-test" to Dot.Offline) }
+            rule.onNodeWithContentDescription("API 密钥").assertIsNotEnabled()
+            rule.onNodeWithText("保存").assertIsNotEnabled()
+            rule.onNodeWithText("回读最新配置并保留草稿").assertIsNotEnabled()
+            rule.onNodeWithText("取消").assertIsEnabled()
+            rule.onNodeWithText("主机配置为只读").assertDoesNotExist()
+            assertEquals(requestCount, requests.size)
+            rule.runOnIdle { Pocket.status.value = mapOf("model-test" to Dot.Online) }
+            rule.onNodeWithText("保存").assertIsNotEnabled()
+            rule.onNodeWithText("回读最新配置并保留草稿").performScrollTo().performClick()
+            rule.onNodeWithText("保存").assertIsEnabled()
+            assertEquals(draftText, rule.onNodeWithContentDescription("API 密钥").fetchSemanticsNode().config[SemanticsProperties.EditableText])
+            assertFalse("models.settingsMutate" in requests)
         } finally {
             field.set(Pocket, previous)
             Pocket.modelSettingsRevision.value = previousRevision
+            Pocket.active.value = previousHost
+            Pocket.status.value = previousStatus
             client.close()
         }
+    }
+
+    @Test fun disconnectDisablesOpenRemovalConfirmationAndKeepsCancelAvailable() {
+        var online by mutableStateOf(true)
+        val snapshot = json("""{"provider":{"provider":"gateway","settingsNs":"llm-pi-ai","settingsPath":["providers","gateway"],"declared":true,"removable":true},"namespace":{"ns":"llm-pi-ai","revision":7,"user":{},"value":{}}}""")
+        mount { ProviderSettingsEditor(snapshot, null, protocols, emptyList(), true, online = online, onBusy = {}, onClose = {}) }
+        rule.onNodeWithText("删除提供商").performScrollTo().performClick()
+        rule.runOnIdle { online = false }
+        rule.onNodeWithText(L.delete()).assertIsNotEnabled()
+        rule.onNode(hasText("取消") and hasAnyAncestor(isDialog())).assertIsEnabled().performClick()
+        rule.onNodeWithText("删除提供商？").assertDoesNotExist()
+        rule.onNodeWithText("删除提供商").assertIsNotEnabled()
+    }
+
+    @Test fun customProviderDraftSurvivesDisconnectWithoutEnablingCreationOnReconnect() {
+        var online by mutableStateOf(true)
+        mount { ProviderSettingsEditor(null, namespace, protocols, emptyList(), true, online = online, onBusy = {}, onClose = {}) }
+        rule.onNodeWithContentDescription("Provider ID").performTextInput("local-draft")
+        rule.onNodeWithContentDescription("API 地址").performTextInput("https://example.test/v1")
+        rule.runOnIdle { online = false }
+        rule.onNodeWithContentDescription("Provider ID").assertIsNotEnabled().assertTextContains("local-draft")
+        rule.onNodeWithContentDescription("API 地址").assertIsNotEnabled().assertTextContains("https://example.test/v1")
+        rule.onNodeWithText("创建提供商").performScrollTo().assertIsNotEnabled()
+        rule.onNodeWithText("取消").assertIsEnabled()
+        rule.runOnIdle { online = true }
+        rule.onNodeWithText("创建提供商").assertIsNotEnabled()
+        rule.onNodeWithText("回读最新配置并保留草稿").performScrollTo().assertIsEnabled()
+        rule.onNodeWithContentDescription("Provider ID").assertTextContains("local-draft")
     }
 
     @Test fun apiKeysMatchDesktopPasteRulesWithoutRejectingBase64Padding() {

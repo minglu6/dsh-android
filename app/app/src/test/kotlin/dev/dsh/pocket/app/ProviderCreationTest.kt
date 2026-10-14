@@ -32,7 +32,7 @@ class ProviderCreationTest {
         installHostSettingsFixture()
         Pocket.prefs.language = AppLanguage.Zh
         Pocket.prefs.appearance = Appearance.Light
-        Pocket.ops.value = setOf("models.settingsMutate", "credentials.set")
+        Pocket.ops.value = setOf("models.providers", "models.providerGet", "models.settingsMutate", "credentials.set")
     }
 
     @Test fun catalogAdoptionDoesNotRequireCustomApiNamespace() {

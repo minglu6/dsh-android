@@ -147,6 +147,18 @@ class ComposerTest {
         assertEquals(2, calls)
     }
 
+    @Test fun disconnectDisablesApprovalUntilConnectionReturns() {
+        Pocket.chat.value = ChatState("s1", running = true, loaded = true)
+        Pocket.approvals.value = listOf(Approval("approval", "s1", "bash", null, "Review command"))
+        rule.setContent { PocketTheme { ChatRoot(onMenu = {}) } }
+        rule.onNodeWithText("允许一次").assertIsEnabled()
+        rule.runOnIdle { Pocket.status.value = mapOf("p1" to Dot.Offline) }
+        rule.onNodeWithText("允许一次").assertIsNotEnabled()
+        rule.onNodeWithText("拒绝").assertIsNotEnabled()
+        rule.runOnIdle { Pocket.status.value = mapOf("p1" to Dot.Online) }
+        rule.onNodeWithText("允许一次").assertIsEnabled()
+    }
+
     @Test fun triggerAndReplacementRespectCaretAndSuffix() {
         assertNull(composerTrigger("mail@example.com", 9))
         assertNull(composerTrigger("path/src", 8))

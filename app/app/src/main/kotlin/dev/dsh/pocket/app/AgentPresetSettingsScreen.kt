@@ -71,13 +71,18 @@ private class PresetSettingsState {
 internal fun AgentPresetSettingsScreen(onBack: () -> Unit, onCreator: (() -> Unit)? = null) {
     val host by Pocket.active.collectAsState()
     val ops by Pocket.ops.collectAsState()
+    val status by Pocket.status.collectAsState()
+    val online = host != null && status[host] == Dot.Online
+    val canLoad = online && ("presets.settings" in ops || "presets.list" in ops)
     val settingsRevision by Pocket.modelSettingsRevision.collectAsState()
     val client = Pocket.clientOrNull()
-    val state = remember(host, client, ops) { PresetSettingsState() }
+    val state = remember(host) { PresetSettingsState() }
     val scope = rememberCoroutineScope()
     DisposableEffect(state) { onDispose { state.attached = false } }
     fun current() = state.attached && Pocket.active.value == host && Pocket.clientOrNull() === client
+    fun connected() = current() && host != null && Pocket.status.value[host] == Dot.Online
     suspend fun readRoster(): JsonElement {
+        check(connected()) { L.unavailable() }
         val connection = checkNotNull(client) { L.unavailable() }
         return if ("presets.settings" in ops) connection.call("presets.settings") else {
             check("presets.list" in ops) { L.unavailable() }
@@ -86,12 +91,13 @@ internal fun AgentPresetSettingsScreen(onBack: () -> Unit, onCreator: (() -> Uni
         }
     }
     fun adopt(value: JsonElement) {
-        if (!current()) return
+        if (!connected()) return
         state.data = value
         state.revisionFresh = true
         Pocket.presetRoster.value = value["presets"].arr().orEmpty().filterIsInstance<JsonObject>()
     }
     suspend fun load(clearError: Boolean = true) {
+        if (!canLoad || !connected()) return
         state.loading = true
         state.revisionFresh = false
         if (clearError) state.error = null
@@ -101,7 +107,7 @@ internal fun AgentPresetSettingsScreen(onBack: () -> Unit, onCreator: (() -> Uni
     }
     fun viewConfiguration(row: JsonElement) {
         val connection = client ?: return
-        if (!current()) return
+        if (!connected() || "presets.read" !in ops) return
         val request = ++state.viewRequest
         state.error = null
         state.view = null
@@ -109,23 +115,29 @@ internal fun AgentPresetSettingsScreen(onBack: () -> Unit, onCreator: (() -> Uni
             try {
                 val content = connection.call("presets.read", jsonOf("id" to row["id"].str()))["content"].str()
                     ?: error(st("主机未返回预设组成", "Host did not return the preset composition"))
-                if (current() && request == state.viewRequest) state.view = PresetConfiguration(row, content)
+                if (connected() && request == state.viewRequest) state.view = PresetConfiguration(row, content)
             } catch (t: Throwable) {
                 if (current() && request == state.viewRequest) state.error = settingsFailure(t)
             }
         }
     }
-    LaunchedEffect(state, settingsRevision) {
+    LaunchedEffect(state, client, ops, settingsRevision, online) {
+        state.revisionFresh = false
+        if (!canLoad) {
+            state.loading = false
+            return@LaunchedEffect
+        }
         // Coalesce notifications during a save; its read-back and error must settle first.
         snapshotFlow { state.busy }.first { !it }
         load(clearError = false)
     }
     val rows = state.data["presets"].arr().orEmpty()
     val revision = (state.data["namespace"]["revision"] as? JsonPrimitive)?.longOrNull
-    val writable = state.revisionFresh && state.data["writable"].bool() == true && revision != null && "models.settingsMutate" in ops
+    val hostWritable = state.data["writable"].bool() == true && revision != null && "models.settingsMutate" in ops
+    val writable = online && state.revisionFresh && hostWritable
     fun makeDefault(row: JsonElement) {
         val id = row["id"].str() ?: return
-        if (!current() || !writable || state.busy || state.loading || row["broken"].str() != null || row["isDefault"].bool() == true) return
+        if (!connected() || !writable || state.busy || state.loading || row["broken"].str() != null || row["isDefault"].bool() == true) return
         val expected = revision ?: return
         val connection = client ?: return
         state.busy = true
@@ -141,7 +153,7 @@ internal fun AgentPresetSettingsScreen(onBack: () -> Unit, onCreator: (() -> Uni
                     if (t is CancellationException) throw t
                     writeFailure = t
                 }
-                if (!current()) return@launch
+                if (!connected()) return@launch
                 // A rejection can carry a newer revision; never retry a stale CAS or claim an override applied.
                 var readFailure: Throwable? = null
                 state.revisionFresh = false
@@ -150,7 +162,7 @@ internal fun AgentPresetSettingsScreen(onBack: () -> Unit, onCreator: (() -> Uni
                     readFailure = t
                     null
                 }
-                if (!current()) return@launch
+                if (!connected()) return@launch
                 if (writeFailure != null) {
                     state.error = settingsFailure(writeFailure) + (readFailure?.let { "\n" + settingsFailure(it) } ?: "")
                 } else {
@@ -160,28 +172,29 @@ internal fun AgentPresetSettingsScreen(onBack: () -> Unit, onCreator: (() -> Uni
                     }
                 }
             } catch (t: Throwable) { if (current()) state.error = settingsFailure(t) }
-            finally { if (current()) state.busy = false }
+            finally { if (state.attached) state.busy = false }
         }
     }
-    SettingsScaffold(st("Agent 预设", "Agent presets"), onBack = { if (!state.busy) onBack() }, actions = {
-        if (state.error != null) IconButton({ scope.launch { load() } }, enabled = !state.busy && !state.loading) { Icon(D.refresh, L.retry(), tint = T.Ink) }
+    SettingsScaffold(st("Agent 预设", "Agent presets"), onBack = { if (!online || !state.busy) onBack() }, actions = {
+        if (state.error != null) IconButton({ scope.launch { load() } }, enabled = canLoad && !state.busy && !state.loading) { Icon(D.refresh, L.retry(), tint = T.Ink) }
     }) {
         SettingsMessage(st("选择 Agent 的工具和工作方式。日常任务用「标准模式」，扩展 DSH 的能力用「创造模式」。", "Choose the agent’s tools and how it works. Use Standard mode for everyday tasks, or Creator mode to add capabilities to DSH."))
         SettingsMessage(state.error, true)
         if (state.busy) LinearProgressIndicator(Modifier.fillMaxWidth().padding(horizontal = 18.dp))
         when {
             state.loading -> ErrorOrEmpty(L.loading())
-            rows.isEmpty() -> ErrorOrEmpty(L.unavailable(), { scope.launch { load() } })
+            rows.isEmpty() -> ErrorOrEmpty(L.unavailable(), onRetry = if (canLoad) ({ scope.launch { load() }; Unit }) else null)
             else -> PresetCardGroups(
                 rows = rows, codingTools = Pocket.prefs.showCodeWorkView,
-                writable = writable, busy = state.busy, canRead = "presets.read" in ops,
+                writable = writable, busy = state.busy, canRead = online && "presets.read" in ops,
                 onSelect = ::makeDefault,
                 onGuide = { id, page -> state.guide = id to page },
                 onView = ::viewConfiguration,
                 onCreator = onCreator?.takeIf { rows.any { row -> row["id"].str() == "cordis" && row["broken"].str() == null } },
+                creatorEnabled = online && "sessions.create" in ops,
             )
         }
-        if (!state.loading && !writable) SettingsMessage(st("当前主机仅支持查看预设，默认设置为只读", "This Host allows viewing presets only; the default is read-only"))
+        if (online && state.revisionFresh && !hostWritable) SettingsMessage(st("当前主机仅支持查看预设，默认设置为只读", "This Host allows viewing presets only; the default is read-only"))
         Spacer(Modifier.height(20.dp))
     }
     state.guide?.let { (id, page) -> PresetGuideDialog(id, page) { state.guide = null } }
@@ -197,6 +210,7 @@ internal fun PresetCardGroups(
     rows: List<JsonElement>, codingTools: Boolean, writable: Boolean, busy: Boolean, canRead: Boolean,
     onSelect: (JsonElement) -> Unit, onGuide: (String, PresetGuidePage) -> Unit,
     onView: (JsonElement) -> Unit, onCreator: (() -> Unit)?,
+    creatorEnabled: Boolean = true,
 ) {
     Column(Modifier.fillMaxWidth().padding(horizontal = 18.dp), verticalArrangement = Arrangement.spacedBy(28.dp)) {
         listOf(true, false).forEach { builtIn ->
@@ -222,11 +236,11 @@ internal fun PresetCardGroups(
                     Row(Modifier.fillMaxWidth().height(44.dp).testTag("preset-creator")
                         .drawBehind { drawRoundRect(borderColor, cornerRadius = CornerRadius(16.dp.toPx()),
                             style = Stroke(width = 1.dp.toPx(), pathEffect = PathEffect.dashPathEffect(floatArrayOf(3.dp.toPx(), 3.dp.toPx())))) }
-                        .clickable(enabled = !busy, role = Role.Button, onClick = creator).padding(horizontal = 14.dp),
+                        .clickable(enabled = creatorEnabled && !busy, role = Role.Button, onClick = creator).padding(horizontal = 14.dp),
                         horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically) {
-                        Icon(D.plus, null, Modifier.size(14.dp), tint = if (busy) T.Caption else T.Ink)
+                        Icon(D.plus, null, Modifier.size(14.dp), tint = if (!creatorEnabled || busy) T.Caption else T.Ink)
                         Spacer(Modifier.width(6.dp))
-                        Text(st("让 Agent 帮我创建预设模式", "Let the agent help me create a preset"), fontSize = 14.sp, color = if (busy) T.Caption else T.Ink)
+                        Text(st("让 Agent 帮我创建预设模式", "Let the agent help me create a preset"), fontSize = 14.sp, color = if (!creatorEnabled || busy) T.Caption else T.Ink)
                     }
                 }
             }

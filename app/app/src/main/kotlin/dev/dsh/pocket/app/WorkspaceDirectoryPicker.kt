@@ -46,10 +46,15 @@ import kotlinx.coroutines.launch
 internal fun WorkspaceDirectorySheet(onCreated: (WorkspaceView) -> Unit = {}, onDismiss: () -> Unit) {
     val ops by Pocket.ops.collectAsState()
     val host by Pocket.active.collectAsState()
-    key(host, "workspace.directoryList" in ops) {
+    val status by Pocket.status.collectAsState()
+    val online = host != null && status[host] == Dot.Online
+    val browse = remember(host) { "workspace.directoryList" in ops }
+    key(host) {
         WorkspaceDirectoryDialog(
-            browse = "workspace.directoryList" in ops,
-            canCreate = "workspace.directoryCreate" in ops,
+            browse = browse,
+            canCreate = online && "workspace.directoryCreate" in ops,
+            enabled = online && (!browse || "workspace.directoryList" in ops),
+            canOpen = online && "workspace.create" in ops,
             list = { WorkspaceDirectoryLevel.parse(Pocket.listWorkspaceDirectories(it)) },
             createDirectory = Pocket::createWorkspaceDirectory,
             open = { onCreated(Pocket.createWorkspace(it)) },
@@ -66,6 +71,8 @@ internal fun WorkspaceDirectoryDialog(
     createDirectory: suspend (String, String) -> String,
     open: suspend (String) -> Unit,
     onDismiss: () -> Unit,
+    enabled: Boolean = true,
+    canOpen: Boolean = true,
 ) {
     val scope = rememberCoroutineScope()
     val state = remember { WorkspaceDirectoryState(scope, list) }
@@ -78,14 +85,14 @@ internal fun WorkspaceDirectoryDialog(
     var createError by remember { mutableStateOf<String?>(null) }
     val inert = saving || folderName != null
     val target = if (browse) state.target else nativePath.takeIf { it.isNotBlank() }
-    val ready = target != null && !state.loading && !inert && state.draft == null
+    val ready = enabled && target != null && !state.loading && !inert && state.draft == null
     val newFolder = navText("新建文件夹", "New folder")
     val editPath = navText("编辑路径", "Edit path")
     val horizontal = rememberScrollState()
     val crumbScroll = rememberScrollState()
     var slowScan by remember { mutableStateOf(false) }
 
-    LaunchedEffect(Unit) { if (browse) state.navigate() }
+    LaunchedEffect(Unit) { if (browse && enabled) state.navigate() }
     DisposableEffect(state) { onDispose { state.dispose() } }
     LaunchedEffect(state.loading) { slowScan = false; if (state.loading) { delay(300); slowScan = true } }
     LaunchedEffect(state.child?.path, horizontal.maxValue) {
@@ -109,11 +116,12 @@ internal fun WorkspaceDirectoryDialog(
         if (state.draft != null) { state.cancelEdit(); keyboard?.hide() } else onDismiss()
     }
     fun submitPath() {
+        if (!enabled || inert) return
         state.draft?.takeIf { it.isNotBlank() }?.let { state.navigate(it) }
     }
     fun openTarget() {
         val path = target ?: return
-        if (!ready) return
+        if (!ready || !canOpen) return
         saving = true
         saveError = null
         scope.launch {
@@ -126,7 +134,7 @@ internal fun WorkspaceDirectoryDialog(
     fun createFolder() {
         val path = target ?: return
         val name = folderName?.takeIf { it.isNotBlank() } ?: return
-        if (creating) return
+        if (!enabled || !canCreate || creating) return
         creating = true
         createError = null
         scope.launch {
@@ -165,7 +173,7 @@ internal fun WorkspaceDirectoryDialog(
                                     Text(if (crumb.path == state.parent?.home) navText("主目录", "Home") else crumb.name,
                                         fontSize = 13.sp, color = T.Text3, maxLines = 1, overflow = TextOverflow.Ellipsis,
                                         modifier = Modifier.widthIn(max = 160.dp).clip(T.R4)
-                                            .clickable(enabled = !inert) { state.navigate(crumb.path) }
+                                            .clickable(enabled = enabled && !inert) { state.navigate(crumb.path) }
                                             .padding(horizontal = 6.dp, vertical = 12.dp).testTag("directoryCrumb:${crumb.path}"))
                                 }
                             }
@@ -180,13 +188,13 @@ internal fun WorkspaceDirectoryDialog(
                             Row(Modifier.fillMaxSize().horizontalScroll(horizontal).testTag("directoryPanes"),
                                 horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                                 state.parent?.let { level ->
-                                    DirectoryColumn(level, state, !inert, Modifier.width(columnWidth).fillMaxHeight()) {
+                                    DirectoryColumn(level, state, enabled && !inert, Modifier.width(columnWidth).fillMaxHeight()) {
                                         state.navigate(it.path, level); keyboard?.hide()
                                     }
                                 }
                                 state.child?.let { level ->
                                     VerticalDivider(Modifier.fillMaxHeight(), color = T.Border, thickness = .5.dp)
-                                    DirectoryColumn(level, state, !inert, Modifier.width(columnWidth).fillMaxHeight()) {
+                                    DirectoryColumn(level, state, enabled && !inert, Modifier.width(columnWidth).fillMaxHeight()) {
                                         state.navigate(it.path, level); keyboard?.hide()
                                     }
                                 }
@@ -221,7 +229,7 @@ internal fun WorkspaceDirectoryDialog(
                             Spacer(Modifier.weight(1f))
                             DirectoryDialogButton(L.cancel(), onDismiss, enabled = !inert, modifier = Modifier.widthIn(min = 72.dp))
                             Spacer(Modifier.width(8.dp))
-                            DirectoryDialogButton(navText("打开", "Open"), ::openTarget, enabled = ready, primary = true,
+                            DirectoryDialogButton(navText("打开", "Open"), ::openTarget, enabled = ready && canOpen, primary = true,
                                 modifier = Modifier.widthIn(min = 72.dp).testTag("directoryOpen"))
                         }
                         if (compact) Column {
@@ -251,7 +259,7 @@ internal fun WorkspaceDirectoryDialog(
                 Row(Modifier.fillMaxWidth().padding(top = 8.dp), horizontalArrangement = Arrangement.End, verticalAlignment = Alignment.CenterVertically) {
                     DirectoryDialogButton(L.cancel(), { folderName = null }, enabled = !creating, modifier = Modifier.testTag("cancelCreateDirectory"))
                     Spacer(Modifier.width(8.dp))
-                    DirectoryDialogButton(navText("创建", "Create"), ::createFolder, enabled = !creating && !folderName.isNullOrBlank(), primary = true)
+                    DirectoryDialogButton(navText("创建", "Create"), ::createFolder, enabled = enabled && canCreate && !creating && !folderName.isNullOrBlank(), primary = true)
                 }
             }
         }
@@ -295,9 +303,9 @@ private fun DirectoryColumn(
                     .padding(horizontal = 6.dp).testTag("directoryEntry:${entry.path}"),
                     verticalAlignment = Alignment.CenterVertically) {
                     Icon(painterResource(if (selected) R.drawable.dsh_folder_selected else R.drawable.dsh_folder_close), null,
-                        Modifier.size(16.dp), tint = if (selected) T.Accent else T.Text3)
+                        Modifier.size(16.dp), tint = if (!enabled) T.Caption else if (selected) T.Accent else T.Text3)
                     Spacer(Modifier.width(6.dp))
-                    Text(entry.name, color = T.Ink, fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+                    Text(entry.name, color = if (enabled) T.Ink else T.Caption, fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
                     Icon(D.chevronRight, null, Modifier.size(12.dp), tint = T.Text3)
                 }
             }
