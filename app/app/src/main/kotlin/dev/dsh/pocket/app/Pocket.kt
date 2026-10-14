@@ -852,7 +852,7 @@ object Pocket {
             }
             followAttempts[sessionId] = attempts
             pendingFollowEpoch = epoch
-            val sid = c.follow(sessionId, afterSeq, maxMessages = HistoryPagingPolicy.FOLLOW_MAX_MESSAGES)
+            val sid = c.follow(sessionId, afterSeq)
             if (!currentFollow(c, sessionId, epoch)) {
                 // A newer selection won while the Host was opening this subscription.
                 try { c.unfollow(sid) }
@@ -892,7 +892,14 @@ object Pocket {
             }
             if (completionViewClient === c && completionViewSession == viewed) return@withLock
             try {
-                val snapshot = c.call("completion.view", jsonOf("sessionId" to (viewed ?: JsonNull)))
+                val snapshot = try {
+                    c.call("completion.view", jsonOf("sessionId" to (viewed ?: JsonNull)))
+                } catch (e: CancellationException) { throw e }
+                catch (e: Exception) {
+                    if (client !== c) throw e
+                    errors.tryEmit(e.message ?: "查看状态同步失败")
+                    c.call("completion.view", jsonOf("sessionId" to (viewed ?: JsonNull)))
+                }
                 if (client === c) {
                     completionViewClient = c
                     completionViewSession = viewed
@@ -902,8 +909,8 @@ object Pocket {
             catch (e: Exception) {
                 if (client === c) {
                     errors.tryEmit(e.message ?: "查看状态同步失败")
-                    // Release stale Host presence rather than silently acknowledging future tasks.
-                    c.close()
+                    completionViewClient = null
+                    completionViewSession = null
                 }
             }
         }

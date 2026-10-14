@@ -12,8 +12,6 @@ import {
   DEFAULT_IDLE_MS,
   HELLO_TIMEOUT_MS,
   WS_DEFLATE,
-  FRAME_HARD_LIMIT,
-  FRAME_SOFT_LIMIT,
 } from '../src/server.js'
 
 const TOKEN = 'test-token-compression-01234567'
@@ -53,9 +51,6 @@ test('exports slow-link defaults matching dsh-mobile guidance', () => {
   assert.equal(WS_DEFLATE.zlibDeflateOptions.level, 3)
   assert.equal(WS_DEFLATE.clientNoContextTakeover, true)
   assert.equal(WS_DEFLATE.serverNoContextTakeover, true)
-  // Frame caps remain in force for decoded payloads.
-  assert.equal(FRAME_HARD_LIMIT, 1024 * 1024)
-  assert.ok(FRAME_SOFT_LIMIT < FRAME_HARD_LIMIT)
 })
 
 test('negotiates permessage-deflate with a compressing client (OkHttp-compatible)', async () => {

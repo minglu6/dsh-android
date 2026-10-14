@@ -25,18 +25,8 @@ export const WS_DEFLATE = Object.freeze({
   threshold: 1024,
   zlibDeflateOptions: { level: 3 },
 })
-/** Default follow snapshot window when the client omits maxMessages (phone path). */
-export const DEFAULT_FOLLOW_MAX_MESSAGES = 50
-/** Soft ceiling for one follow JSON frame (~900 KiB); leave headroom under iroh MAX_LINE. */
-export const FRAME_SOFT_LIMIT = 900 * 1024
-/** Hard ceiling matching pocket-iroh MAX_LINE — a frame must never exceed this. */
-export const FRAME_HARD_LIMIT = 1024 * 1024
-/** Inline tool-output truncation budget when shrinking an oversized snapshot. */
-export const TOOL_TEXT_TRUNCATE = 4_096
-
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 const eventSeq = (rec) => rec?.event?.seq
-const frameBytes = (frame) => Buffer.byteLength(JSON.stringify(frame), 'utf8')
 
 class OpError extends Error {
   constructor(code, message) { super(message); this.code = code }
@@ -73,112 +63,13 @@ export function slimSessionsList(result) {
   return { ...result, items: result.items.map(slimSessionSummary) }
 }
 
-/**
- * Truncate huge tool/result (and similar) text payloads inline so a follow
- * snapshot fits under the iroh line cap. Full text is available later via
- * history.page / tool expand.
- */
-export function truncateHugeToolOutputs(frame, maxText = TOOL_TEXT_TRUNCATE) {
-  if (!frame || typeof frame !== 'object') return frame
-  const records = frame.records
-  if (!Array.isArray(records)) return frame
-  let changed = false
-  const next = records.map((rec) => {
-    const ev = rec?.event
-    if (!ev || typeof ev !== 'object') return rec
-    const data = ev.data
-    if (!data || typeof data !== 'object') return rec
-    const msg = data.message
-    if (!msg || typeof msg !== 'object' || !Array.isArray(msg.content)) return rec
-    let msgChanged = false
-    const content = msg.content.map((block) => {
-      if (!block || block.type !== 'text' || typeof block.text !== 'string') return block
-      if (block.text.length <= maxText) return block
-      msgChanged = true
-      return {
-        ...block,
-        text: `${block.text.slice(0, maxText)}\n…[truncated ${block.text.length - maxText} bytes]`,
-        truncated: true,
-        originalLength: block.text.length,
-      }
-    })
-    if (!msgChanged) return rec
-    changed = true
-    return { ...rec, event: { ...ev, data: { ...data, message: { ...msg, content } } } }
-  })
-  return changed ? { ...frame, records: next } : frame
-}
-
-/**
- * Ensure a follow snapshot/resume frame fits under FRAME_SOFT_LIMIT (and never
- * over FRAME_HARD_LIMIT). Prefer a smaller history window; then truncate tool
- * outputs. Preserves hasMore/cursor from dsh when trimming.
- *
- * @param {object} frame
- * @param {{ sessionId: string, page?: Function, signal?: AbortSignal }} opts
- */
-export async function fitFollowFrame(frame, opts = {}) {
-  if (!frame || typeof frame !== 'object') return frame
-  if (frame.type !== 'snapshot' && frame.type !== 'resume') return frame
-  let out = frame
-  if (frameBytes(out) <= FRAME_SOFT_LIMIT) return out
-
-  // Re-fetch a smaller window from history when page is available.
-  if (opts.page && Number.isSafeInteger(out.cursor) && str(opts.sessionId)) {
-    for (const n of [25, 10, 5, 1]) {
-      try {
-        const page = await opts.page({
-          address: { kind: 'session', sessionId: opts.sessionId },
-          throughSeq: out.cursor,
-          maxMessages: n,
-        }, opts.signal)
-        if (!page || !Array.isArray(page.records)) continue
-        let candidate = {
-          ...out,
-          records: page.records,
-          hasMore: page.hasMore !== false || (Array.isArray(out.records) && out.records.length > page.records.length),
-        }
-        if (frameBytes(candidate) <= FRAME_SOFT_LIMIT) return candidate
-        candidate = truncateHugeToolOutputs(candidate)
-        if (frameBytes(candidate) <= FRAME_SOFT_LIMIT) return candidate
-        out = candidate
-      } catch {
-        /* try next window / fall through */
-      }
-    }
-  }
-
-  // Shrink the in-memory message window: keep the newest N records.
-  const records = Array.isArray(out.records) ? out.records : []
-  for (const n of [25, 10, 5, 1]) {
-    if (records.length <= n) continue
-    const trimmed = { ...out, records: records.slice(-n), hasMore: true }
-    if (frameBytes(trimmed) <= FRAME_SOFT_LIMIT) return trimmed
-    out = trimmed
-  }
-
-  out = truncateHugeToolOutputs(out)
-  if (frameBytes(out) <= FRAME_SOFT_LIMIT) return out
-
-  // Drop oldest records until under soft limit.
-  let recs = Array.isArray(out.records) ? [...out.records] : []
-  while (recs.length > 0 && frameBytes({ ...out, records: recs, hasMore: true }) > FRAME_SOFT_LIMIT) {
-    recs = recs.slice(1)
-  }
-  out = { ...out, records: recs, hasMore: true }
-  if (frameBytes(out) > FRAME_HARD_LIMIT) {
-    out = { ...out, records: [], hasMore: true }
-    if (frameBytes(out) > FRAME_HARD_LIMIT) {
-      throw new OpError('frame/too-large', `follow frame exceeds ${FRAME_HARD_LIMIT} bytes`)
-    }
-  }
-  return out
-}
-
-/** Resolve maxMessages for follow: client value, else default cap. */
+/** Client-supplied follow window, or none — do not invent an iroh-era default. */
 export function followMaxMessages(args = {}) {
-  if (Number.isSafeInteger(args.maxMessages) && args.maxMessages > 0) return args.maxMessages
-  return DEFAULT_FOLLOW_MAX_MESSAGES
+  if (args.maxMessages === undefined) return undefined
+  if (!Number.isSafeInteger(args.maxMessages) || args.maxMessages <= 0) {
+    throw new OpError('bad-request', 'maxMessages must be a positive integer')
+  }
+  return args.maxMessages
 }
 
 /** Build the op table over an in-process sessionController. */
@@ -512,6 +403,7 @@ export function createPocketServer(opts) {
       if (msg.op === 'follow') {
         need(str(args.sessionId), 'sessionId required')
         need(args.afterSeq === undefined || Number.isSafeInteger(args.afterSeq), 'afterSeq must be an integer')
+        need(args.maxMessages === undefined || (Number.isSafeInteger(args.maxMessages) && args.maxMessages > 0), 'maxMessages must be a positive integer')
         const subId = `s${client.nextSub++}`
         const ac = new AbortController()
         client.subs.set(subId, ac)
@@ -568,7 +460,7 @@ export function createPocketServer(opts) {
       const maxMessages = followMaxMessages(args)
       const it = sc.follow({
         address: { kind: 'session', sessionId: args.sessionId }, assistantStream: true,
-        maxMessages,
+        ...(maxMessages === undefined ? {} : { maxMessages }),
       }, ac.signal)
       let first = true
       for await (let frame of it) {
@@ -576,18 +468,8 @@ export function createPocketServer(opts) {
         if (first && frame?.type === 'snapshot' && args.afterSeq !== undefined) {
           frame = await resumeFrame(frame, args, ac.signal)
         }
-        if (first && (frame?.type === 'snapshot' || frame?.type === 'resume')) {
-          frame = await fitFollowFrame(frame, {
-            sessionId: args.sessionId,
-            page: typeof sc.page === 'function' ? sc.page.bind(sc) : undefined,
-            signal: ac.signal,
-          })
-        }
         first = false
         const wire = { ev: 'follow', subId, frame }
-        if (Buffer.byteLength(JSON.stringify(wire), 'utf8') > FRAME_HARD_LIMIT) {
-          throw new OpError('frame/too-large', `follow frame exceeds ${FRAME_HARD_LIMIT} bytes`)
-        }
         client.push(wire)
         const projectionState = followProjections.get(ac)
         if (projectionState && !projectionState.ready) {

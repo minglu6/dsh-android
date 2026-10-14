@@ -370,7 +370,7 @@ class PocketClient(
                 "allowMigration" to if (allowMigration) null else false,
             ),
         )
-    suspend fun follow(sessionId: String, afterSeq: Long? = null, maxMessages: Int? = 50): String =
+    suspend fun follow(sessionId: String, afterSeq: Long? = null, maxMessages: Int? = null): String =
         call("follow", jsonOf("sessionId" to sessionId, "afterSeq" to afterSeq, "maxMessages" to maxMessages))["subId"].str() ?: ""
     /** Load older turns above the current snapshot window (desktop history.page). */
     suspend fun historyPage(

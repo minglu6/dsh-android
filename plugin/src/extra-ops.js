@@ -231,20 +231,37 @@ export function jobsOps(jobController) {
       const ac = new AbortController()
       const onAbort = () => ac.abort()
       signal?.addEventListener?.('abort', onAbort, { once: true })
+      const unavailable = (message, cause) => Object.assign(new Error(message), {
+        code: 'jobs/unavailable',
+        ...(cause === undefined ? {} : { cause }),
+      })
+      let jobs
       try {
+        if (signal?.aborted) throw unavailable('jobs list timed out or was aborted')
         for await (const frame of jobController.list({ sessionId: a.sessionId }, ac.signal)) {
+          if (signal?.aborted) throw unavailable('jobs list timed out or was aborted')
           if (frame?.type === 'rows') {
+            jobs = Array.isArray(frame.jobs) ? frame.jobs : []
             ac.abort()
-            return { jobs: frame.jobs ?? [] }
+            break
           }
         }
-        return { jobs: [] }
       } catch (error) {
-        if (ac.signal.aborted) return { jobs: [] }
-        throw error
+        if (jobs !== undefined) {
+          // Roster already captured; aborting the watch is the stop condition.
+        } else if (error?.code === 'jobs/unavailable') {
+          throw error
+        } else if (signal?.aborted) {
+          throw unavailable('jobs list timed out or was aborted', error)
+        } else {
+          throw error
+        }
       } finally {
         signal?.removeEventListener?.('abort', onAbort)
+        if (!ac.signal.aborted) ac.abort()
       }
+      if (jobs === undefined) throw unavailable('jobs list ended without a rows frame')
+      return { jobs }
     },
     'jobs.kill': (a) => {
       if (!str(a.sessionId) || !str(a.jobId)) throw bad('sessionId and jobId required')

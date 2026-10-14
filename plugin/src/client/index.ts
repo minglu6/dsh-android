@@ -23,10 +23,6 @@ export function apply(ctx: ClientContext): void {
   ctx.inject(['uiSession', 'sessions', 'layout'], (scope) => {
     const uiSession = scope.get('uiSession')
     const sessions = scope.get('sessions')
-    if (typeof uiSession.setCompletionUnreadSource !== 'function') {
-      console.warn('Pocket completion sync requires a Host client with uiSession.setCompletionUnreadSource')
-      return
-    }
     scope.effect(() => installCompletionSync({
       uiSession, sessions, layout: scope.get('layout'), slots: scope.slots,
     }), 'pocket:completion-sync')

@@ -1,6 +1,12 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { createCompletionSync, installCompletionSync } from '../src/client/completion-sync.js'
+import {
+  bindCompletionUnreadSource,
+  createCompletionSync,
+  installCompletionSync,
+  overlayCompletionUnread,
+  overlaySessionStatusCompletionUnread,
+} from '../src/client/completion-sync.js'
 
 const state = (revision, unreadIds = [], epoch = 'host-a') => ({ epoch, revision, unreadIds })
 const tick = () => new Promise(resolve => setImmediate(resolve))
@@ -163,6 +169,141 @@ function observable(initial) {
     get count() { return listeners.size },
   }
 }
+
+test('overlays Host unread onto official sessionStatus without a dedicated hook', () => {
+  const official = new Map([
+    ['one', { running: true, pendingInteraction: undefined, completionUnread: false }],
+    ['two', { running: false, pendingInteraction: { kind: 'approval' }, completionUnread: true }],
+  ])
+  const overlaid = overlayCompletionUnread(official, new Set(['two', 'three']))
+  assert.deepEqual(overlaid.get('one'), { running: true, pendingInteraction: undefined, completionUnread: false })
+  assert.deepEqual(overlaid.get('two'), { running: false, pendingInteraction: { kind: 'approval' }, completionUnread: true })
+  assert.deepEqual(overlaid.get('three'), { running: undefined, pendingInteraction: undefined, completionUnread: true })
+  assert.equal(overlayCompletionUnread(official, new Set()).get('two').completionUnread, false)
+})
+
+test('sessionStatus overlay is Host source of truth and notifies already-subscribed listeners', () => {
+  const official = new Map([
+    ['one', { running: false, pendingInteraction: undefined, completionUnread: true }],
+  ])
+  const statusListeners = new Set()
+  const sessionStatus = {
+    getSnapshot: () => official,
+    subscribe(listener) {
+      statusListeners.add(listener)
+      return () => statusListeners.delete(listener)
+    },
+  }
+  let unread = new Set()
+  const hostListeners = new Set()
+  const source = {
+    getSnapshot: () => unread,
+    subscribe(listener) { hostListeners.add(listener); return () => hostListeners.delete(listener) },
+  }
+  let seen = 0
+  sessionStatus.subscribe(() => { seen++ })
+  const uninstall = overlaySessionStatusCompletionUnread(sessionStatus, source, statusListeners)
+  assert.equal(sessionStatus.getSnapshot().get('one').completionUnread, false)
+  assert.equal(seen, 1)
+  unread = new Set(['one'])
+  for (const listener of hostListeners) listener()
+  assert.equal(sessionStatus.getSnapshot().get('one').completionUnread, true)
+  assert.equal(sessionStatus.getSnapshot().get('one').running, false)
+  assert.equal(seen, 2)
+  uninstall()
+  assert.equal(sessionStatus.getSnapshot().get('one').completionUnread, true)
+  unread = new Set()
+  for (const listener of hostListeners) listener()
+  assert.equal(seen, 2)
+})
+
+test('bindCompletionUnreadSource uses the official hook when present and otherwise overlays sessionStatus', () => {
+  const hooked = []
+  const off = bindCompletionUnreadSource({
+    setCompletionUnreadSource(source) { hooked.push(source); return () => hooked.pop() },
+  }, { getSnapshot: () => new Set(['hook']) })
+  assert.equal(hooked.length, 1)
+  assert.deepEqual([...hooked[0].getSnapshot()], ['hook'])
+  off()
+  assert.equal(hooked.length, 0)
+
+  const statusListeners = new Set()
+  const sessionStatus = {
+    getSnapshot: () => new Map(),
+    subscribe(listener) { statusListeners.add(listener); return () => statusListeners.delete(listener) },
+  }
+  const restore = bindCompletionUnreadSource(
+    { sessionStatus, statusListeners },
+    { getSnapshot: () => new Set(['overlaid']), subscribe: () => () => {} },
+  )
+  assert.equal(sessionStatus.getSnapshot().get('overlaid').completionUnread, true)
+  restore()
+  assert.equal(sessionStatus.getSnapshot().has('overlaid'), false)
+})
+
+test('bindCompletionUnreadSource throws rather than pretending to sync', () => {
+  assert.throws(
+    () => bindCompletionUnreadSource({}, { getSnapshot: () => new Set() }),
+    /sessionStatus is not an overlayable HostObservable/,
+  )
+  assert.throws(
+    () => bindCompletionUnreadSource({
+      sessionStatus: { getSnapshot: () => new Map(), subscribe: () => () => {} },
+    }, { getSnapshot: () => new Set() }),
+    /status listeners are not reachable/,
+  )
+})
+
+test('installCompletionSync overlays official sessionStatus when the hook is absent', async () => {
+  const win = new EventTarget()
+  const doc = new EventTarget()
+  doc.visibilityState = 'visible'
+  doc.hasFocus = () => true
+  const current = observable({ key: 'one' })
+  const list = observable({ phase: 'ready' })
+  const retain = observable({ retainedBy: { mainView: 1 } })
+  const session = observable({ openState: 'open', removed: false })
+  const binding = { sessionId: 'one', session }
+  const panelInfo = observable({ activePanelId: null })
+  const settings = observable({ open: false })
+  const registry = observable()
+  const official = new Map([
+    ['one', { running: false, pendingInteraction: undefined, completionUnread: false }],
+    ['two', { running: false, pendingInteraction: undefined, completionUnread: true }],
+  ])
+  const statusListeners = new Set()
+  const sessionStatus = {
+    getSnapshot: () => official,
+    subscribe(listener) { statusListeners.add(listener); return () => statusListeners.delete(listener) },
+  }
+  let events
+  class Events {
+    constructor(url) { assert.equal(url, '/pocket/completion/events'); events = this }
+    close() { this.closed = true }
+  }
+  const dispose = installCompletionSync({
+    window: win, document: doc, EventSource: Events,
+    uiSession: { adapter: { current }, sessionStatus, statusListeners },
+    sessions: { list, binding: id => id === 'one' ? binding : undefined, retainInfo: () => retain },
+    layout: { panelInfo },
+    slots: {
+      entries: () => [{ children: { 'settings.launcher': {} }, store: { create: () => settings } }],
+      subscribe: (_name, listener) => registry.subscribe(listener),
+    },
+    async fetch() { return { ok: true, json: async () => state(1, []) } },
+  })
+  let redraws = 0
+  sessionStatus.subscribe(() => { redraws++ })
+  events.onmessage({ data: JSON.stringify({ clientId: 'desktop', ...state(1, ['two']) }) })
+  await tick()
+  assert.equal(sessionStatus.getSnapshot().get('two').completionUnread, true)
+  assert.equal(sessionStatus.getSnapshot().get('one').completionUnread, false)
+  assert.ok(redraws >= 1)
+  events.onmessage({ data: JSON.stringify({ clientId: 'desktop', ...state(2, []) }) })
+  await tick()
+  assert.equal(sessionStatus.getSnapshot().get('two').completionUnread, false)
+  dispose()
+})
 
 test('only acknowledges loaded, focused, visible main content and tears down every observer', async () => {
   const win = new EventTarget()

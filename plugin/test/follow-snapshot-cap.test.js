@@ -4,12 +4,7 @@ import WebSocket from 'ws'
 import { createDeviceStore } from '../src/devices.js'
 import {
   createPocketServer,
-  DEFAULT_FOLLOW_MAX_MESSAGES,
-  FRAME_SOFT_LIMIT,
-  FRAME_HARD_LIMIT,
   followMaxMessages,
-  fitFollowFrame,
-  truncateHugeToolOutputs,
 } from '../src/server.js'
 
 const OWNER = 'owner-token-follow-cap-test'
@@ -102,13 +97,14 @@ function client(url) {
   }
 }
 
-test('followMaxMessages defaults to 50 when client omits it', () => {
-  assert.equal(followMaxMessages({}), DEFAULT_FOLLOW_MAX_MESSAGES)
+test('followMaxMessages omits a window unless the client asks', () => {
+  assert.equal(followMaxMessages({}), undefined)
   assert.equal(followMaxMessages({ maxMessages: 12 }), 12)
-  assert.equal(DEFAULT_FOLLOW_MAX_MESSAGES, 50)
+  assert.throws(() => followMaxMessages({ maxMessages: 0 }), /positive integer/)
+  assert.throws(() => followMaxMessages({ maxMessages: -1 }), /positive integer/)
 })
 
-test('follow without maxMessages caps snapshot at 50 and keeps hasMore/cursor', async () => {
+test('follow without maxMessages forwards the Host snapshot unwindowed', async () => {
   const records = Array.from({ length: 80 }, (_, i) => ev(i + 1, `m${i}`))
   const snap = {
     type: 'snapshot',
@@ -126,13 +122,25 @@ test('follow without maxMessages caps snapshot at 50 and keeps hasMore/cursor', 
   await c.call('hello', { token: OWNER })
   await c.call('follow', { sessionId: 's-fat' })
   const f = await c.next((m) => m.ev === 'follow')
-  assert.equal(followCalls[0].maxMessages, 50)
+  assert.equal(followCalls[0].maxMessages, undefined)
   assert.equal(f.frame.type, 'snapshot')
-  assert.equal(f.frame.records.length, 50)
+  assert.equal(f.frame.records.length, 80)
   assert.equal(f.frame.cursor, 80)
-  assert.equal(f.frame.hasMore, true)
-  assert.equal(f.frame.records[0].event.seq, 31)
+  assert.equal(f.frame.hasMore, false)
+  assert.equal(f.frame.records[0].event.seq, 1)
   assert.equal(f.frame.records.at(-1).event.seq, 80)
+  c.ws.close()
+  await server.close()
+})
+
+test('follow rejects a non-positive maxMessages before opening a subscription', async () => {
+  const { server, url } = await setup(mockSc({ type: 'snapshot', cursor: 0, records: [], hasMore: false }))
+  const c = client(url)
+  await c.open
+  await c.call('hello', { token: OWNER })
+  const denied = await c.call('follow', { sessionId: 's', maxMessages: 0 })
+  assert.equal(denied.ok, false)
+  assert.equal(denied.error.code, 'bad-request')
   c.ws.close()
   await server.close()
 })
@@ -157,38 +165,30 @@ test('follow with explicit maxMessages is respected', async () => {
   await server.close()
 })
 
-test('truncateHugeToolOutputs shrinks oversized tool text', () => {
-  const huge = 'Z'.repeat(50_000)
-  const frame = {
-    type: 'snapshot',
-    cursor: 1,
-    hasMore: false,
-    records: [toolResult(1, huge)],
-  }
-  const out = truncateHugeToolOutputs(frame, 100)
-  const text = out.records[0].event.data.message.content[0].text
-  assert.ok(text.length < 200)
-  assert.match(text, /truncated/)
-  assert.equal(out.records[0].event.data.message.content[0].truncated, true)
-})
-
-test('fitFollowFrame keeps frames under soft limit and never over hard limit', async () => {
+test('follow does not shrink oversized snapshots to the old iroh line cap', async () => {
   const fatRecs = Array.from({ length: 20 }, (_, i) => toolResult(i + 1, 'W'.repeat(80_000)))
-  const frame = {
+  const snap = {
     type: 'snapshot',
     cursor: 20,
-    hasMore: true,
+    hasMore: false,
     records: fatRecs,
     projections: {},
   }
-  assert.ok(Buffer.byteLength(JSON.stringify(frame), 'utf8') > FRAME_SOFT_LIMIT)
-
-  const fitted = await fitFollowFrame(frame, {})
-  const size = Buffer.byteLength(JSON.stringify(fitted), 'utf8')
-  assert.ok(size <= FRAME_SOFT_LIMIT, `fitted size ${size} > soft ${FRAME_SOFT_LIMIT}`)
-  assert.ok(size <= FRAME_HARD_LIMIT)
-  assert.equal(fitted.hasMore, true)
-  assert.equal(fitted.cursor, 20)
+  const size = Buffer.byteLength(JSON.stringify(snap), 'utf8')
+  assert.ok(size > 900 * 1024)
+  const followCalls = []
+  const { server, url } = await setup(mockSc(snap, { followCalls }))
+  const c = client(url)
+  await c.open
+  await c.call('hello', { token: OWNER })
+  await c.call('follow', { sessionId: 's-tool' })
+  const f = await c.next((m) => m.ev === 'follow')
+  assert.equal(followCalls[0].maxMessages, undefined)
+  assert.equal(f.frame.records.length, 20)
+  assert.equal(f.frame.records[0].event.data.message.content[0].text.length, 80_000)
+  assert.equal(f.frame.hasMore, false)
+  c.ws.close()
+  await server.close()
 })
 
 test('server connectionType reflects noteIrohPath', async () => {

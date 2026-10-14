@@ -164,6 +164,41 @@ class PocketFollowTest {
         assertTrue(requests.tryReceive().isFailure)
     }
 
+    @Test fun completionViewFailureRetriesWithoutClosingTheSocket() = runBlocking {
+        var closed = 0
+        val transport = object : FrameTransport {
+            override val route = Route.WsLocal
+            override val incoming = emptyFlow<String>()
+            override val closeReason: String? = null
+            override suspend fun send(text: String) { requests.send(PocketJson.parseToJsonElement(text).jsonObject) }
+            override fun close() { closed++ }
+        }
+        client.javaClass.getDeclaredField("transport").apply { isAccessible = true }.set(client, transport)
+        Pocket.ops.value = setOf("completion.view")
+        put("completionReadySession", "A")
+        finish(Pocket.setViewedSession("A"))
+        val first = request("completion.view")
+        assertEquals("A", first["args"]["sessionId"].str())
+        reject(first, "view failed", "internal")
+        val retry = request("completion.view")
+        assertEquals("A", retry["args"]["sessionId"].str())
+        reply(retry, """{"epoch":"host","revision":1,"unreadIds":[]}""")
+        assertEquals(0, closed)
+        assertEquals(client, get("client"))
+        assertEquals(emptySet<String>(), Pocket.completionUnread.value)
+    }
+
+    @Test fun followDoesNotSendIrohMaxMessagesCap() = runBlocking {
+        val opening = open("B")
+        reply(request("unfollow"), """{"stopped":true}""")
+        val follow = request("follow")
+        assertEquals("B", follow["args"]["sessionId"].str())
+        assertNull(follow["args"]["maxMessages"])
+        snapshot("sub-B")
+        reply(follow, """{"subId":"sub-B"}""")
+        finish(opening)
+    }
+
     private fun invalidateModels() {
         Pocket.javaClass.getDeclaredMethod("invalidateModelCatalog").apply { isAccessible = true }.invoke(Pocket)
     }
