@@ -160,6 +160,8 @@ IconActions clock beside copy/branch (`formatMessageClock` + `clock.*`). Shown o
 
 Live attempt baseline + stream records in follow frames; Android `TranscriptReducer` already mirrors this. Keep stop button wired to `cancel` (`input.stop` 停止生成).
 
+Transcript history backfills a folded/empty window that cannot fill the viewport. Once paging starts, reaching or remaining at the top advances through successive older boundaries, including pages merged into the same process row. Prepending pauses follow-bottom; failed or non-advancing pages are not retried merely because live output changes. Scrolling away and back permits another attempt at the same boundary. Paging remains read-only and uses the existing `history.page` contract.
+
 ---
 
 ## 2. Session header
@@ -269,7 +271,7 @@ Phone picking temporarily exposes the actual conversation, intercepts the pick w
 | Surface | Desktop home | Locale | Phone |
 |---|---|---|---|
 | 后台任务 | **Session header** job list action | `job.list.aria` 后台任务 | beside chat/trajectory tabs; hidden for an empty session roster, otherwise shows live (`running` / `stopping`) count or retained total and opens `JobsSheet`; refreshes every 3s only while visible and connected; session/Host changes clear old state and errors show unavailable rather than stale counts |
-| 任务 / 清单 (Todo) | **Conversation dock** `TodoPanel` (+ `todo_write` tool row) | `todo.title` 任务 | progress row above the composer, opening `TodoSheet` |
+| 任务 / 清单 (Todo) | **Conversation dock** `TodoPanel` (+ `todo_write` tool row) | `todo.title` 任务 | inline 16dp-radius menu card above the composer; desktop checklist and up/down chevrons, nonzero completed/in-progress/pending counts, and a capped 180dp scrolling list with green/animated-gray/idle-gray status glyphs; no modal sheet |
 
 ---
 
@@ -341,7 +343,7 @@ Model settings use the desktop UI, not the mere existence of Host APIs, as their
 | Stopped / interrupted copy | **done** (`message.stopped` 已停止) | feasible |
 | Deliverable / changed-file cards | **done** (parse `deliverables/presented` / `workspace/changes`) | Changes count enrichment still Host-summary limited |
 | Streaming + stop | present | — |
-| Todo panel (清单) | **done** (parse `todo/write` + projections; sheet) | was needs-plugin |
+| Todo panel (清单) | **done** (parse `todo/write` + projections; inline expand/collapse and live status counts) | was needs-plugin |
 | User-questions prompts | **done** (push `user-question` + `userQuestions.answer`) | was needs-plugin |
 
 ### Header / composer / sidebar / panels / settings
@@ -360,7 +362,7 @@ Model settings use the desktop UI, not the mere existence of Host APIs, as their
 | Archive / pin / fork from sidebar | **done** (workspace archive/pin + row ⋯ / long-press) | was needs-plugin |
 | 插件 / 自动化任务 | **done** (drawer under 新会话 + Settings; pinwheel/clock icons from ui-primitives) | was hide |
 | Drawer search / view options / add workspace | **done** (ui-workspace header icons + locales) | was needs-plugin / subset |
-| Files / terminal / jobs / todo sheets | present | — |
+| Files / terminal / jobs sheets | present | — |
 | Browser / session diagnostics | present | native WebView / read-only loaded event window |
 | Settings general rows | present | — |
 | Language / appearance prefs | **done** (labels wired via L; en for new surfaces) | was feasible (partial) |
@@ -442,7 +444,7 @@ Every **output** text surface supports Compose `SelectionContainer` (helper `Sel
 | Thinking / reasoning body | Fold header stays clickable; body in `SelectableOutput` |
 | Notices / errors / approvals / questions / deliverables / changes | `SelectableOutput` on content |
 | Tool / file preview `CodeBox` | `SelectableOutput` |
-| Todo sheet items | `SelectableOutput` |
+| Inline Todo panel items | `SelectableOutput`; single-line desktop rows with ellipsis |
 | Trajectory ledger title / preview / metrics | `SelectableOutput` (tap still opens detail) |
 | Trajectory + Request detail tabs / payloads | `SelectableOutput` on payloads & KV values |
 | Terminal (Canvas grid) | Long-press → selectable plain-text overlay (`AnsiTerminal.plainText()`); tap exits |

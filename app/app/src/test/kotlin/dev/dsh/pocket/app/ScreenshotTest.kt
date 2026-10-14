@@ -338,16 +338,18 @@ class ScreenshotTest {
         rule.waitForIdle()
         captureScreenRoboImage(out("18-profile-rename"))
     }
-    @Test fun s20_todoSheet() {
-        showWithDialogs("20-todo-sheet") {
-            TodoSheet(
+    @Test fun s20_todoPanel() {
+        show("20-todo-panel-collapsed") {
+            TodoPanel("todo-fixture",
                 listOf(
                     TodoItem("读配置", "completed"),
                     TodoItem("改代码", "in_progress"),
                     TodoItem("写测试", "pending"),
                 ),
-            ) {}
+            )
         }
+        rule.onNodeWithContentDescription("展开任务").performClick()
+        rule.onRoot().captureRoboImage(out("20-todo-panel-expanded"))
         val rows = listOf("读配置", "改代码", "写测试").map {
             rule.onNodeWithText(it, useUnmergedTree = true).fetchSemanticsNode().boundsInRoot
         }
