@@ -37,9 +37,10 @@ class PocketFollowTest {
     @Before fun setUp() {
         Pocket.init(RuntimeEnvironment.getApplication())
         val fields = listOf("client", "subId", "pendingFollowEpoch", "reducer", "inspectorLog", "permissionProjectionSeq",
-            "modelProjectionSeq", "modelUsesDefault").associateWith(::get)
+            "modelProjectionSeq", "modelUsesDefault", "firstPromptSessionId").associateWith(::get)
         val modelEpochs = listOf("modelCatalogEpoch", "modelSelectionEpoch").associateWith { (get(it) as AtomicLong).get() }
-        val modelFlows = listOf("catalog", "model", "_catalogLoading", "_catalogError", "_modelPending")
+        val modelFlows = listOf("catalog", "model", "_catalogLoading", "_catalogError", "_modelPending",
+            "_firstPrompt", "permissionCatalog", "permissionCatalogLoading")
             .associateWith { (get(it) as MutableStateFlow<Any?>).value }
         val epoch = get("followEpoch") as AtomicLong
         val originalEpoch = epoch.get()
@@ -84,6 +85,8 @@ class PocketFollowTest {
         put("permissionProjectionSeq", -1L)
         put("modelProjectionSeq", -1L)
         put("modelUsesDefault", false)
+        put("firstPromptSessionId", null)
+        (get("_firstPrompt") as MutableStateFlow<FirstPrompt?>).value = null
         invalidateModels()
         epoch.set(0)
         attempts.clear(); stray.clear()
@@ -357,26 +360,270 @@ class PocketFollowTest {
         finish(currentSending)
     }
 
-    @Test fun newSessionsFirstPromptUsesMatchingEchoAndWireIdentity() = runBlocking {
-        installHostSettingsFixture()
+    @Test fun newSessionsFirstPromptSurvivesCreateFollowAndSnapshotsWithOneIdentity() = runBlocking {
         Pocket.chat.value = null
         put("subId", null)
+        Pocket.ops.value = setOf("permissions.get", "feedback.get")
         val creating = Pocket.newSession("first prompt", null, null, null).also { jobs += it }
-        reply(request("sessions.create"), """{"sessionId":"new-session"}""")
+        val create = request("sessions.create")
+        val first = Pocket.firstPrompt.value!!
+        assertEquals("first prompt", first.text)
+        assertNull(first.error)
+        assertNull(Pocket.chat.value)
+        reply(create, """{"sessionId":"new-session"}""")
         val follow = request("follow")
+        val echo = Pocket.chat.value!!.items.filterIsInstance<Item.User>().single()
+        assertEquals(first.requestId, echo.requestId)
+        assertEquals("local-${first.requestId}", echo.key)
+        assertFalse(Pocket.chat.value!!.loaded)
         snapshot("sub-new", 0)
+        assertEquals(echo, Pocket.chat.value!!.items.single())
         reply(follow, """{"subId":"sub-new"}""")
+        // Neither optional getter may sit between following a new session and its prompt.
         val prompt = request("prompt")
-        val requestId = prompt["args"]["requestId"].str()!!
+        assertTrue(Pocket.chat.value!!.loaded)
+        assertEquals(echo, Pocket.chat.value!!.items.single())
+        assertEquals(first.requestId, prompt["args"]["requestId"].str())
         assertEquals("new-session", prompt["args"]["sessionId"].str())
         assertEquals("queue", prompt["args"]["mode"].str())
         assertTrue(Pocket.chat.value!!.queuedPrompts.isEmpty())
-        assertEquals(1, Pocket.chat.value!!.items.filterIsInstance<Item.User>().size)
-        push("sub-new", """{"type":"event","event":{"seq":1,"time":1,"type":"user/message","data":{"id":"host-first","role":"user","source":{"kind":"user","rpcId":"$requestId"},"content":[{"type":"text","text":"first prompt"}]}}}""")
         reply(prompt, "{}")
         finish(creating)
-        assertEquals(1, Pocket.chat.value!!.items.filterIsInstance<Item.User>().size)
-        assertEquals("first prompt", Pocket.chat.value!!.items.filterIsInstance<Item.User>().single().text)
+        assertNull(Pocket.firstPrompt.value)
+        assertEquals(echo, Pocket.chat.value!!.items.single())
+        snapshot("sub-new", 0)
+        assertEquals(echo, Pocket.chat.value!!.items.single())
+        push("sub-new", """{"type":"event","event":{"seq":1,"time":1,"type":"user/message","data":{"id":"host-first","role":"user","source":{"kind":"user","rpcId":"${first.requestId}"},"content":[{"type":"text","text":"first prompt"}]}}}""")
+        val confirmed = Pocket.chat.value!!.items.filterIsInstance<Item.User>().single()
+        assertEquals("first prompt", confirmed.text)
+        assertEquals(echo.key, confirmed.key)
+        assertFalse(confirmed.pending)
+        assertTrue(requests.tryReceive().isFailure)
+    }
+
+    @Test fun repeatedNewSessionAndOrdinarySendCannotOvertakeTheFirstPrompt() = runBlocking {
+        Pocket.chat.value = null
+        put("subId", null)
+        val creating = Pocket.newSession("first", null, null, null).also { jobs += it }
+        val create = request("sessions.create")
+        val first = Pocket.firstPrompt.value
+        finish(Pocket.newSession("second", null, null, null).also { jobs += it })
+        assertEquals(first, Pocket.firstPrompt.value)
+        assertTrue(requests.tryReceive().isFailure)
+        reply(create, """{"sessionId":"new-session"}""")
+        val follow = request("follow")
+        finish(Pocket.send("second").also { jobs += it })
+        finish(Pocket.newSession("third", null, null, null).also { jobs += it })
+        assertTrue(requests.tryReceive().isFailure)
+        reply(follow, """{"subId":"sub-new"}""")
+        reply(request("prompt"), "{}")
+        finish(creating)
+        val sending = Pocket.send("second").also { jobs += it }
+        reply(request("prompt"), "{}")
+        finish(sending)
+        assertEquals(listOf("first", "second"), Pocket.chat.value!!.items.filterIsInstance<Item.User>().map { it.text })
+    }
+
+    @Test fun createFailureRetainsTextUntilDismissAndAllowsANewAttempt() = runBlocking {
+        Pocket.chat.value = null
+        put("subId", null)
+        val creating = Pocket.newSession("retained draft", null, null, null).also { jobs += it }
+        val create = request("sessions.create")
+        val requestId = Pocket.firstPrompt.value!!.requestId
+        reject(create, "create rejected")
+        finish(creating)
+        assertEquals(requestId, Pocket.firstPrompt.value?.requestId)
+        assertEquals("retained draft", Pocket.firstPrompt.value?.text)
+        assertTrue(Pocket.firstPrompt.value!!.error!!.contains("create rejected"))
+        assertNull(Pocket.chat.value)
+        finish(Pocket.dismissFailedFirstPrompt().also { jobs += it })
+        assertNull(Pocket.firstPrompt.value)
+        val retry = Pocket.newSession("edited draft", null, null, null).also { jobs += it }
+        val nextCreate = request("sessions.create")
+        assertTrue(Pocket.firstPrompt.value!!.requestId != requestId)
+        reject(nextCreate)
+        finish(retry)
+    }
+
+    @Test fun modelConfigurationFailureRetainsEchoAndDismissReturnsToNewSession() = runBlocking {
+        Pocket.chat.value = null
+        put("subId", null)
+        val creating = Pocket.newSession("model draft", null, null, ModelChoice("p", "next", "Next", null)).also { jobs += it }
+        reply(request("sessions.create"), """{"sessionId":"new-session"}""")
+        val selection = request("models.select")
+        val first = Pocket.firstPrompt.value!!
+        assertEquals(first.requestId, Pocket.chat.value!!.items.filterIsInstance<Item.User>().single().requestId)
+        reject(selection, "model rejected")
+        finish(creating)
+        assertEquals(first.text, Pocket.firstPrompt.value?.text)
+        assertTrue(Pocket.firstPrompt.value!!.error!!.contains("model rejected"))
+        assertTrue(requests.tryReceive().isFailure)
+        finish(Pocket.dismissFailedFirstPrompt().also { jobs += it })
+        assertNull(Pocket.firstPrompt.value)
+        assertNull(Pocket.chat.value)
+        assertTrue((get("reducer") as TranscriptReducer).items().isEmpty())
+    }
+
+    @Test fun promptFailureRetainsEchoUntilDismissUnsubscribesAndRemovesIt() = runBlocking {
+        Pocket.chat.value = null
+        put("subId", null)
+        val creating = Pocket.newSession("prompt draft", null, null, null).also { jobs += it }
+        reply(request("sessions.create"), """{"sessionId":"new-session"}""")
+        reply(request("follow"), """{"subId":"sub-new"}""")
+        val prompt = request("prompt")
+        val first = Pocket.firstPrompt.value!!
+        reject(prompt, "prompt rejected")
+        finish(creating)
+        assertEquals(first.text, Pocket.firstPrompt.value?.text)
+        assertTrue(Pocket.firstPrompt.value!!.error!!.contains("prompt rejected"))
+        assertEquals(first.requestId, Pocket.chat.value!!.items.filterIsInstance<Item.User>().single().requestId)
+        val dismissing = Pocket.dismissFailedFirstPrompt().also { jobs += it }
+        val unsubscribe = request("unfollow")
+        assertEquals("sub-new", unsubscribe["args"]["subId"].str())
+        assertNull(Pocket.firstPrompt.value)
+        assertNull(Pocket.chat.value)
+        assertTrue((get("reducer") as TranscriptReducer).items().isEmpty())
+        reply(unsubscribe, """{"stopped":true}""")
+        finish(dismissing)
+    }
+
+    @Test fun changingSessionDuringCreateCannotRestoreOrSendTheOldSubmission() = runBlocking {
+        Pocket.chat.value = null
+        put("subId", null)
+        val creating = Pocket.newSession("obsolete", null, null, null).also { jobs += it }
+        val create = request("sessions.create")
+        val opening = open("B")
+        val follow = request("follow")
+        assertNull(Pocket.firstPrompt.value)
+        reply(follow, """{"subId":"sub-B"}""")
+        finish(opening)
+        reply(create, """{"sessionId":"obsolete-session"}""")
+        finish(creating)
+        assertEquals("B", Pocket.chat.value?.sessionId)
+        assertTrue(Pocket.chat.value!!.items.isEmpty())
+        assertTrue(requests.tryReceive().isFailure)
+    }
+
+    @Test fun closeDuringCreateInvalidatesItEvenWhenAnotherFirstPromptStarts() = runBlocking {
+        Pocket.chat.value = null
+        put("subId", null)
+        val creating = Pocket.newSession("obsolete", null, null, null).also { jobs += it }
+        val oldCreate = request("sessions.create")
+        finish(Pocket.closeChat().also { jobs += it })
+        assertNull(Pocket.firstPrompt.value)
+        val next = Pocket.newSession("current", null, null, null).also { jobs += it }
+        val nextCreate = request("sessions.create")
+        val first = Pocket.firstPrompt.value
+        reply(oldCreate, """{"sessionId":"obsolete-session"}""")
+        finish(creating)
+        assertEquals(first, Pocket.firstPrompt.value)
+        assertNull(Pocket.chat.value)
+        assertTrue(requests.tryReceive().isFailure)
+        reject(nextCreate)
+        finish(next)
+    }
+
+    @Test fun changingSessionDuringModelConfigurationCannotSendOrApplyOldSelection() = runBlocking {
+        Pocket.chat.value = null
+        put("subId", null)
+        val creating = Pocket.newSession("obsolete", null, null, ModelChoice("p", "next", "Next", null)).also { jobs += it }
+        reply(request("sessions.create"), """{"sessionId":"obsolete-session"}""")
+        val selection = request("models.select")
+        val opening = open("B")
+        reply(request("follow"), """{"subId":"sub-B"}""")
+        finish(opening)
+        reply(selection, """{"selected":{"provider":"p","model":"next"}}""")
+        finish(creating)
+        assertNull(Pocket.model.value["obsolete-session"])
+        assertNull(Pocket.firstPrompt.value)
+        assertEquals("B", Pocket.chat.value?.sessionId)
+        assertTrue(requests.tryReceive().isFailure)
+    }
+
+    @Test fun closeDuringFirstFollowUnsubscribesItsLateReceiptWithoutPrompting() = runBlocking {
+        Pocket.chat.value = null
+        put("subId", null)
+        val creating = Pocket.newSession("obsolete", null, null, null).also { jobs += it }
+        reply(request("sessions.create"), """{"sessionId":"obsolete-session"}""")
+        val follow = request("follow")
+        finish(Pocket.closeChat().also { jobs += it })
+        reply(follow, """{"subId":"sub-obsolete"}""")
+        val unsubscribe = request("unfollow")
+        assertEquals("sub-obsolete", unsubscribe["args"]["subId"].str())
+        reply(unsubscribe, """{"stopped":true}""")
+        finish(creating)
+        assertNull(Pocket.firstPrompt.value)
+        assertNull(Pocket.chat.value)
+        assertTrue(requests.tryReceive().isFailure)
+    }
+
+    private fun enableFirstPermission() {
+        Pocket.permissionCatalog.value = PermissionCatalog.parse(PocketJson.parseToJsonElement(
+            """{"options":[{"value":"team","name":"Team"}],"defaultOptions":[{"value":"team","name":"Team"}],"defaultPreset":"team"}"""))
+        Pocket.permissionCatalogLoading.value = false
+        Pocket.ops.value = setOf("permissions.set", "permissions.get", "feedback.get")
+    }
+
+    @Test fun firstPromptWaitsForBothConfigurationWritesButNotOptionalReads() = runBlocking {
+        Pocket.chat.value = null
+        put("subId", null)
+        enableFirstPermission()
+        val creating = Pocket.newSession("configured", null, "team", ModelChoice("p", "next", "Next", null)).also { jobs += it }
+        reply(request("sessions.create"), """{"sessionId":"new-session"}""")
+        val selection = request("models.select")
+        assertTrue(requests.tryReceive().isFailure)
+        assertEquals("configured", Pocket.chat.value!!.items.filterIsInstance<Item.User>().single().text)
+        reply(selection, """{"selected":{"provider":"p","model":"next"}}""")
+        val permission = request("permissions.set")
+        assertEquals("new-session", permission["args"]["sessionId"].str())
+        assertEquals("team", permission["args"]["name"].str())
+        assertTrue(requests.tryReceive().isFailure)
+        assertEquals("next", Pocket.model.value["new-session"]?.model)
+        reply(permission, """{"current":"team"}""")
+        reply(request("follow"), """{"subId":"sub-new"}""")
+        val prompt = request("prompt")
+        assertEquals("team", Pocket.permission.value["new-session"])
+        assertEquals(Pocket.firstPrompt.value!!.requestId, prompt["args"]["requestId"].str())
+        reply(prompt, "{}")
+        finish(creating)
+        assertNull(Pocket.firstPrompt.value)
+        assertTrue(requests.tryReceive().isFailure)
+    }
+
+    @Test fun permissionConfigurationFailureRetainsDraftAndCannotSendBeforeDismiss() = runBlocking {
+        Pocket.chat.value = null
+        put("subId", null)
+        enableFirstPermission()
+        val creating = Pocket.newSession("permission draft", null, "team", null).also { jobs += it }
+        reply(request("sessions.create"), """{"sessionId":"new-session"}""")
+        reject(request("permissions.set"), "permission rejected")
+        finish(creating)
+        assertEquals("permission draft", Pocket.firstPrompt.value?.text)
+        assertTrue(Pocket.firstPrompt.value!!.error!!.contains("permission rejected"))
+        assertNull(Pocket.permission.value["new-session"])
+        finish(Pocket.send("cannot bypass failed permission").also { jobs += it })
+        assertTrue(requests.tryReceive().isFailure)
+        finish(Pocket.dismissFailedFirstPrompt().also { jobs += it })
+        assertNull(Pocket.chat.value)
+        assertNull(Pocket.firstPrompt.value)
+        assertTrue((get("reducer") as TranscriptReducer).items().isEmpty())
+    }
+
+    @Test fun sidebarCreationCannotOvertakeAFirstPromptStartedWhileItsCreateWasPending() = runBlocking {
+        Pocket.chat.value = null
+        put("subId", null)
+        val preparing = async { Pocket.prepareSidebarSession() }.also { jobs += it }
+        val sidebarCreate = request("sessions.create")
+        val creating = Pocket.newSession("first", null, null, null).also { jobs += it }
+        val create = request("sessions.create")
+        val first = Pocket.firstPrompt.value
+        reply(sidebarCreate, """{"sessionId":"obsolete-sidebar"}""")
+        assertNull(withTimeout(5000) { preparing.await() })
+        assertEquals(first, Pocket.firstPrompt.value)
+        assertNull(Pocket.chat.value)
+        assertTrue(requests.tryReceive().isFailure)
+        reject(create)
+        finish(creating)
     }
 
     @Test fun sidebarCreatesBlankSessionWithoutSendingPromptOrRequiringSelection() = runBlocking {

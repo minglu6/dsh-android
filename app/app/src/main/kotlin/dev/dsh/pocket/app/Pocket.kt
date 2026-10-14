@@ -18,6 +18,9 @@ import java.util.concurrent.atomic.AtomicLong
 
 enum class Dot { Online, Connecting, Offline, Unauthorized }
 
+/** One submission identity spans session creation, local echo, and the Host prompt. */
+data class FirstPrompt(val requestId: String, val text: String, val error: String? = null)
+
 data class ChatState(
     val sessionId: String,
     val items: List<Item> = emptyList(),
@@ -114,6 +117,9 @@ object Pocket {
     private var presetProjectionSeq = -1L
     val ops = MutableStateFlow<Set<String>>(emptySet())
     val chat = MutableStateFlow<ChatState?>(null)
+    private val _firstPrompt = MutableStateFlow<FirstPrompt?>(null)
+    val firstPrompt: StateFlow<FirstPrompt?> = _firstPrompt.asStateFlow()
+    private var firstPromptSessionId: String? = null
     val permission = MutableStateFlow<Map<String, String>>(emptyMap())
     val permissionCatalog = MutableStateFlow<PermissionCatalog?>(null)
     val permissionCatalogLoading = MutableStateFlow(false)
@@ -242,6 +248,7 @@ object Pocket {
 
     fun connect(profileId: String) {
         connJob?.cancel(); client?.close(); client = null
+        clearFirstPrompt()
         prefs.hostSettings.clear()
         followEpoch.incrementAndGet()
         detachFollow()
@@ -323,6 +330,7 @@ object Pocket {
                 if (!currentCoroutineContext().isActive) { c.close(); throw e }
             } catch (e: Exception) { /* fall through to retry */ }
             client = null; c.close(); setRoute(profileId, null)
+            failFirstPrompt("连接已断开，首条消息未确认发送，请重新编辑")
             prefs.hostSettings.clear()
             followEpoch.incrementAndGet()
             detachFollow()
@@ -768,7 +776,7 @@ object Pocket {
         }
     }
 
-    fun openSession(sessionId: String) = main.launch {
+    private fun initializeChat(sessionId: String, seed: FirstPrompt? = null) {
         followAttempts.remove(sessionId)
         reducer = TranscriptReducer()
         inspectorLog = SessionInspectorLog()
@@ -776,7 +784,14 @@ object Pocket {
         modelProjectionSeq = -1L
         modelUsesDefault = false
         feedback.value = emptyMap()
-        chat.value = ChatState(sessionId, title = sessions.value.firstOrNull { it.sessionId == sessionId }?.title)
+        seed?.let { reducer.echo(it.text, it.requestId) }
+        chat.value = ChatState(sessionId, items = reducer.items(),
+            title = sessions.value.firstOrNull { it.sessionId == sessionId }?.title)
+    }
+
+    fun openSession(sessionId: String) = main.launch {
+        clearFirstPrompt()
+        initializeChat(sessionId)
         val c = client ?: return@launch
         runCatching { refollow(c, sessionId, null) }
             .onFailure {
@@ -835,7 +850,37 @@ object Pocket {
         }
     }
 
-    fun closeChat() = main.launch {
+    /** Forget only this submission's provisional echo; confirmed Host history stays intact. */
+    private fun clearFirstPrompt() {
+        _firstPrompt.value?.let { first ->
+            reducer.discardEcho(first.requestId)
+            chat.value?.takeIf { it.sessionId == firstPromptSessionId }?.let {
+                chat.value = it.copy(items = reducer.items(), queuedPrompts = reducer.queueMessages())
+            }
+        }
+        firstPromptSessionId = null
+        _firstPrompt.value = null
+    }
+
+    private fun failFirstPrompt(message: String) {
+        _firstPrompt.value?.takeIf { it.error == null }?.let {
+            _firstPrompt.value = it.copy(error = message)
+            errors.tryEmit(message)
+        }
+    }
+
+    /** The UI copies [FirstPrompt.text] into its draft before dismissing the failed attempt. */
+    fun dismissFailedFirstPrompt() = main.launch {
+        if (_firstPrompt.value?.error == null) return@launch
+        if (firstPromptSessionId != null && chat.value?.sessionId == firstPromptSessionId) {
+            closeChatState()
+        } else clearFirstPrompt()
+    }
+
+    fun closeChat() = main.launch { closeChatState() }
+
+    private suspend fun closeChatState() {
+        clearFirstPrompt()
         followEpoch.incrementAndGet()
         val old = detachFollow()
         chat.value = null
@@ -854,10 +899,11 @@ object Pocket {
         pendingPermission: String? = null,
         pendingModel: ModelChoice? = null,
     ): String? = withContext(main.coroutineContext.minusKey(Job)) {
+        if (_firstPrompt.value != null) return@withContext null
         chat.value?.let { return@withContext it.sessionId }
         val c = requireClient()
         val epoch = followEpoch.get()
-        fun current() = client === c && followEpoch.get() == epoch && chat.value == null
+        fun current() = client === c && followEpoch.get() == epoch && chat.value == null && _firstPrompt.value == null
         val workspaceId = workspaces.value.firstOrNull { it.path == cwd }?.workspaceId
         val id = c.createSession(cwd = if (workspaceId == null) cwd else null, agentPreset = preset, workspaceId = workspaceId)
         if (!current()) return@withContext null
@@ -879,8 +925,13 @@ object Pocket {
 
     /** Create a session (optionally with preset), then send [text] into it. */
     fun newSession(text: String, preset: String?, pendingPermission: String?, pendingModel: ModelChoice?, cwd: String? = null) = main.launch {
-        val c = client ?: return@launch errors.tryEmit("未连接").let { }
+        if (_firstPrompt.value != null || chat.value != null || text.isBlank()) return@launch
+        val first = FirstPrompt(UUID.randomUUID().toString(), text)
+        _firstPrompt.value = first
+        val c = client
+        fun current() = client === c && _firstPrompt.value == first
         try {
+            check(c != null) { "未连接" }
             pendingPermission?.let { p ->
                 val available = permissionCatalog.value
                 check(available != null && available.options.any { it.value == p } && !permissionCatalogLoading.value) {
@@ -889,21 +940,35 @@ object Pocket {
             }
             val workspaceId = workspaces.value.firstOrNull { it.path == cwd }?.workspaceId
             val id = c.createSession(cwd = if (workspaceId == null) cwd else null, agentPreset = preset, workspaceId = workspaceId)
+            if (!current()) return@launch
+            firstPromptSessionId = id
+            initializeChat(id, first)
             pendingModel?.let { m ->
                 val selected = modelChoice(c.selectModel(id, m.provider, m.model, m.effort)["selected"])
                     ?: error("主机未返回已应用的模型")
-                if (client !== c) return@launch
+                if (!current()) return@launch
                 model.value = model.value + (id to selected)
             }
             pendingPermission?.let { p ->
                 check("permissions.set" in ops.value) { "主机不支持切换权限" }
-                permission.value = permission.value + (id to c.setPermission(id, p))
+                val selected = c.setPermission(id, p)
+                if (!current()) return@launch
+                permission.value = permission.value + (id to selected)
             }
-            openSession(id).join()
-            if (text.isNotBlank() && client === c) {
-                chat.value?.takeIf { it.sessionId == id }?.let { sendPrompt(c, it, text) }
+            if (!current()) return@launch
+            // New sessions have no feedback to fetch; follow projections own permission reads.
+            refollow(c, id, null)
+            if (!current()) return@launch
+            c.prompt(id, text, "queue", requestId = first.requestId)
+            if (current()) {
+                // Keep the reducer echo until the durable Host event confirms this requestId.
+                firstPromptSessionId = null
+                _firstPrompt.value = null
             }
-        } catch (e: Exception) { errors.tryEmit(e.message ?: e.toString()) }
+        } catch (e: Exception) {
+            if (current()) failFirstPrompt(e.message ?: "首条消息发送失败")
+            if (e is CancellationException) throw e
+        }
     }
 
     fun send(text: String) = sendWithFiles(text, emptyList(), emptyList())
@@ -1245,6 +1310,7 @@ object Pocket {
     fun sendImages(text: String, images: List<PromptImage>) = sendWithFiles(text, images, emptyList())
 
     fun sendWithFiles(text: String, images: List<PromptImage>, files: List<PromptFile>) = main.launch {
+        if (_firstPrompt.value != null) return@launch
         val c = client ?: return@launch
         val st = chat.value ?: return@launch
         sendPrompt(c, st, text, images, files)
@@ -1638,6 +1704,7 @@ object Pocket {
     fun removeProfile(id: String) = main.launch {
         if (active.value == id) {
             connJob?.cancel(); client?.close(); client = null
+            clearFirstPrompt()
             prefs.hostSettings.clear()
             followEpoch.incrementAndGet()
             detachFollow()

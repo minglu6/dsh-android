@@ -111,6 +111,15 @@ fun ChatRoot(
     onPresetConsumed: () -> Unit = {},
 ) {
     val chat by Pocket.chat.collectAsState()
+    val firstPrompt by Pocket.firstPrompt.collectAsState()
+    // Local-only presentation; Host operations always use chat/sessionId, never this draft ID.
+    val visibleChat = chat ?: firstPrompt?.let { prompt ->
+        ChatState(
+            sessionId = "draft-${prompt.requestId}",
+            items = listOf(Item.User("local-${prompt.requestId}", prompt.text, pending = true, requestId = prompt.requestId)),
+            loaded = true,
+        )
+    }
     val approvals by Pocket.approvals.collectAsState()
     val catalog by Pocket.catalog.collectAsState()
     val models by Pocket.model.collectAsState()
@@ -155,7 +164,7 @@ fun ChatRoot(
     var feedbackTarget by remember { mutableStateOf<String?>(null) }
     var feedbackRating by remember { mutableStateOf("negative") }
     var hiddenQuestion by remember(active, chat?.sessionId) { mutableStateOf<String?>(null) }
-    var composerDraft by rememberSaveable(active, chat?.sessionId, stateSaver = TextFieldValue.Saver) { mutableStateOf(TextFieldValue("")) }
+    var composerDraft by rememberSaveable(active, stateSaver = TextFieldValue.Saver) { mutableStateOf(TextFieldValue("")) }
     var previewPath by remember { mutableStateOf<String?>(null) }
     val questions by Pocket.userQuestions.collectAsState()
     val questionDrafts = rememberSaveable(active, chat?.sessionId, saver = questionDraftSaver) {
@@ -230,7 +239,11 @@ fun ChatRoot(
         if (sid != previousSession) {
             if (previousSession == null && sidebarDraft != null) {
                 composerDraft = sidebarDraft!!
+            } else if (previousSession == null && firstPrompt != null) {
+                // Preserve text already being composed while the first session is created.
+                sheet = Sheet.None
             } else {
+                composerDraft = TextFieldValue("")
                 sheet = Sheet.None
             }
             sidebarDraft = null
@@ -239,7 +252,7 @@ fun ChatRoot(
     }
     val sessionPanel = sheet == Sheet.Files || sheet == Sheet.Terminal || sheet == Sheet.SessionInspector
     LaunchedEffect(active, sheet) {
-        if (sessionPanel && Pocket.chat.value == null) {
+        if (sessionPanel && Pocket.chat.value == null && firstPrompt == null) {
             sidebarDraft = composerDraft
             try {
                 Pocket.prepareSidebarSession(
@@ -325,12 +338,15 @@ fun ChatRoot(
         TopBar(
             summary?.title ?: chat?.title, sid != null,
             onMenu = if (showMenuButton) onMenu else null,
-            onMore = { sheet = Sheet.More },
-            onPanel = { sheet = Sheet.Panel },
-            onTeam = { sheet = Sheet.Team }, onPreset = { sheet = Sheet.Preset }, preset = presetLabel(chat?.agentPreset, presetRoster), onNew = { Pocket.closeChat() },
+            onMore = { if (firstPrompt == null) sheet = Sheet.More },
+            onPanel = { if (firstPrompt == null) sheet = Sheet.Panel },
+            onTeam = { if (firstPrompt == null) sheet = Sheet.Team }, onPreset = { if (firstPrompt == null) sheet = Sheet.Preset }, preset = presetLabel(chat?.agentPreset, presetRoster), onNew = { Pocket.closeChat() },
         )
         CompatibilityBanner(compatibility)
-        if (chat == null) {
+        val question = questions.firstOrNull { chat != null && (it.sessionId == null || it.sessionId == sid) }
+        val approval = approvals.firstOrNull { chat != null && (it.sessionId == null || it.sessionId == sid) }
+        val questionVisible = question != null && question.questions.isNotEmpty() && hiddenQuestion != question.questionId
+        if (visibleChat == null) {
             Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) { Hero() }
             Row(Modifier.padding(horizontal = 16.dp, vertical = 6.dp), horizontalArrangement = Arrangement.spacedBy(14.dp)) {
                 Chip(D.folderOpen, (draftCwd ?: workspaces.firstOrNull())?.substringAfterLast('/') ?: "选择工作区") { sheet = Sheet.Workspace }
@@ -338,41 +354,8 @@ fun ChatRoot(
                     Chip(D.agentPreset, label) { sheet = Sheet.Preset }
                 }
             }
-            Composer(
-                "描述你想要构建的内容, / 调用指令, @ 文件或对话", false, curPerm, curModel,
-                enabled = dot == Dot.Online && (curPerm.isEmpty() ||
-                    (!permissionLoading && permissionDirectory?.find(curPerm) != null)),
-                draft = composerDraft, onDraftChange = { composerDraft = it },
-                pendingImages = pendingImages, pendingFiles = pendingFiles,
-                permissionName = currentPermissionLabel,
-                onPlus = { sheet = Sheet.Plus }, onPerm = { sheet = Sheet.Permission }, onModel = { modelDirect = false; sheet = Sheet.Model },
-                modelMenu = modelMenu, modelEffort = modelEffortLabel(catalog, curModel),
-                modelBusy = modelPending != null, modelExpanded = sheet == Sheet.Model,
-                onRemoveImage = { i -> pendingImages = pendingImages.toMutableList().also { it.removeAt(i) } },
-                onRemoveFile = { i -> pendingFiles = pendingFiles.toMutableList().also { it.removeAt(i) } },
-                onRetryFile = { i ->
-                    val f = pendingFiles.getOrNull(i) ?: return@Composer
-                    val stId = Pocket.chat.value?.sessionId ?: return@Composer
-                    pendingFiles = pendingFiles.toMutableList().also { it[i] = f.copy(status = AttachStatus.Uploading) }
-                    scope.launch {
-                        val receipt = Pocket.uploadFile(stId, f.bytes, f.name)
-                        pendingFiles = pendingFiles.toMutableList().also {
-                            if (i in it.indices) it[i] = if (receipt != null) f.copy(status = AttachStatus.Ready, receiptId = receipt.receiptId)
-                            else f.copy(status = AttachStatus.Failed)
-                        }
-                    }
-                },
-                onSlash = { sheet = Sheet.Commands },
-                onMention = { sheet = Sheet.Mentions },
-                onSend = { text ->
-                    Pocket.newSession(text, effectivePreset.takeIf { it.isNotBlank() }, curPerm.takeIf { it.isNotEmpty() }, draftModel, draftCwd ?: workspaces.firstOrNull())
-                    pendingImages = emptyList(); pendingFiles = emptyList()
-                },
-                onStop = {},
-            )
-            Spacer(Modifier.height(10.dp))
         } else {
-            val st = chat!!
+            val st = visibleChat
             var tab by remember(st.sessionId) { mutableIntStateOf(0) }
             LaunchedEffect(Pocket.prefs.showCodeWorkView) { if (!Pocket.prefs.showCodeWorkView) tab = 0 }
             LaunchedEffect(inspectorPicking, InspectorNavigation.revealItemKey) {
@@ -380,13 +363,13 @@ fun ChatRoot(
             }
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                 Box(Modifier.weight(1f)) { Tabs(tab) { tab = it } }
-                JobsAction(active, st.sessionId, dot == Dot.Online && "jobs.list" in ops) { sheet = Sheet.Jobs }
+                if (chat != null) JobsAction(active, st.sessionId, dot == Dot.Online && "jobs.list" in ops) { sheet = Sheet.Jobs }
             }
             Box(Modifier.weight(1f).fillMaxWidth()) {
                 if (tab == 0) Transcript(
                     st,
                     onTool = { tool = it },
-                    canFork = "sessions.fork" in ops && !st.running,
+                    canFork = chat != null && firstPrompt == null && "sessions.fork" in ops && !st.running,
                     onFork = { seq -> Pocket.forkSession(seq) },
                     feedback = feedbackMap,
                     onLike = { id ->
@@ -399,9 +382,6 @@ fun ChatRoot(
                     },
                 ) else TrajectoryView(st)
             }
-            val question = questions.firstOrNull { it.sessionId == null || it.sessionId == st.sessionId }
-            val approval = approvals.firstOrNull { it.sessionId == null || it.sessionId == st.sessionId }
-            val questionVisible = question != null && question.questions.isNotEmpty() && hiddenQuestion != question.questionId
             if (questionVisible) UserQuestionCard(question!!, questionDrafts.getOrPut(question.questionId) { mutableStateMapOf() },
                 onDismiss = { hiddenQuestion = question.questionId })
             else if (approval != null) ApprovalCard(approval)
@@ -425,38 +405,64 @@ fun ChatRoot(
                 enabled = dot == Dot.Online && st.loaded && "queue.update" in ops && !inspectorPicking,
                 onAction = { id, action, complete -> Pocket.updateQueuedPrompt(st.sessionId, id, action, complete) },
             )
-            if (!questionVisible && approval == null) {
+        }
+        // Keep one composer mounted from the welcome page through session creation (including IME focus).
+        if (!questionVisible && approval == null) {
+            firstPrompt?.let { prompt ->
+                Row(
+                    Modifier.fillMaxWidth().padding(horizontal = 20.dp).testTag("firstPromptStatus"),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        prompt.error?.let { "发送失败：$it" } ?: "发送中",
+                        color = if (prompt.error != null) T.Err else T.Text3,
+                        fontSize = 12.sp,
+                        modifier = Modifier.weight(1f),
+                    )
+                    if (prompt.error != null) TextButton(onClick = {
+                        composerDraft = TextFieldValue(prompt.text, selection = androidx.compose.ui.text.TextRange(prompt.text.length))
+                        previousSession = null
+                        Pocket.dismissFailedFirstPrompt()
+                    }) { Text("重新编辑", color = T.Ink) }
+                }
+            }
             Composer(
-                "发消息或创建任务, / 调用指令, @ 文件或对话", st.running, curPerm, curModel, enabled = dot == Dot.Online && !inspectorPicking,
+                if (visibleChat == null) "描述你想要构建的内容, / 调用指令, @ 文件或对话" else "发消息或创建任务, / 调用指令, @ 文件或对话",
+                visibleChat?.running == true, curPerm, curModel,
+                enabled = dot == Dot.Online && !inspectorPicking && firstPrompt == null &&
+                    (chat != null || curPerm.isEmpty() || (!permissionLoading && permissionDirectory?.find(curPerm) != null)),
                 draft = composerDraft, onDraftChange = { composerDraft = it },
-                planMode = st.planMode,
-                queueAttached = st.queuedPrompts.isNotEmpty(),
+                planMode = visibleChat?.planMode == true,
+                queueAttached = visibleChat?.queuedPrompts?.isNotEmpty() == true,
                 pendingImages = pendingImages, pendingFiles = pendingFiles,
                 permissionName = currentPermissionLabel,
-                onPlus = { sheet = Sheet.Plus }, onPerm = { sheet = Sheet.Permission }, onModel = { modelDirect = false; sheet = Sheet.Model },
+                onPlus = { if (firstPrompt == null) sheet = Sheet.Plus }, onPerm = { if (firstPrompt == null) sheet = Sheet.Permission }, onModel = { if (firstPrompt == null) { modelDirect = false; sheet = Sheet.Model } },
                 modelMenu = modelMenu, modelEffort = modelEffortLabel(catalog, curModel),
                 modelBusy = modelPending != null, modelExpanded = sheet == Sheet.Model,
                 onRemoveImage = { i -> pendingImages = pendingImages.toMutableList().also { it.removeAt(i) } },
                 onRemoveFile = { i -> pendingFiles = pendingFiles.toMutableList().also { it.removeAt(i) } },
                 onRetryFile = { i ->
                     val f = pendingFiles.getOrNull(i) ?: return@Composer
+                    val stId = Pocket.chat.value?.sessionId ?: return@Composer
                     pendingFiles = pendingFiles.toMutableList().also { it[i] = f.copy(status = AttachStatus.Uploading) }
                     scope.launch {
-                        val receipt = Pocket.uploadFile(st.sessionId, f.bytes, f.name)
+                        val receipt = Pocket.uploadFile(stId, f.bytes, f.name)
                         pendingFiles = pendingFiles.toMutableList().also {
                             if (i in it.indices) it[i] = if (receipt != null) f.copy(status = AttachStatus.Ready, receiptId = receipt.receiptId)
                             else f.copy(status = AttachStatus.Failed)
                         }
                     }
                 },
-                onSlash = { sheet = Sheet.Commands },
-                onMention = { sheet = Sheet.Mentions },
+                onSlash = { if (firstPrompt == null) sheet = Sheet.Commands },
+                onMention = { if (firstPrompt == null) sheet = Sheet.Mentions },
                 onExitPlan = { Pocket.executeCommand("/plan off") },
                 onSend = { text ->
-                    if (InspectorNavigation.picking) return@Composer
+                    if (InspectorNavigation.picking || firstPrompt != null) return@Composer
                     val ready = pendingFiles.filter { it.status == AttachStatus.Ready && it.receiptId != null }
                     val imgs = pendingImages
                     when {
+                        chat == null -> Pocket.newSession(text, effectivePreset.takeIf { it.isNotBlank() },
+                            curPerm.takeIf { it.isNotEmpty() }, draftModel, draftCwd ?: workspaces.firstOrNull())
                         imgs.isNotEmpty() || ready.isNotEmpty() ->
                             Pocket.sendWithFiles(text, imgs, ready.map { PromptFile(it.receiptId!!) })
                         else -> Pocket.send(text)
@@ -465,8 +471,8 @@ fun ChatRoot(
                 },
                 onStop = { if (!InspectorNavigation.picking) Pocket.cancel() },
             )
-            ComposerStats(st.composerMetrics)
-            }
+            if (visibleChat != null) ComposerStats(visibleChat.composerMetrics)
+            else Spacer(Modifier.height(10.dp))
         }
     }
     }
@@ -757,7 +763,7 @@ internal fun Transcript(
         if (!list.isScrollInProgress) followBottom = !list.canScrollForward
     }
     if (st.loaded && st.items.isEmpty() && !st.running) { EmptyState(D.chat, "开始对话", "发送第一条消息"); return }
-    if (!st.loaded) { Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator(color = T.Accent, strokeWidth = 2.dp, modifier = Modifier.size(24.dp)) }; return }
+    if (!st.loaded && st.items.isEmpty()) { Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator(color = T.Accent, strokeWidth = 2.dp, modifier = Modifier.size(24.dp)) }; return }
     Box(Modifier.fillMaxSize()) {
     LazyColumn(state = list, modifier = Modifier.fillMaxSize(), contentPadding = PaddingValues(16.dp)) {
         itemsIndexed(rows, key = { _, row -> row.key }) { index, row ->
