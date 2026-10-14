@@ -6,6 +6,14 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.ui.Modifier
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.material3.LocalTextStyle
+import androidx.compose.ui.semantics.SemanticsActions
+import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.onRoot
+import androidx.compose.ui.test.performSemanticsAction
+import androidx.compose.ui.graphics.asAndroidBitmap
+import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toPixelMap
 import androidx.compose.ui.test.captureToImage
@@ -53,5 +61,33 @@ class MarkdownRenderingInstrumentedTest {
         val strong = ink(0)
         val regular = ink(1)
         assertTrue("Strong emphasis must remain visible on the device font: strong=$strong, body=$regular", strong > regular * 1.05)
+    }
+
+    @Test fun inlineFileLinkIsNotClippedByItsPlaceholder() {
+        Pocket.init(InstrumentationRegistry.getInstrumentation().targetContext)
+        rule.setContent {
+            PocketTheme {
+                CompositionLocalProvider(LocalTextStyle provides MaterialTheme.typography.bodyLarge) {
+                    Box(Modifier.fillMaxWidth().background(T.Bg).padding(16.dp)) {
+                        MarkdownView(
+                            "2. **错误分类修正**：信封级 401/403 现在归类为 `AUTH`（复用 [httpErrorCode](src/errors.ts)），不再误报 `UPSTREAM`，携带 `failure.status`",
+                            bodyFontSize = 14.sp,
+                        )
+                    }
+                }
+            }
+        }
+        val image = rule.onRoot().captureToImage().asAndroidBitmap()
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        context.openFileOutput("markdown-file-link-device.png", 0).use {
+            image.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it)
+        }
+        val label = rule.onNodeWithText("httpErrorCode", useUnmergedTree = true)
+        val layouts = mutableListOf<TextLayoutResult>()
+        label.performSemanticsAction(SemanticsActions.GetTextLayoutResult) { it(layouts) }
+        val layout = layouts.single()
+        val visibleHeight = label.fetchSemanticsNode().boundsInRoot.height
+        assertTrue("link text clipped: lineBottom=${layout.getLineBottom(0)}, visibleHeight=$visibleHeight",
+            layout.getLineBottom(0) <= visibleHeight + 1f)
     }
 }

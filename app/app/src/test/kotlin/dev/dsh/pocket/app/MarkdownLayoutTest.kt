@@ -5,6 +5,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.material3.LocalTextStyle
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.platform.UriHandler
 import androidx.compose.ui.Modifier
@@ -17,6 +18,7 @@ import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.github.takahirom.roborazzi.ExperimentalRoborazziApi
 import com.github.takahirom.roborazzi.captureRoboImage
 import org.junit.Assert.assertEquals
@@ -61,6 +63,49 @@ class MarkdownLayoutTest {
         val linkOffset = layout.layoutInput.text.text.indexOf("官网")
         paragraph.performTouchInput { click(layout.getBoundingBox(linkOffset).center) }
         rule.runOnIdle { assertEquals(listOf("https://example.com"), opened) }
+    }
+
+    @Test fun fileLinkFitsItsInlineSlotInLightTheme() = checkFileLink(Appearance.Light, 14)
+    @Test fun fileLinkFitsItsInlineSlotInDarkTheme() = checkFileLink(Appearance.Dark, 14)
+    @Test fun fileLinkFitsItsInlineSlotWithLargeText() = checkFileLink(Appearance.Light, 22)
+
+    private fun checkFileLink(appearance: Appearance, fontSize: Int) {
+        installHostSettingsFixture()
+        val previous = Pocket.prefs.appearance
+        val opened = mutableListOf<String>()
+        try {
+            Pocket.prefs.appearance = appearance
+            rule.setContent {
+                PocketTheme {
+                    CompositionLocalProvider(
+                        LocalTextStyle provides androidx.compose.material3.MaterialTheme.typography.bodyLarge,
+                        LocalOpenFilePreview provides { opened += it },
+                    ) {
+                        Box(Modifier.fillMaxWidth().background(T.Bg).padding(16.dp)) {
+                            MarkdownView(
+                                "2. **错误分类修正**：信封级 401/403 现在归类为 `AUTH`（复用 [httpErrorCode](src/errors.ts)），不再误报 `UPSTREAM`，携带 `failure.status`",
+                                bodyFontSize = fontSize.sp,
+                            )
+                        }
+                    }
+                }
+            }
+            rule.onRoot().captureRoboImage("build/screenshots/markdown-file-link-${appearance.name.lowercase()}-$fontSize.png")
+            val label = rule.onNodeWithText("httpErrorCode", useUnmergedTree = true)
+            val layouts = mutableListOf<TextLayoutResult>()
+            label.performSemanticsAction(SemanticsActions.GetTextLayoutResult) { it(layouts) }
+            val layout = layouts.single()
+            assertTrue("link label must not be vertically clipped: ${layout.size}, bottom=${layout.getLineBottom(0)}",
+                layout.getLineBottom(0) <= label.fetchSemanticsNode().boundsInRoot.height + 1f)
+            assertTrue("link label must not be horizontally clipped", !layout.didOverflowWidth)
+            val paragraph = rule.onNodeWithText("错误分类修正", substring = true)
+            val paragraphs = mutableListOf<TextLayoutResult>()
+            paragraph.performSemanticsAction(SemanticsActions.GetTextLayoutResult) { it(paragraphs) }
+            paragraph.performTouchInput { click(paragraphs.single().placeholderRects[1]!!.center) }
+            rule.runOnIdle { assertEquals(listOf("src/errors.ts"), opened) }
+        } finally {
+            Pocket.prefs.appearance = previous
+        }
     }
 
 

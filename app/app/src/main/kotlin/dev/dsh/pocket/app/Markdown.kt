@@ -12,12 +12,14 @@ import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.text.BasicText
 import androidx.compose.foundation.text.InlineTextContent
 import androidx.compose.foundation.text.appendInlineContent
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -43,6 +45,7 @@ import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.AnnotatedString
@@ -57,6 +60,7 @@ import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.style.TextDecoration
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.withLink
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.Constraints
@@ -564,7 +568,10 @@ private fun InlineRichText(spans: List<MdSpan>, style: TextStyle) {
         fontSize = (style.fontSize.value * 0.875f).sp,
         color = style.color,
     )
-    val fileStyle = TextStyle(fontSize = 13.sp, fontWeight = FontWeight.Medium)
+    // Measure and draw the exact same typography; Material Text's inherited
+    // line height/font can otherwise exceed the inline placeholder and clip.
+    val fileStyle = textStyle.copy(color = T.Link, fontWeight = FontWeight.Medium)
+    val fileIconSize = with(density) { (style.fontSize.value * 1.1f).sp.toDp() }
     BoxWithConstraints(Modifier.fillMaxWidth()) {
         val inlineContent = mutableMapOf<String, InlineTextContent>()
         val annotated = buildAnnotatedString {
@@ -596,7 +603,7 @@ private fun InlineRichText(spans: List<MdSpan>, style: TextStyle) {
                             else -> error("Not inline content")
                         }
                         val chipStyle = if (isCode) codeStyle else fileStyle
-                        val padding = if (isCode) 12.dp else 45.dp
+                        val padding = if (isCode) 12.dp else fileIconSize + 5.dp
                         val measured = measurer.measure(
                             label,
                             chipStyle,
@@ -606,7 +613,10 @@ private fun InlineRichText(spans: List<MdSpan>, style: TextStyle) {
                             maxLines = if (isCode) Int.MAX_VALUE else 1,
                         )
                         val width = with(density) { (measured.size.width.toDp() + padding).coerceAtMost(maxWidth).toSp() }
-                        val height = with(density) { (measured.size.height.toDp() + 4.dp).toSp() }
+                        val height = with(density) {
+                            (if (isCode) measured.size.height.toDp() + 4.dp
+                            else measured.size.height.toDp().coerceAtLeast(fileIconSize)).toSp()
+                        }
                         val id = "chip-$i"
                         inlineContent[id] = InlineTextContent(
                             Placeholder(width, height, PlaceholderVerticalAlign.TextCenter),
@@ -619,8 +629,24 @@ private fun InlineRichText(spans: List<MdSpan>, style: TextStyle) {
                                         .border(0.5.dp, T.Border, T.R4)
                                         .padding(horizontal = 5.dp, vertical = 1.dp),
                                 )
-                                is MdSpan.FileChip -> androidx.compose.runtime.CompositionLocalProvider(LocalOpenFilePreview provides null) {
-                                    FileLinkChip(span.path, span.label)
+                                is MdSpan.FileChip -> Row(
+                                    Modifier.fillMaxSize(),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                ) {
+                                    Icon(
+                                        painterResource(R.drawable.dsh_code_brackets),
+                                        contentDescription = null,
+                                        tint = T.Link,
+                                        modifier = Modifier.size(fileIconSize),
+                                    )
+                                    Spacer(Modifier.width(5.dp))
+                                    BasicText(
+                                        span.label,
+                                        style = fileStyle,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                        modifier = Modifier.weight(1f),
+                                    )
                                 }
                                 else -> Unit
                             }

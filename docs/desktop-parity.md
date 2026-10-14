@@ -50,6 +50,10 @@ Inline code preserves its full literal text and is not promoted to a file chip b
 
 Paragraphs use one native text layout across emphasis, links and inline chips. Bold labels and their following punctuation/body share the same line; code and explicit file links retain their inline appearance and interaction. Quotes draw their rule without intrinsic measurement so nested rich text remains supported.
 
+Inline file links use the surrounding paragraph's font and line height for both placeholder measurement and native text drawing. They render without a pill background, with the official medium code-bracket glyph rather than a textual `</>` approximation; standalone file cards keep their existing styling. Light/dark, enlarged-text and file-opening regressions cover the `httpErrorCode` example, with a native-device check for text extending beyond its visible inline bounds.
+
+The installed release was also checked in the original OnePlus `ping` conversation: `httpErrorCode` and `adapter.ts:128` render fully, without rerunning the prompt or changing its recorded response.
+
 Headings and strong emphasis request Android's native bold weight rather than copying CSS's numeric 600: the OnePlus system font renders 600 as regular, while 700 preserves the desktop's visibly bold hierarchy. This is a rendering choice, not a change to the shared font preferences.
 `MarkdownRenderingInstrumentedTest` compares actual glyph ink on-device so an OEM mapping that silently drops emphasis cannot pass only by retaining a 600-valued style in the AST.
 
