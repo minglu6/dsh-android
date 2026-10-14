@@ -1,0 +1,19 @@
+{
+  "name": "dsh-android-code-preview",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "node build.mjs",
+    "test": "node --import tsx --test test/*.test.ts"
+  },
+  "dependencies": {
+    "@shikijs/langs": "4.4.3",
+    "shiki": "4.4.3"
+  },
+  "devDependencies": {
+    "esbuild": "0.25.12",
+    "jsdom": "26.1.0",
+    "tsx": "4.20.6"
+  }
+}

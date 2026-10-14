@@ -1,0 +1,54 @@
+@font-face {
+  font-family: 'DSH Meslo';
+  src: url('/font/meslo.ttf') format('truetype');
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+}
+:root {
+  --code-font-size: 11px;
+  --code-font-family: 'DSH Meslo', monospace;
+}
+html { background: transparent; }
+body {
+  margin: 0;
+  color: var(--dsw-alias-label-primary);
+  background: var(--dsw-alias-markdown-code-block);
+  font-family: var(--code-font-family);
+  font-size: var(--code-font-size);
+  line-height: calc(var(--code-font-size) + 8px);
+  -webkit-text-size-adjust: none;
+}
+pre {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 16px;
+  min-width: 100%;
+  width: max-content;
+  font: inherit;
+  white-space: pre;
+  word-break: normal;
+  overflow-wrap: normal;
+}
+code { display: block; font: inherit; }
+body[data-plain='false'] code { white-space: normal; counter-reset: source-line; }
+.line {
+  position: relative;
+  display: block;
+  min-height: 1lh;
+  padding-inline-start: calc(var(--number-width) + 12px);
+  counter-increment: source-line;
+  white-space: pre;
+}
+.line::before {
+  position: absolute;
+  inset-inline-start: 0;
+  width: var(--number-width);
+  color: var(--dsw-alias-label-tertiary);
+  text-align: end;
+  content: counter(source-line);
+  user-select: none;
+  -webkit-user-select: none;
+}
+body[data-wrap='true'] pre { width: 100%; white-space: pre-wrap; overflow-wrap: anywhere; }
+body[data-wrap='true'] .line { white-space: pre-wrap; }

@@ -67,7 +67,7 @@
 | 功能 | 使用方式与边界 |
 |---|---|
 | 工作区 | 支持注册、重命名、移除、组内新会话、目录树、搜索和排序；以 Host 实体区分，同名目录不合并。目录选择支持浏览、隐藏文件与新建目录；仅提供 `native` 选择器的 Host 保留完整路径输入。 |
-| 文件预览 | 支持缩放图片、按需渲染完整 PDF、Markdown、CSV/TSV，以及禁止脚本／外网／本地资源访问的静态 HTML；Office 二进制文件不当作文本展示。 |
+| 文件预览 | 代码使用与桌面相同的 Shiki 语法、浅深色高亮和物理行号，支持代码／纯文本切换、换行／横向滚动及原文复制；另支持缩放图片、按需渲染完整 PDF、Markdown、CSV/TSV 和安全静态 HTML，Office 二进制文件不当作文本展示。 |
 | 终端 | 连接主机 PTY，支持控制键、选区复制、粘贴与多终端切换。返回或收起只取消订阅，菜单「退出」经确认后才结束目标 Shell。 |
 | 浏览器 | 使用手机 WebView，支持前进、后退、刷新和在系统浏览器打开；不是电脑浏览器的画面投屏。 |
 | 轨迹与诊断 | 查看会话轨迹、原始记录、分组、筛选、分页及 JSON 详情；聊天选取可定位到对应诊断记录。 |
@@ -139,6 +139,19 @@ cd app
 ```
 
 PDF 原生渲染由 `PdfPreviewInstrumentedTest` 覆盖，需要设备／模拟器执行；Robolectric 截图不能替代 PDFium 验证。
+
+代码预览的工具栏为原生 Compose，正文使用隔离的离线 WebView，随 APK 打包 Shiki 4.4.3、官方语言映射及配色；不执行文件中的 HTML／脚本，不联网，不暴露 JavaScript bridge。代码字体遵守手机可用字体与字号设置，换行不插入零宽字符，行号不进入复制内容。此实现只用于文件预览，不改变聊天中的 Markdown 代码块或文件差异查看器。
+
+`code-preview/` 保留渲染源文件、官方 MIT 源码及依赖锁；生成的 `app/app/src/main/assets/code-preview/` 和 `CodePreviewLanguages.kt` 随源码保存，常规 Gradle 构建不需要 Node。修改渲染器或升级官方语法后，从仓库根目录运行：
+
+```bash
+cd code-preview
+npm ci --ignore-scripts --no-audit --no-fund
+npm run build
+npm test
+```
+
+代码预览的纯逻辑／安全回归为 `CodePreviewTest`；浏览器测试不能替代真实 Android WebView 验收，需在原会话打开真实文件核对高亮、滚动、模式切换和复制。
 
 真实 dsh + 插件协议测试需先安装 [插件依赖](../plugin/README.md#开发与测试)，并确保 dsh、pnpm 与 JDK 17 可用。从仓库根目录执行：
 

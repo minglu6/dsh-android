@@ -12,6 +12,7 @@ import android.webkit.WebView
 import android.webkit.WebViewClient
 import android.util.Base64
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.ScrollState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.horizontalScroll
@@ -28,6 +29,7 @@ import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onSizeChanged
@@ -35,7 +37,12 @@ import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.selected
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.unit.IntSize
@@ -51,6 +58,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import java.io.File
 
@@ -68,9 +76,23 @@ fun previewKindFor(path: String): PreviewKind = when (path.substringAfterLast('.
     else -> PreviewKind.Text
 }
 
+private enum class TextPreviewMode { Preview, Code, Plain }
+
 @Composable
 fun FilePreviewSheet(sessionId: String, path: String, onDismiss: () -> Unit, onBack: (() -> Unit)? = null) {
     val kind = remember(path) { previewKindFor(path) }
+    val extension = path.substringAfterLast('.', "").lowercase()
+    val richText = extension in setOf("md", "markdown", "html", "htm", "csv", "tsv")
+    val language = remember(path) { previewCodeLanguage(path) }
+    val modes = remember(richText, language) {
+        buildList {
+            if (richText) add(TextPreviewMode.Preview)
+            if (language != null || richText) add(TextPreviewMode.Code)
+            add(TextPreviewMode.Plain)
+        }
+    }
+    var mode by remember(sessionId, path) { mutableStateOf(modes.first()) }
+    var modeMenu by remember(sessionId, path) { mutableStateOf(false) }
     var generation by remember(sessionId, path) { mutableIntStateOf(0) }
     var loading by remember(sessionId, path) { mutableStateOf(true) }
     var error by remember(sessionId, path) { mutableStateOf<String?>(null) }
@@ -78,12 +100,15 @@ fun FilePreviewSheet(sessionId: String, path: String, onDismiss: () -> Unit, onB
     var bytes by remember(sessionId, path) { mutableStateOf<ByteArray?>(null) }
     var refreshed by remember(sessionId, path) { mutableStateOf<String?>(null) }
     var copied by remember(sessionId, path) { mutableStateOf(false) }
-    var wrap by remember(path) { mutableStateOf(Pocket.prefs.codeWordWrap) }
-    var source by remember(path) { mutableStateOf(false) }
+    var wrap by remember(sessionId, path) { mutableStateOf(Pocket.prefs.codeWordWrap) }
     var fullImage by remember(path) { mutableStateOf(false) }
     val clip = LocalClipboardManager.current
-    val extension = path.substringAfterLast('.', "").lowercase()
-    val richText = extension in setOf("md", "markdown", "html", "htm", "csv", "tsv")
+    LaunchedEffect(copied, sessionId, path) {
+        if (copied) {
+            delay(1000)
+            copied = false
+        }
+    }
 
     LaunchedEffect(sessionId, path, generation) {
         loading = true
@@ -121,24 +146,62 @@ fun FilePreviewSheet(sessionId: String, path: String, onDismiss: () -> Unit, onB
         title = path.substringAfterLast('/').substringAfterLast('\\').ifBlank { path },
         onDismiss = onDismiss,
         onBack = onBack,
-        actions = {
-            IconButton(onClick = { generation++ }, enabled = !loading) {
-                Icon(D.refresh, previewText("刷新文件", "Refresh file"), tint = T.Text2, modifier = Modifier.size(18.dp))
-            }
-        },
+        titleIcon = { FileTypeIcon(path, modifier = Modifier.padding(horizontal = 12.dp).size(18.dp)) },
     ) {
-        Text(path, style = T.Mono.copy(color = T.Text3, fontSize = 12.sp), maxLines = 2,
-            overflow = TextOverflow.Ellipsis, modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp))
-        if (text != null && !loading) {
-            Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), verticalAlignment = Alignment.CenterVertically) {
-                TextButton(onClick = { clip.setText(AnnotatedString(text!!)); copied = true }) { Text(if (copied) L.copied() else L.copy()) }
-                if (richText) TextButton(onClick = { source = !source }) { Text(if (source) previewText("预览", "Preview") else previewText("源码", "Source")) }
-                if (!richText || source) TextButton(onClick = { wrap = !wrap }) { Text(if (wrap) previewText("不换行", "No wrap") else previewText("自动换行", "Wrap")) }
+        Row(
+            Modifier.fillMaxWidth().padding(start = 16.dp, end = 4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            PreviewPathLabel(path, Modifier.weight(1f))
+            if (kind == PreviewKind.Text && modes.size > 1) {
+                Box {
+                    TextButton(
+                        onClick = { modeMenu = true },
+                        contentPadding = PaddingValues(horizontal = 8.dp),
+                        colors = ButtonDefaults.textButtonColors(contentColor = T.Text2),
+                        modifier = Modifier.semantics {
+                            contentDescription = previewText("打开方式", "Open with")
+                        },
+                    ) {
+                        Text(previewModeLabel(mode, richText), fontSize = 12.sp, maxLines = 1)
+                    }
+                    DropdownMenu(
+                        expanded = modeMenu,
+                        onDismissRequest = { modeMenu = false },
+                        containerColor = T.Surface,
+                    ) {
+                        modes.forEach { candidate ->
+                            DropdownMenuItem(
+                                text = { Text(previewModeLabel(candidate, richText), fontSize = 13.sp) },
+                                trailingIcon = {
+                                    if (candidate == mode) Icon(D.check, null, Modifier.size(16.dp), tint = T.Text2)
+                                },
+                                modifier = Modifier.semantics { selected = candidate == mode },
+                                colors = MenuDefaults.itemColors(textColor = T.Ink),
+                                onClick = { mode = candidate; modeMenu = false },
+                            )
+                        }
+                    }
+                }
             }
+            if (kind == PreviewKind.Text && mode != TextPreviewMode.Preview) {
+                PreviewToolIcon(
+                    icon = if (wrap) D.nowrap else D.wrap,
+                    label = if (wrap) L.unwrapLines() else L.wrapLines(),
+                    ariaLabel = L.wrapLines(),
+                    checked = wrap,
+                ) { wrap = !wrap }
+            }
+            PreviewToolIcon(
+                icon = D.refresh,
+                label = previewText("刷新文件", "Refresh file"),
+                enabled = !loading,
+            ) { generation++ }
         }
+        HorizontalDivider(color = T.Border, thickness = 0.5.dp)
         refreshed?.let { Text(it, color = T.Text3, fontSize = 12.sp, modifier = Modifier.padding(horizontal = 16.dp)) }
         when {
-            loading -> Box(Modifier.fillMaxWidth().weight(1f), contentAlignment = Alignment.Center) {
+            loading && (kind != PreviewKind.Text || text == null) -> Box(Modifier.fillMaxWidth().weight(1f), contentAlignment = Alignment.Center) {
                 CircularProgressIndicator(color = T.Accent, modifier = Modifier.size(28.dp))
             }
             error != null -> Column(Modifier.fillMaxWidth().weight(1f).verticalScroll(rememberScrollState()).padding(16.dp)) {
@@ -153,20 +216,112 @@ fun FilePreviewSheet(sessionId: String, path: String, onDismiss: () -> Unit, onB
             text != null -> {
                 val value = text!!
                 when {
-                    !source && extension in setOf("csv", "tsv") ->
+                    mode == TextPreviewMode.Preview && extension in setOf("csv", "tsv") ->
                         DelimitedPreview(value, if (extension == "tsv") '\t' else ',', Modifier.weight(1f))
-                    !source && extension in setOf("html", "htm") ->
+                    mode == TextPreviewMode.Preview && extension in setOf("html", "htm") ->
                         StaticHtmlPreview(value, Modifier.fillMaxWidth().weight(1f))
-                    else -> Column(Modifier.fillMaxWidth().weight(1f).verticalScroll(rememberScrollState()).padding(16.dp)) {
-                        if (!source && extension in setOf("md", "markdown")) MarkdownView(value)
-                        else SelectableOutput {
-                            Text(value, style = T.Mono.copy(fontSize = Pocket.prefs.codeFontSize.sp, lineHeight = (Pocket.prefs.codeFontSize * 1.5).sp), color = T.Ink,
-                                softWrap = wrap, modifier = if (wrap) Modifier.fillMaxWidth() else Modifier.horizontalScroll(rememberScrollState()))
+                    mode == TextPreviewMode.Preview ->
+                        Column(Modifier.fillMaxWidth().weight(1f).verticalScroll(rememberScrollState()).padding(16.dp)) {
+                            MarkdownView(value)
                         }
+                    else -> Column(Modifier.fillMaxWidth().weight(1f)) {
+                        if (mode == TextPreviewMode.Code) {
+                            Row(
+                                Modifier.fillMaxWidth().padding(start = 16.dp, end = 4.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Text(
+                                    language ?: previewText("代码", "Code"),
+                                    color = T.Text2,
+                                    fontFamily = LocalFonts.code,
+                                    fontSize = 12.sp,
+                                    modifier = Modifier.weight(1f),
+                                )
+                                PreviewToolIcon(
+                                    icon = if (copied) D.check else D.copy,
+                                    label = if (copied) L.copied() else L.copy(),
+                                ) {
+                                    if (!copied) {
+                                        clip.setText(AnnotatedString(value))
+                                        copied = true
+                                    }
+                                }
+                            }
+                        }
+                        CodePreviewBody(
+                            path = path,
+                            text = value,
+                            wrap = wrap,
+                            plain = mode == TextPreviewMode.Plain,
+                            modifier = Modifier.fillMaxWidth().weight(1f),
+                        )
                     }
                 }
             }
             else -> Text(L.docUnsupported(), color = T.Text2, modifier = Modifier.padding(16.dp))
+        }
+    }
+}
+
+private fun previewModeLabel(mode: TextPreviewMode, richText: Boolean): String = when (mode) {
+    TextPreviewMode.Preview -> previewText("预览", "Preview")
+    TextPreviewMode.Code -> if (richText) previewText("源码", "Source") else previewText("代码", "Code")
+    TextPreviewMode.Plain -> previewText("纯文本", "Plain text")
+}
+
+/** Preserve the complete selectable path; start at its filename rather than truncating the tail. */
+@Composable
+private fun PreviewPathLabel(path: String, modifier: Modifier) {
+    val split = maxOf(path.lastIndexOf('/'), path.lastIndexOf('\\')) + 1
+    val label = buildAnnotatedString {
+        withStyle(SpanStyle(color = T.Text3)) { append(path.substring(0, split)) }
+        withStyle(SpanStyle(color = T.Ink)) { append(path.substring(split)) }
+    }
+    val scroll = remember(path) { ScrollState(Int.MAX_VALUE) }
+    Box(modifier) {
+        SelectableOutput {
+            Text(
+                label,
+                style = T.Mono.copy(fontSize = 12.sp),
+                maxLines = 1,
+                softWrap = false,
+                modifier = Modifier.fillMaxWidth().horizontalScroll(scroll).padding(vertical = 12.dp),
+            )
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun PreviewToolIcon(
+    icon: ImageVector,
+    label: String,
+    ariaLabel: String = label,
+    enabled: Boolean = true,
+    checked: Boolean? = null,
+    onClick: () -> Unit,
+) {
+    TooltipBox(
+        positionProvider = TooltipDefaults.rememberPlainTooltipPositionProvider(),
+        tooltip = { PlainTooltip { Text(label, fontSize = 12.sp) } },
+        state = rememberTooltipState(),
+    ) {
+        if (checked == null) {
+            IconButton(onClick = onClick, enabled = enabled, modifier = Modifier.size(40.dp)) {
+                Icon(icon, ariaLabel, tint = if (enabled) T.Text2 else T.Text3, modifier = Modifier.size(16.dp))
+            }
+        } else {
+            IconToggleButton(
+                checked = checked,
+                onCheckedChange = { onClick() },
+                enabled = enabled,
+                modifier = Modifier.size(40.dp).semantics {
+                    stateDescription = if (checked) previewText("已换行", "Wrapped") else previewText("不换行", "Not wrapped")
+                },
+                colors = IconButtonDefaults.iconToggleButtonColors(contentColor = T.Text2, checkedContentColor = T.Ink),
+            ) {
+                Icon(icon, ariaLabel, modifier = Modifier.size(16.dp))
+            }
         }
     }
 }

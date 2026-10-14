@@ -1,0 +1,86 @@
+/* Syntax-highlight token palette: the values behind shiki's css-variables
+   theme (--shiki-* custom properties emitted by the ui-primitives CodeBlock).
+   Light values on :root, dark overrides on the body attribute — the same
+   cascade as every other token sheet. Background/foreground deliberately
+   alias the markdown code-block tokens so highlighted and plain blocks agree. */
+
+:root {
+  --shiki-foreground: var(--dsw-alias-label-primary);
+  --shiki-background: var(--dsw-alias-markdown-code-block);
+  --shiki-token-constant: #1c7ed6;
+  --shiki-token-string: #2f9e44;
+  --shiki-token-comment: #868e96;
+  --shiki-token-keyword: #d6336c;
+  --shiki-token-parameter: #e8590c;
+  --shiki-token-function: #6741d9;
+  --shiki-token-string-expression: #2b8a3e;
+  --shiki-token-punctuation: #495057;
+  --shiki-token-link: #1971c2;
+}
+
+body[data-ds-dark-theme] {
+  --shiki-token-constant: #4dabf7;
+  --shiki-token-string: #69db7c;
+  --shiki-token-comment: #adb5bd;
+  --shiki-token-keyword: #faa2c1;
+  --shiki-token-parameter: #ffa94d;
+  --shiki-token-function: #b197fc;
+  --shiki-token-string-expression: #8ce99a;
+  --shiki-token-punctuation: #ced4da;
+  --shiki-token-link: #74c0fc;
+}
+
+@font-face {
+  font-family: 'DSH Meslo';
+  src: url('/font/meslo.ttf') format('truetype');
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+}
+:root {
+  --code-font-size: 11px;
+  --code-font-family: 'DSH Meslo', monospace;
+}
+html { background: transparent; }
+body {
+  margin: 0;
+  color: var(--dsw-alias-label-primary);
+  background: var(--dsw-alias-markdown-code-block);
+  font-family: var(--code-font-family);
+  font-size: var(--code-font-size);
+  line-height: calc(var(--code-font-size) + 8px);
+  -webkit-text-size-adjust: none;
+}
+pre {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 16px;
+  min-width: 100%;
+  width: max-content;
+  font: inherit;
+  white-space: pre;
+  word-break: normal;
+  overflow-wrap: normal;
+}
+code { display: block; font: inherit; }
+body[data-plain='false'] code { white-space: normal; counter-reset: source-line; }
+.line {
+  position: relative;
+  display: block;
+  min-height: 1lh;
+  padding-inline-start: calc(var(--number-width) + 12px);
+  counter-increment: source-line;
+  white-space: pre;
+}
+.line::before {
+  position: absolute;
+  inset-inline-start: 0;
+  width: var(--number-width);
+  color: var(--dsw-alias-label-tertiary);
+  text-align: end;
+  content: counter(source-line);
+  user-select: none;
+  -webkit-user-select: none;
+}
+body[data-wrap='true'] pre { width: 100%; white-space: pre-wrap; overflow-wrap: anywhere; }
+body[data-wrap='true'] .line { white-space: pre-wrap; }

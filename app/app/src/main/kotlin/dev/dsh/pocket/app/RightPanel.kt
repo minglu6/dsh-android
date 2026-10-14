@@ -39,6 +39,7 @@ internal fun RightPanelFrame(
     onBack: (() -> Unit)? = null,
     actions: @Composable RowScope.() -> Unit = {},
     keyboardFirstBack: Boolean = false,
+    titleIcon: (@Composable () -> Unit)? = null,
     content: @Composable ColumnScope.() -> Unit,
 ) {
     Dialog(
@@ -72,10 +73,11 @@ internal fun RightPanelFrame(
                             IconButton({
                                 if (keyboardFirstBack && imeVisible) keyboard?.hide() else onBack()
                             }) { Icon(D.chevronLeft, panelText("返回", "Back"), tint = T.Text2, modifier = Modifier.size(20.dp)) }
-                        } else {
+                        } else if (titleIcon == null) {
                             Icon(ImageVector.vectorResource(R.drawable.dsh_compass), null, tint = T.Text3,
                                 modifier = Modifier.padding(horizontal = 12.dp).size(16.dp))
                         }
+                        titleIcon?.invoke()
                         Text(title, color = T.Ink, fontSize = 14.sp, maxLines = 1,
                             overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f).semantics { heading() })
                         actions()

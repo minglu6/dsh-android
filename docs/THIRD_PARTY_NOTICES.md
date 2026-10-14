@@ -36,6 +36,14 @@ frame, 50 ms each); `ic_running_whale.xml` uses `RunningWhaleTail.REST_PATH`.
 Process icons, including `dsh_question.xml`, reproduce `ui-primitives` geometry.
 These assets are Copyright (c) 2026 DeepSeek, used under the MIT License:
 
+The file code preview vendors `ui-primitives/src/markdown/highlight.ts`,
+`util/code-language/src/index.ts` and `ui-theme/src/styles/shiki.css` in
+`code-preview/vendor/`, with the upstream MIT license. Its offline bundle uses
+Shiki 4.4.3 and bundled TextMate grammars. The asset generator includes all
+bundled npm package license texts in
+`app/app/src/main/assets/code-preview/THIRD_PARTY_NOTICES`; these notices and the
+DeepSeek license are shipped in the APK alongside the renderer.
+
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
 in the Software without restriction, including without limitation the rights
