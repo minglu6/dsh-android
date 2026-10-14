@@ -337,6 +337,26 @@ class MessageActionsTest {
         rule.onNodeWithTag("processHeader:p1").assertIsDisplayed()
     }
 
+    @Test fun preparingToolCannotOpenInspectorUntilDispatched() {
+        val tool = mutableStateOf(Item.Tool("t", "c", "bash", """{"command":"echo ok"}""",
+            ToolStatus.Preparing, turn = 1, step = 1))
+        var opened: Item.Tool? = null
+        rule.setContent {
+            val item = tool.value
+            val group = foldChatItems(listOf(item), presentationPolicyFor(), true)
+                .filterIsInstance<ChatRow.Process>().single().copy(defaultOpen = true)
+            PocketTheme { ProcessGroupRow(group) { opened = it } }
+        }
+        rule.onNodeWithTag("processTool:t").assertIsDisplayed().assertIsNotEnabled()
+            .performTouchInput { click() }
+        rule.runOnIdle {
+            assertNull(opened)
+            tool.value = tool.value.copy(status = ToolStatus.Running)
+        }
+        rule.onNodeWithTag("processTool:t").assertIsEnabled().performClick()
+        rule.runOnIdle { assertEquals(ToolStatus.Running, opened?.status) }
+    }
+
     @Test fun reasoningPreviewUsesTheLatestCompletedParagraphWhileStreaming() {
         assertEquals("", reasoningPreview("partial first line", true))
         assertEquals("first", reasoningPreview("**first**\n\nunfinished", true))

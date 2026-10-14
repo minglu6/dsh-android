@@ -201,7 +201,8 @@ private fun toolResultPreview(item: Item.Tool): String? {
 }
 
 private fun toolRow(item: Item.Tool): TrajRow {
-    val running = item.status == ToolStatus.Running || item.status == ToolStatus.AwaitingApproval
+    val preparing = item.status == ToolStatus.Preparing
+    val running = preparing || item.status == ToolStatus.Running || item.status == ToolStatus.AwaitingApproval
     val started = item.startedAt
     val ended = item.endedAt
     val durMs = when {
@@ -215,6 +216,7 @@ private fun toolRow(item: Item.Tool): TrajRow {
     }
     val program = codeProgram(item.name, item.arguments, item.schemaJson)
     val title = when {
+        preparing -> preparingToolTitle(item.name)
         program != null -> "$PTC_TOOL_NAME · ${program.description.replace(Regex("\\s+"), " ")}"
         else -> {
             val args = trajectoryPreviewText(item.arguments)

@@ -1210,14 +1210,14 @@ private fun ToolCard(t: Item.Tool, onClick: () -> Unit) {
     Row(
         Modifier.fillMaxWidth().heightIn(min = (fontSize + 8).dp).clip(T.R8)
             .then(if (warn) Modifier.background(T.WarnTint) else Modifier)
-            .clickable(role = Role.Button, onClick = onClick)
+            .clickable(enabled = t.status != ToolStatus.Preparing, role = Role.Button, onClick = onClick)
             .testTag("processTool:${t.key}"),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Icon(if (t.status == ToolStatus.Error || warn) D.warning else toolProcessIcon(summary.icon),
             null, tint = tint, modifier = Modifier.size(fontSize.dp))
         Spacer(Modifier.width(6.dp))
-        ProcessShimmer(t.status == ToolStatus.Running, Modifier.weight(1f)) {
+        ProcessShimmer(t.status == ToolStatus.Preparing || t.status == ToolStatus.Running, Modifier.weight(1f)) {
             Text(summary.title, fontSize = (fontSize - 1).sp, color = tint, maxLines = 1,
                 lineHeight = (fontSize + 8).sp, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
             if (!summary.summary.isNullOrBlank()) {

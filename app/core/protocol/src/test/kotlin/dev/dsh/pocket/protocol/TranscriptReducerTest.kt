@@ -80,6 +80,62 @@ class TranscriptReducerTest {
         assertEquals(listOf(false), r.items().map { (it as Item.Text).live })
     }
 
+    @Test fun toolPreparationSurvivesMessageCommitUntilDispatchAndApproval() {
+        val r = TranscriptReducer()
+        r.apply(ev(1, "turn/start", """{"turn":1}"""))
+        r.apply(start(1))
+        r.apply(j("""{"type":"assistant-stream","frame":{"type":"chunk","attemptId":"a","revision":2,"index":0,"time":100,"chunk":{"type":"tool-call-delta","index":0,"id":"c","argumentsDelta":"{\"command\":\""}}}"""))
+        assertTrue(r.items().filterIsInstance<Item.Tool>().isEmpty())
+        r.apply(j("""{"type":"assistant-stream","frame":{"type":"chunk","attemptId":"a","revision":3,"index":1,"time":200,"chunk":{"type":"tool-call-delta","index":0,"id":"c","name":"bash","argumentsDelta":"echo ok\"}"}}}"""))
+        val preview = r.items().filterIsInstance<Item.Tool>().single()
+        assertEquals(ToolStatus.Preparing, preview.status)
+        assertEquals(200L, preview.startedAt)
+        assertEquals("""{"command":"echo ok"}""", preview.arguments)
+        r.apply(ev(2, "assistant/message", """{"turn":1,"step":1,"message":{"content":[{"type":"tool-call","id":"c","name":"bash","arguments":"{\"command\":\"echo ok\"}"}]}}"""))
+        assertEquals(ToolStatus.Preparing, r.items().filterIsInstance<Item.Tool>().single().status)
+        r.apply(end(4, 2, """{"kind":"committed","seq":2,"eventType":"assistant/message"}"""))
+        assertEquals(ToolStatus.Preparing, r.items().filterIsInstance<Item.Tool>().single().status)
+        r.apply(ev(3, "tool/call", """{"callId":"c","name":"bash","arguments":"{\"command\":\"echo ok\"}","turn":1,"step":1}"""))
+        val dispatched = r.items().filterIsInstance<Item.Tool>().single()
+        assertEquals(ToolStatus.Running, dispatched.status)
+        assertEquals(1003L, dispatched.startedAt)
+        r.apply(ev(4, "approval/asked", """{"id":"approval","callId":"c"}"""))
+        assertEquals(ToolStatus.AwaitingApproval, r.items().filterIsInstance<Item.Tool>().single().status)
+        r.apply(ev(5, "approval/decided", """{"id":"approval","outcome":"allowed-once"}"""))
+        assertEquals(ToolStatus.Running, r.items().filterIsInstance<Item.Tool>().single().status)
+        r.apply(ev(6, "tool/result", """{"message":{"toolCallId":"c","content":[{"type":"text","text":"ok"}]}}"""))
+        assertEquals(ToolStatus.Ok, r.items().filterIsInstance<Item.Tool>().single().status)
+        assertFalse(r.needsResync)
+    }
+
+    @Test fun cancelledPreparationNeverBecomesRecordedExecutionOrReturnsOnNextTurn() {
+        for (commit in listOf(false, true)) {
+            val r = TranscriptReducer()
+            r.apply(ev(1, "turn/start", """{"turn":1}"""))
+            r.apply(start(1))
+            r.apply(j("""{"type":"assistant-stream","frame":{"type":"chunk","attemptId":"a","revision":2,"index":0,"time":100,"chunk":{"type":"tool-call-delta","index":0,"id":"c","name":"bash","argumentsDelta":"{}"}}}"""))
+            if (commit) r.apply(ev(2, "assistant/message", """{"turn":1,"step":1,"message":{"content":[{"type":"tool-call","id":"c","name":"bash","arguments":"{}"}]}}"""))
+            r.apply(ev(3, "turn/end", """{"turn":1,"reason":{"kind":"aborted"}}"""))
+            assertTrue(r.items().filterIsInstance<Item.Tool>().isEmpty())
+            r.apply(ev(4, "turn/start", """{"turn":2}"""))
+            assertTrue(r.items().filterIsInstance<Item.Tool>().isEmpty())
+        }
+    }
+
+    @Test fun snapshotRestoresPreparationButRecordedDispatchDoesNotReplayIt() {
+        val r = TranscriptReducer()
+        r.apply(j("""{"type":"snapshot","cursor":1,"records":[${timedEvent(1, "turn/start", 1000, """{"turn":1}""")}],
+            "assistantStream":{"revision":10,"activeAttempt":{"attemptId":"a","turn":1,"step":1,"startedAfterSeq":1,"nextIndex":1,
+            "stream":[{"type":"tool-call-chunks","index":0,"id":"c","name":"bash","time0":1100,"args":["{}"],"dt":[]}]}}}"""))
+        assertEquals(ToolStatus.Preparing, r.items().filterIsInstance<Item.Tool>().single().status)
+        r.apply(ev(2, "tool/call", """{"callId":"c","name":"bash","arguments":"{}","turn":1,"step":1}"""))
+        assertEquals(ToolStatus.Running, r.items().filterIsInstance<Item.Tool>().single().status)
+        val history = TranscriptReducer()
+        history.apply(ev(1, "assistant/message", """{"turn":1,"step":1,"message":{"content":[{"type":"tool-call","id":"c","name":"bash","arguments":"{}"}]}}"""))
+        history.apply(ev(2, "tool/call", """{"callId":"c","name":"bash","arguments":"{}","turn":1,"step":1}"""))
+        assertEquals(ToolStatus.Running, history.items().filterIsInstance<Item.Tool>().single().status)
+    }
+
     @Test fun abandonedStreamLeavesTurnRunning() {
         val r = TranscriptReducer()
         r.apply(ev(1, "turn/start", """{"turn":1}"""))

@@ -92,6 +92,9 @@ internal fun toolProcessSummary(tool: Item.Tool, en: Boolean = false): ToolProce
         tool.name == "run_code" -> ToolProcessIcon.Code
         else -> ToolProcessIcon.Generic
     }
+    if (tool.status == ToolStatus.Preparing) {
+        return ToolProcessSummary(preparingToolTitle(tool.name, en), null, icon)
+    }
     if (tool.status == ToolStatus.Error) {
         return ToolProcessSummary(title, firstToolLine(tool.error ?: tool.result ?: tr("调用失败", "Tool failed")), icon)
     }

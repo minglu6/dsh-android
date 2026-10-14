@@ -186,6 +186,27 @@ private val LIVE_LABEL_EN = mapOf(
     "plan" to "Updating the plan", "questions" to "Waiting for your action", "tools" to "Calling tools",
 )
 
+private val PREPARE_LABEL = mapOf(
+    "read" to "准备读取文件", "readImage" to "准备读取图片", "write" to "准备写入文件",
+    "search" to "准备搜索代码", "edit" to "准备编辑文件", "commands" to "准备运行命令",
+    "code" to "准备运行代码", "webSearch" to "准备搜索网页", "webFetch" to "准备访问网页",
+    "subagents" to "准备协调子智能体", "plan" to "准备更新计划", "questions" to "准备提问",
+    "tools" to "准备调用工具",
+)
+
+private val PREPARE_LABEL_EN = mapOf(
+    "read" to "Preparing to read files", "readImage" to "Preparing to read images",
+    "write" to "Preparing to write files", "search" to "Preparing to search code",
+    "edit" to "Preparing to edit files", "commands" to "Preparing to run commands",
+    "code" to "Preparing to run code", "webSearch" to "Preparing to search the web",
+    "webFetch" to "Preparing to visit web pages", "subagents" to "Preparing to coordinate subagents",
+    "plan" to "Preparing to update the plan", "questions" to "Preparing questions",
+    "tools" to "Preparing tool calls",
+)
+
+internal fun preparingToolTitle(name: String, en: Boolean = false): String =
+    (if (en) PREPARE_LABEL_EN else PREPARE_LABEL).getValue(toolActivityKind(name))
+
 /**
  * Desktop `processTitle(summary, t)` — top three activity kinds, no counts.
  * zh: joinTwo = "{first}并{second}", sharedPrefix = "已", comma = "，", more = "{title}等".
@@ -222,15 +243,16 @@ fun rankedActivityKinds(tools: List<Item.Tool>): List<String> {
 private fun runningTool(tools: List<Item.Tool>): Item.Tool? {
     var latest: Item.Tool? = null
     for (tool in tools) {
-        if (tool.status != ToolStatus.Running && tool.status != ToolStatus.AwaitingApproval) continue
+        if (tool.status != ToolStatus.Preparing && tool.status != ToolStatus.Running && tool.status != ToolStatus.AwaitingApproval) continue
         if (latest == null || (tool.startedAt ?: Long.MIN_VALUE) >= (latest.startedAt ?: Long.MIN_VALUE)) latest = tool
     }
     return latest
 }
 fun liveProcessTitle(tools: List<Item.Tool>, reasoning: List<Item.Reasoning>, en: Boolean = false): String {
+    val tool = runningTool(tools)
+    if (tool?.status == ToolStatus.Preparing) return preparingToolTitle(tool.name, en)
     val dictionary = if (en) LIVE_LABEL_EN else LIVE_LABEL
-    val kind = runningTool(tools)?.let { toolActivityKind(it.name) } ?: "thinking"
-    return dictionary.getValue(kind)
+    return dictionary.getValue(tool?.let { toolActivityKind(it.name) } ?: "thinking")
 }
 
 private val detailWhitespace = Regex("\\s+")

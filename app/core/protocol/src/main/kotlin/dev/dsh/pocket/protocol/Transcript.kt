@@ -174,7 +174,7 @@ enum class CompactionStatus { Running, Ok, Error }
 /** One entry of the agent todo list (`todo/write` / projections.todos). */
 data class TodoItem(val content: String, val status: String)
 
-enum class ToolStatus { Running, AwaitingApproval, Ok, Error }
+enum class ToolStatus { Preparing, Running, AwaitingApproval, Ok, Error }
 
 /** Parsed desktop ToolSchema (`name` + `description` + object `parameters`). */
 data class ParsedToolSchema(
@@ -436,7 +436,16 @@ class TranscriptReducer {
     fun todos(): List<TodoItem> = todos
     val planMode: Boolean get() = planActive
 
-    fun items(): List<Item> = committed + (live?.takeIf { it.settlementSeq == null }?.items() ?: emptyList())
+    fun items(): List<Item> = buildList {
+        for (item in committed) {
+            if (item is Item.Tool && item.status == ToolStatus.Preparing &&
+                (streamSuppressed || turnFacts[item.turn]?.closed == true || (openTurn != null && item.turn != openTurn))) continue
+            add(item)
+        }
+        live?.takeIf { it.settlementSeq == null }?.items()?.forEach { item ->
+            if (item !is Item.Tool || item.callId !in toolIndex) add(item)
+        }
+    }
 
     fun queueMessages(): List<QueuedPrompt> {
         val host = inbox.getValue("next-turn").filterNot { message ->
@@ -854,6 +863,7 @@ class TranscriptReducer {
                             upsertTool(
                                 id, b["name"].str().orEmpty(), b["arguments"].str().orEmpty(), e["time"].long(),
                                 turn = ownerTurn, step = step,
+                                status = if (matching != null) ToolStatus.Preparing else ToolStatus.Running,
                             )
                         }
                     }
@@ -1332,6 +1342,7 @@ class TranscriptReducer {
         turn: Int? = null,
         step: Int? = null,
         parentCallId: String? = null,
+        status: ToolStatus = ToolStatus.Running,
     ) {
         val schema = name.takeIf { it.isNotEmpty() }?.let { toolsByName[it] }
         val i = toolIndex[id]
@@ -1341,6 +1352,8 @@ class TranscriptReducer {
             committed[i] = t.copy(
                 name = resolvedName,
                 arguments = args.ifEmpty { t.arguments },
+                status = if (t.status == ToolStatus.Preparing) status else t.status,
+                startedAt = if (t.status == ToolStatus.Preparing && status == ToolStatus.Running) time else t.startedAt,
                 schemaJson = schema ?: toolsByName[resolvedName] ?: t.schemaJson,
                 turn = turn ?: t.turn,
                 step = step ?: t.step,
@@ -1349,7 +1362,7 @@ class TranscriptReducer {
         } else {
             toolIndex[id] = committed.size
             committed += Item.Tool(
-                "k$id", id, name, args, ToolStatus.Running,
+                "k$id", id, name, args, status,
                 startedAt = time, schemaJson = schema, turn = turn, step = step,
                 parentCallId = parentCallId,
             )
@@ -1606,8 +1619,9 @@ private class LiveAttempt(
         val block = block(rec["index"].long()?.toInt() ?: 0, blockType)
         if (blockType == "reasoning") block.startedAt = block.startedAt ?: time else noteToken(time)
         if (blockType == "tool-call") {
-            block.toolId = rec["id"].str()
+            block.toolId = rec["id"].str() ?: block.toolId
             block.toolName = rec["name"].str() ?: block.toolName
+            if (!block.toolName.isNullOrBlank()) block.startedAt = block.startedAt ?: time
         }
         for (i in 0 until count) block.sb.append(members[i].str().orEmpty())
         return count
@@ -1624,7 +1638,11 @@ private class LiveAttempt(
             "reasoning-delta" -> block(idx, "reasoning").apply { startedAt = startedAt ?: time }.sb.append(c["text"].str().orEmpty())
             "tool-call-delta" -> {
                 noteToken(time)
-                block(idx, "tool-call").apply { toolId = c["id"].str() ?: toolId; toolName = c["name"].str() ?: toolName }.sb.append(c["argumentsDelta"].str().orEmpty())
+                block(idx, "tool-call").apply {
+                    toolId = c["id"].str() ?: toolId
+                    toolName = c["name"].str() ?: toolName
+                    if (!toolName.isNullOrBlank()) startedAt = startedAt ?: time
+                }.sb.append(c["argumentsDelta"].str().orEmpty())
             }
         }
     }
@@ -1635,12 +1653,12 @@ private class LiveAttempt(
 
     private fun block(i: Int, type: String) = blocks.getOrPut(i) { Block(type) }
 
-    fun items(): List<Item> = blocks.map { (i, b) ->
+    fun items(): List<Item> = blocks.mapNotNull { (i, b) ->
         when (b.type) {
             "reasoning" -> Item.Reasoning("live-$id-$i", b.sb.toString(), null, live = true, turn = turn, step = step)
-            "tool-call" -> Item.Tool(
-                "live-$id-$i", b.toolId ?: "", b.toolName ?: "…", b.sb.toString(), ToolStatus.Running,
-                turn = turn, step = step,
+            "tool-call" -> if (b.toolName.isNullOrBlank()) null else Item.Tool(
+                "live-$id-$i", b.toolId ?: "", b.toolName!!, b.sb.toString(), ToolStatus.Preparing,
+                startedAt = b.startedAt, turn = turn, step = step,
             )
             else -> Item.Text("live-$id-$i", b.sb.toString(), live = true, turn = turn, step = step)
         }
