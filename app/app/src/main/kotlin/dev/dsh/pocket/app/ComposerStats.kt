@@ -173,7 +173,8 @@ internal fun TurnUsageAction(turn: Int, usage: TurnTokenUsage) {
         contentAlignment = Alignment.Center,
     ) {
         Row(
-            modifier = Modifier.background(T.HoverBg, T.R8).padding(horizontal = 2.dp, vertical = 5.dp),
+            modifier = Modifier.background(if (expanded) T.HoverBg else Color.Transparent, T.R8)
+                .padding(horizontal = 2.dp, vertical = 5.dp),
             horizontalArrangement = Arrangement.spacedBy(2.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {

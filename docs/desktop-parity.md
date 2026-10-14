@@ -132,6 +132,8 @@ Turn usage follows the desktop token meter's durable attempt lifecycle, includin
 
 **Icon chrome (desktop MessageIconActions / MessageFeedbackActions):** Android uses the official ui-primitives Regular SVG paths. User messages show clock → copy, without a branch control. Assistant messages show copy → like/dislike → branch → optional usage → clock; copy/branch are 17dp and feedback icons 15dp, with tertiary `T.Text3` tint. Feedback selection swaps outline/fill rather than inventing blue/red colors. Icon controls occupy 36dp horizontally with no extra inter-button gap, retain a 48dp-high touch area, and leave 8dp before/after the clock; unavailable branch actions retain their disabled state and reason. Icon labels remain accessibility labels/tooltips. The usage pill shares the row's remaining width without pushing the clock off a narrow screen. No standalone “本轮用量” row is appended below answers; composer statistics and trajectory usage details remain available. Process/reasoning chevrons use vector artwork and rotate on expansion instead of text glyphs.
 
+The usage action is transparent at rest, like the adjacent shortcut icons. Its rounded background appears only while the details dialog is expanded; native press feedback remains enabled, and dismissing the dialog restores transparency.
+
 ### 1.9 Timestamps
 
 IconActions clock beside copy/branch (`formatMessageClock` + `clock.*`). Shown on hover/focus on desktop; on phone always-on action row (no hover).
