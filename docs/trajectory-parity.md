@@ -54,7 +54,9 @@ Thinking is **not** a kind — it is `thinkingDetail` on `message`.
 
 **Swimlane labels**: **输入 / 模型 / 工具** (`column.input` / `column.model` / `column.tools`).
 
-On phone-width panels, the ledger keeps kind/preview and elapsed time visible; token metrics stay in the detail inspector instead of squeezing the title. Panels at least 600dp wide additionally show the input/output/reasoning metric columns. The toolbar reflows its search field below the fold controls on narrow panels; action and ledger touch targets are at least 48dp. Swimlane selection checks both horizontal time and vertical lane, so overlapping model/tool durations select the touched record. Badge and span colors resolve the official light/dark aliases and sRGB color mixes rather than fixed light-only colors.
+The ledger follows the live desktop table, not its unused legacy metric cell: 30dp rows with kind/preview only, no success checkmarks, request text chips, or token/time columns. At widths up to 620dp the kind is a 19dp colored icon badge using the official SVG geometry; wider panels retain text badges. Request boundaries are small neutral dots with separate touch targets that open the Request inspector. Status, elapsed time, and tokens remain in the detail inspector. The 32dp toolbar keeps borderless 时长/轮次/调用 controls and a compact search field on one line. The overview always fits the available width; short/zero-duration spans have a 2dp minimum instead of becoming 8dp blocks, and recorded assistant timing uses the official TTFT/decoding split. Hit testing follows the painted lane, bar height, and horizontal gaps. Badge and span colors resolve official light/dark aliases and sRGB color mixes.
+
+Verification (2026-10-14): 26 trajectory regressions passed, including six compact-ledger interaction cases (tool detail, independent request dot, search, call/turn folding). Native rendering was inspected at 360dp/412dp and in dark mode; the release APK was updated in place and the real `ping` history was inspected on the connected OnePlus device.
 
 ### States (`stateOf`)
 
@@ -150,10 +152,10 @@ Desktop does **not** split kinds. All injections are `kind: 'context'`. Differen
 
 | Tab | Fields |
 |---|---|
-| 概述 | 层级→Request #N; 状态; Token (输出/推理/内容); Request Timing preview |
-| 预览 | Collapsible 思考 + rendered output + tool-call chips + images |
-| 原始内容 | Source blocks or thinking+output |
-| 计时 (panel) | 开始时间, 总时长, 首 token 延迟, 生成, 吞吐量 |
+| 概述 | 来源→Request #N; 状态; exact Token (输出/推理/内容), tool-call preview, then 请求计时; input usage stays in the Request inspector |
+| 预览 | Collapsible 思考 + rendered output + clickable calls belonging to this assistant |
+| 原始内容 | Unrendered thinking/output plus the same associated calls |
+| 请求计时 | Starts the corresponding Request inspector on its 计时 tab; assistant duration/TTFT/generation use milliseconds below 1s and seconds above it |
 
 Interrupted assistant → `isError` (失败), keeps partial text/thinking. No separate abort row.
 
@@ -164,7 +166,7 @@ Interrupted assistant → `isError` (失败), keeps partial text/thinking. No se
 | Field | Rule |
 |---|---|
 | Sources | Assistant tool-call blocks; `tool/call`+`tool/result`; PTC `tool/ptc-dispatch-start` / `tool/ptc-dispatch` → **subtool** |
-| Preview | `name · {argsRaw}`; `run_code` → `run_code · {description}` |
+| Preview | Ordinary tools show `name {argsRaw}` with muted full-argument preview (not the chat card's primary path/command); `run_code` keeps its description preview |
 | Result | Inline `→` + markdown preview / `图片 ×N` / `无输出`; errors red (`error.code` or `error`) |
 | Swimlane | Lane 2; warn amber (error → error-primary) |
 
@@ -293,14 +295,14 @@ Status column tracks Request inspector + load-earlier (this PR) on top of #36 ki
 |---|---|---|---|
 | G1 | 7 kinds including **已压缩** / **子工具** | Only 系统/上下文/用户/助手/工具 emitted | **Fixed** — `Item.Compacted` + PTC `parentCallId` → 子工具 |
 | G2 | System detail: 差异/系统提示词/工具 | 概述/原始内容 | **Fixed** — `trajDetailTabs` + previous/tools JSON |
-| G3 | Assistant: 概述/预览/原始内容 + TTFT panel | 概述/思考/原始内容/计时 | **Fixed** — Preview/Raw/Timing with TTFT/生成/吞吐量 |
+| G3 | Assistant: 概述/预览/原始内容 + request timing navigation | Extra assistant 计时 tab and missing tool-only preview | **Fixed** — compact tabs; tool-only calls visible and navigable; 请求计时 opens Request timing |
 | G4 | User/Context: +来源 tab | No Source tab / messageSource | **Fixed** — `messageSourceJson` forwarded |
 | G5 | Compacted: 概述/原始输出 | N/A | **Fixed** |
 | G6 | Tool `→` result; run_code Program | Title=`name arg`; generic JSON | **Fixed** — `·` / `→` + `CodeProgram` |
 | G7 | Interrupted → message **失败** | Invented 系统 Notice | **Fixed** — `StepRecord.interrupted`; no invented Notice |
-| G8 | Error glyph | Ledger ✓ when not running | **Fixed** — ✗ + Err color |
+| G8 | Error styling without success checkmarks | Ledger ✓ when not running | **Fixed** — no status glyph column; real errors remain colored in results/details |
 | G9 | Kind badges 已压缩/子工具 | Fallback muted | **Fixed** |
-| G10 | Request inspector | Schemas only | **Fixed** — `TrajectoryRequest` + boundary chip + sheet tabs 概述/选项/用量/计时; `request/header` config + `llm/retry` stamped on `StepRecord` |
+| G10 | Request inspector | Schemas only | **Fixed** — `TrajectoryRequest` + boundary dot + native end inspector tabs 概述/选项/用量/计时; `request/header` config + `llm/retry` stamped on `StepRecord` |
 | G11 | Locales from `locales.ts` | Scattered hard-coded ZH | **Fixed** — `TrajectoryLocales.kt` / `TrajL` |
 | G12 | Search haystack | Partial | **Fixed** — includes schema/source/tools |
 | G13 | `tool/ptc-dispatch*` / `compaction/*` | Ignored | **Fixed** — reducer consumes; plugin already forwards |
@@ -312,11 +314,14 @@ Status column tracks Request inspector + load-earlier (this PR) on top of #36 ki
 
 ---
 
-## 7. Phone adaptations (this PR)
+## 7. Native inspector presentation
 
-- Full-width ledger rows (keep)
-- Detail as Tokyo Night / Meslo **bottom sheet** with desktop tabs (extend)
-- Horizontally scrollable, **tappable** swimlane (keep; ensure all kinds colored)
+- Full-width ledger and fitted, tappable timeline overview.
+- Trajectory and Request details use a square, full-height end panel (up to 480dp), rather than a rounded bottom sheet.
+- Desktop chrome: 42dp single-line type/location/close header, 34dp compact tabs, separately scrolling body, 14dp content inset.
+- Overview uses a fixed 94dp label column with left-aligned values, and borderless sections whose headings navigate independently of preview content.
+- Assistant overview has no input-token row or standalone timing tab; exact unrounded token counts feed both summary and throughput.
+- Inspector verification: 31 trajectory regressions and two 360dp native-render smoke scenarios (light/dark) passed. Assistant tool previews navigate only to their own calls; 来源 opens the associated Request overview; 请求计时 opens Timing, and subsequently opening a boundary dot resets to Overview. Release APK updated on the connected OnePlus without clearing app data.
 - Plugin: follow frames already pass event types unchanged; reducer consumes newly needed fields — no secret truncation of trajectory fields beyond existing size caps
 
 ---

@@ -28,11 +28,15 @@ class TrajectoryHitTest {
     }
 
     @Test fun markersUseTheirPaintedWidthWithoutSelectingEmptySpace() {
-        assertEquals("point", hit(95f, 40f))
+        assertEquals("point", hit(91f, 40f))
+        assertNull(hit(95f, 40f))
         assertNull(hit(99f, 40f))
         assertNull(hit(95f, 25f))
         assertNull(hit(20f, 0f))
         assertNull(hit(20f, 50f))
         assertNull(hit(-1f, 10f))
+        assertNull(hit(20f, 18f))
+        assertNull(hit(10f, 10f))
+        assertNull(hit(80f, 10f))
     }
 }

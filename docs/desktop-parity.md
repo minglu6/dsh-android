@@ -3,7 +3,7 @@
 **Desktop source:** `deepseek-ai/deepseek-harness` @ `d743267` (0.2.1-alpha.2)  
 **Android baseline:** `main` @ `46f7570` (and later)  
 **Locale source of truth:** each `@deepseek-ai/dsh-client-ui-*` package’s `src/client/locales.ts` (zh key-set + en). Common words live in `packages/client/locale` (`copy`=`复制`, `copied`=`复制成功`, …).  
-**Trajectory:** skipped except shared primitives (another agent owns the 轨迹 tab audit).
+**Trajectory:** compact ledger, toolbar, icons, request markers and overview follow the live desktop UI; the detailed contract is in [trajectory-parity.md](trajectory-parity.md).
 
 Decision tags used in §9:
 
@@ -457,7 +457,7 @@ Source: harness `d743267` / `0.2.1-alpha.2` `@deepseek-ai/dsh-client-ui-primitiv
 | Tool sheet 「复制结果 / 复制参数」 | Desktop inspector uses code-card copy icons in-place | Full-width outlined text buttons | **Keep** — phone sheet primary actions stay labeled buttons (touch); not an IconActions row |
 | Connections Devices glyph | N/A (phone-only) | Material `Devices` | **Keep** — no matching ui-primitives glyph; phone-only surface |
 | Turn usage pill | Icon + usage text in detailed mode | Not on phone action row | **Hidden** — no separate turn-usage text row; composer statistics and trajectory usage details remain available |
-| Request chip / todo / trajectory detail tabs | Mostly text chrome or already icon+label | Aligned | OK |
+| Trajectory request boundary / kind | Neutral request dot and compact colored SVG badge | Request text chip, text kind, success check and time column | **Fixed** — compact live-ledger chrome; request and row inspectors remain independently accessible |
 
 **Drawables added this pass:** `dsh_branch`, `dsh_like`, `dsh_like_fill`, `dsh_dislike`, `dsh_dislike_fill`, `dsh_wrap`, `dsh_nowrap`, `dsh_wrap_lines` (JsonTree/optional). Wired on `D` in `DshIcons.kt`.
 
@@ -475,7 +475,7 @@ Every **output** text surface supports Compose `SelectionContainer` (helper `Sel
 | Notices / errors / approvals / questions / deliverables / changes | `SelectableOutput` on content |
 | Tool / file preview `CodeBox` | `SelectableOutput` |
 | Todo sheet items | `SelectableOutput` |
-| Trajectory ledger title / preview / metrics | `SelectableOutput` (tap still opens detail) |
+| Trajectory ledger title / preview | `SelectableOutput` (tap still opens detail); metrics remain in the inspector |
 | Trajectory + Request detail tabs / payloads | `SelectableOutput` on payloads & KV values |
 | Terminal (Canvas grid) | Long-press → selectable plain-text overlay (`AnsiTerminal.plainText()`); tap exits |
 

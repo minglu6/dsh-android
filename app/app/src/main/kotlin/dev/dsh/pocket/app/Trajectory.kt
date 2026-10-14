@@ -5,12 +5,10 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
-import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material3.CircularProgressIndicator
@@ -25,16 +23,21 @@ import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.dsh.pocket.protocol.CompactionStatus
@@ -94,6 +97,10 @@ data class TrajRow(
     val isError: Boolean = false,
     /** Extra haystack for the desktop search index (kind + title already searched). */
     val searchText: String = "",
+    /** Exact assistant usage and call identities, not rounded ledger labels. */
+    val outputTokens: Long? = null,
+    val reasoningTokens: Long? = null,
+    val toolCallIds: List<String> = emptyList(),
 )
 
 data class TrajTurn(val index: Int, val rows: List<TrajRow>)
@@ -155,6 +162,9 @@ private fun assistantRow(step: StepRecord): TrajRow {
         timeSeconds = elapsedMs?.let { it / 1000.0 },
         isError = step.interrupted,
         searchText = listOf(step.replyText, step.reasoningText, step.model, step.provider).joinToString("\n"),
+        outputTokens = step.usage.outputTokens,
+        reasoningTokens = step.usage.reasoningTokens,
+        toolCallIds = step.toolCallIds,
     )
 }
 
@@ -207,8 +217,8 @@ private fun toolRow(item: Item.Tool): TrajRow {
     val title = when {
         program != null -> "$PTC_TOOL_NAME · ${program.description.replace(Regex("\\s+"), " ")}"
         else -> {
-            val arg = primaryArg(item.name, item.arguments)?.take(48).orEmpty()
-            if (arg.isEmpty()) item.name else "${item.name} · $arg"
+            val args = trajectoryPreviewText(item.arguments)
+            if (args.isEmpty()) item.name else "${item.name} $args"
         }
     }
     val outputDetail = when {
@@ -496,6 +506,7 @@ fun TrajectoryView(st: ChatState) {
     var selected by remember { mutableStateOf<TrajRow?>(null) }
     var selectedTurn by remember { mutableIntStateOf(0) }
     var selectedRequest by remember { mutableStateOf<TrajectoryRequest?>(null) }
+    var requestTab by remember { mutableStateOf(TrajRequestTab.Overview) }
     var actualDuration by remember { mutableStateOf(false) }
     var turnsCollapsed by remember { mutableStateOf(false) }
     var callsCollapsed by remember { mutableStateOf(false) }
@@ -509,6 +520,7 @@ fun TrajectoryView(st: ChatState) {
 
     fun selectRow(row: TrajRow, turn: Int) {
         selectedRequest = null
+        requestTab = TrajRequestTab.Overview
         selected = row
         selectedTurn = turn
     }
@@ -539,7 +551,7 @@ fun TrajectoryView(st: ChatState) {
     }
 
     BoxWithConstraints(Modifier.fillMaxSize()) {
-        val showMetrics = maxWidth >= 600.dp
+        val compact = maxWidth <= 620.dp
         Column(Modifier.fillMaxSize()) {
         TrajectoryToolbar(
             actualDuration = actualDuration,
@@ -552,17 +564,9 @@ fun TrajectoryView(st: ChatState) {
             onSearchQueryChange = { searchQuery = it },
         )
         timeline?.let { model ->
-            SwimlaneChart(model, mode, selectedKey = selected?.key) { key ->
+            SwimlaneChart(model, selectedKey = selected?.key, rows = rowByKey) { key ->
                 rowByKey[key]?.let { (row, turn) -> selectRow(row, turn) }
             }
-        }
-        Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp), horizontalArrangement = Arrangement.End) {
-            if (showMetrics) {
-                Text(TrajL.columnInput, style = monoCap(), modifier = Modifier.width(44.dp))
-                Text(TrajL.columnOutput, style = monoCap(), modifier = Modifier.width(40.dp))
-                Text(TrajL.columnThink, style = monoCap(), modifier = Modifier.width(40.dp))
-            }
-            Text(TrajL.columnTime, style = monoCap(), modifier = Modifier.width(40.dp))
         }
         HorizontalDivider(color = T.Fill)
         LazyColumn(Modifier.weight(1f), state = listState) {
@@ -591,29 +595,32 @@ fun TrajectoryView(st: ChatState) {
                         !(callsCollapsed && (row.kind == TrajL.kindTool || row.kind == TrajL.kindSubtool))
                 }
                 if (searchMatches != null && visibleRows.isEmpty()) return@forEach
-                item(key = "turn-${turn.index}") {
-                    Text(
-                        TrajL.turnLabel(turn.index),
-                        fontSize = 12.sp,
-                        fontWeight = FontWeight.Medium,
-                        color = T.Text3,
-                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
-                    )
-                }
                 if (!turnsCollapsed) {
-                    itemsIndexed(visibleRows, key = { _, r -> r.key }) { _, row ->
+                    itemsIndexed(visibleRows, key = { _, r -> r.key }) { index, row ->
                         val boundary = boundaryByRow[row.key]
                         TrajRowView(
                             row = row,
                             hl = selected?.key == row.key,
                             requestBoundary = boundary,
                             requestSelected = selectedRequest != null && selectedRequest?.identity == boundary?.identity,
-                            showMetrics = showMetrics,
+                            compact = compact,
+                            turnStart = turn.index.takeIf { index == 0 },
                             onRequestClick = { req ->
                                 selected = null
+                                requestTab = TrajRequestTab.Overview
                                 selectedRequest = req
                             },
                             onClick = { selectRow(row, turn.index) },
+                        )
+                    }
+                } else {
+                    item(key = "turn-${turn.index}") {
+                        Text(
+                            TrajL.turnLabel(turn.index),
+                            fontSize = 12.sp,
+                            color = T.Text3,
+                            modifier = Modifier.fillMaxWidth().clickable { turnsCollapsed = false }
+                                .padding(horizontal = 12.dp, vertical = 8.dp),
                         )
                     }
                 }
@@ -622,20 +629,36 @@ fun TrajectoryView(st: ChatState) {
         }
     }
     selected?.let { row ->
+        val toolCalls = remember(row.toolCallIds, rowByKey) {
+            val ids = row.toolCallIds.toSet()
+            rowByKey.values.mapNotNull { (candidate, _) ->
+                candidate.takeIf { (it.detail as? Item.Tool)?.callId in ids }
+            }
+        }
         TrajectoryDetailSheet(
             row = row,
             turnIndex = selectedTurn,
             parentRequest = requestForRow(row, requests),
             onOpenRequest = { req ->
                 selected = null
+                requestTab = TrajRequestTab.Overview
                 selectedRequest = req
             },
+            onOpenRequestTiming = { req ->
+                selected = null
+                requestTab = TrajRequestTab.Timing
+                selectedRequest = req
+            },
+            toolCalls = toolCalls,
+            onOpenTool = { call -> rowByKey[call.key]?.let { (tool, turn) -> selectRow(tool, turn) } },
             onDismiss = { selected = null },
         )
     }
     selectedRequest?.let { req ->
         TrajectoryRequestSheet(
             request = req,
+            initialTab = requestTab,
+            assistantRow = req.resultKey?.let { rowByKey[it]?.first }?.takeIf { it.kind == TrajL.kindAssistant },
             onOpenResult = { key ->
                 rowByKey[key]?.let { (row, turn) -> selectRow(row, turn) }
             },
@@ -683,9 +706,9 @@ private fun TrajectoryToolbar(
     onSearchQueryChange: (String) -> Unit,
 ) {
     val actions: @Composable () -> Unit = {
-        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(2.dp)) {
             ToolbarChip(actualDuration, TrajL.toolbarDuration, onClick = { onActualDurationChange(!actualDuration) }) {
-                Icon(D.clock, null, Modifier.size(14.dp), tint = T.Text2)
+                Icon(D.trajectoryClock, null, Modifier.size(12.dp), tint = if (actualDuration) T.Ink else T.Text3)
             }
             ToolbarChip(turnsCollapsed, TrajL.toolbarTurns, onToggleTurns) {
                 Text(if (turnsCollapsed) "⊞" else "⊟", fontSize = 14.sp, color = T.Text2)
@@ -697,61 +720,57 @@ private fun TrajectoryToolbar(
     }
     val search: @Composable (Modifier) -> Unit = { modifier ->
         Row(
-            modifier.heightIn(min = 48.dp)
-                .background(T.Fill2, T.R8)
-                .border(1.dp, T.Border, T.R8)
-                .padding(horizontal = 10.dp),
+            modifier.height(24.dp)
+                .background(T.Surface, T.R8)
+                .border(0.5.dp, T.Border, T.R8)
+                .padding(horizontal = 6.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Icon(D.search, null, tint = T.Caption, modifier = Modifier.size(14.dp))
-            Spacer(Modifier.width(6.dp))
+            Icon(D.search, null, tint = T.Caption, modifier = Modifier.size(11.dp))
+            Spacer(Modifier.width(4.dp))
             BasicTextField(
                 value = searchQuery,
                 onValueChange = onSearchQueryChange,
                 singleLine = true,
-                textStyle = T.Mono.copy(fontSize = 13.sp),
+                textStyle = TextStyle(fontSize = 12.sp, color = T.Ink),
                 cursorBrush = SolidColor(T.Accent),
                 modifier = Modifier.weight(1f).semantics { contentDescription = TrajL.toolbarSearch },
                 decorationBox = { field ->
-                    if (searchQuery.isEmpty()) Text(TrajL.toolbarSearchPlaceholder, fontSize = 13.sp, color = T.Caption)
+                    if (searchQuery.isEmpty()) Text(TrajL.toolbarSearchPlaceholder, fontSize = 12.sp, color = T.Caption)
                     field()
                 },
             )
         }
     }
-    BoxWithConstraints(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp)) {
-        if (maxWidth < 440.dp) {
-            Column {
-                actions()
-                search(Modifier.fillMaxWidth())
-                Spacer(Modifier.height(4.dp))
-            }
-        } else {
-            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                actions()
-                search(Modifier.weight(1f))
-            }
+    Row(
+        Modifier.fillMaxWidth().height(32.dp).padding(horizontal = 6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        actions()
+        Box(Modifier.weight(1f), contentAlignment = Alignment.CenterEnd) {
+            search(Modifier.widthIn(max = 176.dp).fillMaxWidth())
         }
     }
+    HorizontalDivider(thickness = 0.5.dp, color = T.Border)
 }
 
 @Composable
 private fun ToolbarChip(pressed: Boolean, label: String, onClick: () -> Unit, icon: @Composable () -> Unit) {
     Box(
-        Modifier.heightIn(min = 48.dp)
+        Modifier.height(32.dp)
             .semantics { selected = pressed }
             .clickable(role = Role.Button, onClick = onClick),
         contentAlignment = Alignment.Center,
     ) {
         Row(
-            Modifier.border(1.dp, T.Border, T.R8)
-                .background(if (pressed) T.Fill else Color.Transparent, T.R8)
-                .padding(horizontal = 10.dp, vertical = 6.dp),
+            Modifier.background(if (pressed) T.Fill else Color.Transparent, RoundedCornerShape(4.dp))
+                .padding(horizontal = 5.dp, vertical = 2.dp),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(5.dp),
+            horizontalArrangement = Arrangement.spacedBy(4.dp),
         ) {
             icon()
-            Text(label, fontSize = 12.sp, color = if (pressed) T.Ink else T.Text2)
+            Text(label, fontSize = 12.sp, color = if (pressed) T.Ink else T.Text3, maxLines = 1)
         }
     }
 }
@@ -763,20 +782,21 @@ internal fun trajectorySpanAt(
     y: Float,
     width: Float,
     minSpanWidth: Float,
-    pointWidth: Float,
+    barHeight: Float,
     topPadding: Float,
     laneHeight: Float,
 ): String? {
     if (x < 0f || x > width || y < topPadding || laneHeight <= 0f) return null
     val lane = ((y - topPadding) / laneHeight).toInt()
-    if (lane !in 0..2) return null
+    if (lane !in 0..2 || y - topPadding - lane * laneHeight > barHeight) return null
     val domain = (model.end - model.start).takeIf { it > 0 } ?: 1.0
     for (index in model.spans.lastIndex downTo 0) {
         val span = model.spans[index]
         if (span.lane != lane) continue
-        val left = ((span.start - model.start) / domain * width).toFloat()
         val rawWidth = ((span.end - span.start) / domain * width).toFloat()
-        val spanWidth = if (span.end <= span.start || rawWidth < minSpanWidth) pointWidth else rawWidth
+        val gap = minOf(rawWidth * 0.08f, minSpanWidth / 2)
+        val left = ((span.start - model.start) / domain * width).toFloat() + gap
+        val spanWidth = maxOf(rawWidth - gap * 2, minSpanWidth)
         if (x in left..(left + spanWidth)) return span.key
     }
     return null
@@ -786,51 +806,43 @@ internal fun trajectorySpanAt(
 @Composable
 private fun SwimlaneChart(
     model: TrajectoryTimelineModel,
-    mode: TrajectoryTimelineMode,
+    rows: Map<String, Pair<TrajRow, Int>>,
     selectedKey: String? = null,
     onSpanClick: (String) -> Unit = {},
 ) {
     val domain = (model.end - model.start).takeIf { it > 0 } ?: 1.0
     val density = LocalDensity.current
     val minSpanPx = with(density) { 2.dp.toPx() }
-    val equalSpanPx = with(density) { 8.dp.toPx() }
     val labelWidth = 44.dp
     val plotHeight = 50.dp
-    val scroll = rememberScrollState()
-    // Fit phone width; allow horizontal scroll when many equal-width slots would be too cramped.
-    val minContentWidth: Dp = if (mode == TrajectoryTimelineMode.Sequence && model.spans.size > 12) {
-        (model.spans.size * 14).dp
-    } else {
-        0.dp
-    }
 
     Row(
         Modifier.fillMaxWidth().height(plotHeight)
-            .background(T.Fill2)
-            .border(width = 0.5.dp, color = T.Border),
+            .background(T.Surface),
     ) {
         Column(
-            Modifier.width(labelWidth).fillMaxHeight().padding(end = 3.dp),
-            verticalArrangement = Arrangement.SpaceEvenly,
+            Modifier.width(labelWidth).fillMaxHeight().padding(top = 4.dp, end = 3.dp),
+            verticalArrangement = Arrangement.Top,
             horizontalAlignment = Alignment.End,
         ) {
             listOf(TrajL.columnInput, TrajL.columnModel, TrajL.columnTools).forEach { label ->
-                Text(label, fontSize = 10.sp, color = T.Caption, lineHeight = 10.sp)
+                Box(Modifier.height(14.dp), contentAlignment = Alignment.CenterEnd) {
+                    Text(label, fontSize = 10.sp, color = T.Caption, lineHeight = 10.sp)
+                }
             }
         }
         BoxWithConstraints(Modifier.weight(1f).fillMaxHeight()) {
-            val plotWidth = maxOf(minContentWidth, maxWidth)
-            val widthPxTarget = with(density) { plotWidth.toPx() }
-            Box(Modifier.fillMaxHeight().horizontalScroll(scroll)) {
+            val widthPxTarget = with(density) { maxWidth.toPx() }
+            Box(Modifier.fillMaxSize()) {
                 Canvas(
                     Modifier
-                        .width(plotWidth)
+                        .fillMaxWidth()
                         .fillMaxHeight()
-                        .pointerInput(model, mode, widthPxTarget, selectedKey) {
+                        .pointerInput(model, widthPxTarget, selectedKey) {
                             detectTapGestures { offset ->
                                 trajectorySpanAt(
                                     model, offset.x, offset.y, size.width.toFloat(),
-                                    minSpanPx, equalSpanPx, 7.dp.toPx(), 14.dp.toPx(),
+                                    minSpanPx, 8.dp.toPx(), 7.dp.toPx(), 14.dp.toPx(),
                                 )?.let(onSpanClick)
                             }
                         },
@@ -847,16 +859,26 @@ private fun SwimlaneChart(
                     for (span in model.spans) {
                         val left = ((span.start - model.start) / domain * widthPx).toFloat()
                         val rawW = ((span.end - span.start) / domain * widthPx).toFloat()
-                        val point = span.end <= span.start || rawW < minSpanPx
-                        val w = when {
-                            point -> equalSpanPx
-                            else -> maxOf(rawW, minSpanPx)
-                        }
-                        val gap = minOf(w * 0.08f, 1.dp.toPx())
+                        val w = maxOf(rawW, minSpanPx)
+                        val gap = minOf(rawW * 0.08f, 1.dp.toPx())
                         val top = topPad + span.lane * laneH
                         val selected = selectedKey != null && span.key == selectedKey
+                        val color = spanColor(span.kind, span.isError)
+                        val row = rows[span.key]?.first
+                        val firstToken = row?.firstTokenTime
+                        val start = row?.startedAt
+                        val duration = row?.timeSeconds
+                        val ttft = if (!span.isError && span.kind == "message" && firstToken != null &&
+                            start != null && duration != null && duration > 0
+                        ) ((firstToken - start) / (duration * 1000)).toFloat().coerceIn(0f, 1f) else null
+                        val brush = if (ttft == null) SolidColor(color) else Brush.horizontalGradient(
+                            0f to trajectoryColorMix(color, ThemeState.colors.BgLayer2, 0.54f),
+                            ttft to trajectoryColorMix(color, ThemeState.colors.BgLayer2, 0.54f),
+                            ttft to color, 1f to color,
+                            startX = left + gap, endX = left + gap + maxOf(w - gap * 2, minSpanPx),
+                        )
                         drawRoundRect(
-                            color = spanColor(span.kind, span.isError),
+                            brush = brush,
                             topLeft = Offset(left + gap, top),
                             size = Size(maxOf(w - gap * 2, minSpanPx), barH),
                             cornerRadius = CornerRadius(1.dp.toPx(), 1.dp.toPx()),
@@ -884,7 +906,7 @@ private fun SwimlaneChart(
 }
 
 /** CSS color-mix(in srgb), not Compose's perceptual-space lerp. */
-private fun trajectoryColorMix(first: Color, second: Color, firstWeight: Float): Color {
+internal fun trajectoryColorMix(first: Color, second: Color, firstWeight: Float): Color {
     val secondWeight = 1f - firstWeight
     return Color(
         first.red * firstWeight + second.red * secondWeight,
@@ -915,85 +937,93 @@ private fun TrajRowView(
     requestSelected: Boolean = false,
     onRequestClick: (TrajectoryRequest) -> Unit = {},
     onClick: () -> Unit,
-    showMetrics: Boolean = true,
+    compact: Boolean,
+    turnStart: Int? = null,
 ) {
-    val statusGlyph = when {
-        row.running -> "◌"
-        row.isError -> "✗"
-        else -> "✓"
-    }
-    val statusColor = when {
-        row.running -> T.Accent
-        row.isError -> T.Err
-        else -> T.Ok
-    }
-    Row(
-        Modifier.fillMaxWidth()
-            .heightIn(min = 48.dp)
-            .background(if (hl || requestSelected) T.Tint.copy(alpha = 0.45f) else Color.Transparent)
-            .then(if (hl || requestSelected) Modifier.drawSelectedBar() else Modifier)
-            .clickable(onClick = onClick)
-            .padding(start = (12 + row.depth * 14).dp, end = 12.dp, top = 7.dp, bottom = 7.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Text(statusGlyph, fontSize = 12.sp, color = statusColor, modifier = Modifier.width(14.dp))
-        if (requestBoundary != null) {
-            // Desktop request-boundary control → phone chip opening Request inspector.
-            Text(
-                TrajL.requestLabel(requestBoundary.number),
-                fontSize = 10.sp,
-                fontWeight = FontWeight.SemiBold,
-                color = if (requestSelected) T.Ink else T.Accent,
-                maxLines = 1,
-                modifier = Modifier
-                    .background(if (requestSelected) T.Fill else T.Tint, RoundedCornerShape(3.dp))
-                    .clickable { onRequestClick(requestBoundary) }
-                    .padding(horizontal = 5.dp, vertical = 2.dp),
-            )
-            Spacer(Modifier.width(4.dp))
+    val isTool = row.kind == TrajL.kindTool || row.kind == TrajL.kindSubtool
+    val title = remember(row.title, row.toolName, row.toolCallOnly, T.Text2) {
+        buildAnnotatedString {
+            val name = row.toolName
+            if (isTool && name != null) {
+                append(name)
+                val args = if (name == PTC_TOOL_NAME) row.title.substringAfter(" · ", "")
+                    else row.title.removePrefix(name).trimStart()
+                if (args.isNotEmpty()) withStyle(SpanStyle(color = T.Text2)) {
+                    append(" ")
+                    append(args)
+                }
+            } else {
+                append(if (row.toolCallOnly) TrajL.recordToolCallOnly else row.title)
+            }
         }
-        KindBadge(row.kind)
-        Spacer(Modifier.width(6.dp))
-        // Long-press selects title/preview/metrics; short tap still opens the detail sheet.
-        Box(Modifier.weight(1f)) {
-            SelectableOutput {
-                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                    Text(
-                        if (row.toolCallOnly) TrajL.recordToolCallOnly else row.title,
-                        style = T.Mono.copy(
-                            fontSize = 13.sp,
-                            color = if (row.toolCallOnly) T.Caption else T.Ink,
-                        ),
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.weight(1f, fill = false),
-                    )
-                    row.resultPreview?.let { preview ->
-                        Text(" → ", style = T.Mono.copy(fontSize = 12.sp, color = T.Caption))
+    }
+    Box(
+        Modifier.fillMaxWidth().height(30.dp)
+            .testTag("trajectory-row-${row.key}")
+            .background(if (hl || requestSelected) T.Fill else Color.Transparent)
+            .then(if (hl || requestSelected) Modifier.drawSelectedBar() else Modifier)
+            .clickable(onClick = onClick),
+    ) {
+        Row(
+            Modifier.fillMaxSize().padding(
+                start = (if (compact) 28 else 36).dp,
+                end = 8.dp,
+            ),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            if (row.kind == TrajL.kindSubtool) Spacer(Modifier.width(14.dp))
+            KindBadge(row.kind, compact)
+            Spacer(Modifier.width(7.dp))
+            Box(Modifier.weight(1f)) {
+                SelectableOutput {
+                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                         Text(
-                            preview,
-                            style = T.Mono.copy(fontSize = 12.sp, color = if (row.isError) T.Err else T.Text2),
+                            title,
+                            style = (if (isTool) T.Mono else TextStyle.Default).copy(
+                                fontSize = 12.sp,
+                                color = if (row.toolCallOnly) T.Text3 else T.Ink,
+                            ),
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
                             modifier = Modifier.weight(1f, fill = false),
                         )
+                        row.resultPreview?.let { preview ->
+                            Text(" → ", style = T.Mono.copy(fontSize = 12.sp, color = T.Caption))
+                            Text(
+                                preview,
+                                style = T.Mono.copy(fontSize = 12.sp, color = if (row.isError) T.Err else T.Text2),
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.weight(1f, fill = false),
+                            )
+                        }
                     }
                 }
             }
         }
-        Spacer(Modifier.width(8.dp))
-        SelectableOutput {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                if (showMetrics) {
-                    Text(row.input, style = monoCap(), modifier = Modifier.width(44.dp), maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    Text(row.output, style = monoCap(), modifier = Modifier.width(40.dp), maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    Text(row.think, style = monoCap(), modifier = Modifier.width(40.dp), maxLines = 1, overflow = TextOverflow.Ellipsis)
-                }
-                Text(row.time, style = monoCap(), modifier = Modifier.width(40.dp), maxLines = 1, overflow = TextOverflow.Ellipsis)
+        if (requestBoundary != null) {
+            // Desktop's boundary marker, with a separate touch target for the Request inspector.
+            Canvas(
+                Modifier.width(24.dp).fillMaxHeight()
+                    .semantics { contentDescription = TrajL.requestLabel(requestBoundary.number) }
+                    .clickable(role = Role.Button) { onRequestClick(requestBoundary) },
+            ) {
+                drawCircle(
+                    color = if (requestSelected) T.Accent else if (row.isError) T.Err else T.Caption,
+                    radius = 2.5.dp.toPx(),
+                    center = Offset(12.dp.toPx(), 3.dp.toPx()),
+                )
             }
         }
+        turnStart?.let { turn ->
+            Text(
+                if (compact) "$turn" else TrajL.turnLabel(turn),
+                fontSize = 8.sp, lineHeight = 10.sp, color = T.Text3,
+                modifier = Modifier.align(Alignment.TopStart).background(T.Fill).padding(horizontal = 3.dp),
+            )
+        }
+        HorizontalDivider(Modifier.align(Alignment.BottomCenter), thickness = 0.5.dp, color = T.Fill)
     }
-    HorizontalDivider(color = T.Fill.copy(alpha = 0.8f))
 }
 
 /** Desktop selection: thick accent bar on the left edge of the highlighted ledger row. */
@@ -1004,7 +1034,7 @@ private fun Modifier.drawSelectedBar(): Modifier = this.then(
 )
 
 @Composable
-private fun KindBadge(kind: String) {
+private fun KindBadge(kind: String, compact: Boolean) {
     val colors = ThemeState.colors
     val (fg, bg) = remember(kind, colors) {
         when (kind) {
@@ -1019,32 +1049,24 @@ private fun KindBadge(kind: String) {
             else -> colors.LabelTertiary to colors.BgModulePlatform
         }
     }
-    Text(
-        kind,
-        fontSize = 10.sp,
-        fontWeight = FontWeight.SemiBold,
-        color = fg,
-        maxLines = 1,
-        modifier = Modifier
-            .background(bg, RoundedCornerShape(3.dp))
-            .padding(horizontal = 5.dp, vertical = 2.dp),
-    )
+    Box(
+        Modifier.height(19.dp)
+            .then(if (compact) Modifier.width(19.dp) else Modifier.width(44.dp))
+            .background(bg, RoundedCornerShape(3.dp)),
+        contentAlignment = Alignment.Center,
+    ) {
+        if (compact) {
+            val icon = when (kind) {
+                TrajL.kindUser -> D.user
+                TrajL.kindContext -> D.trajectoryContext
+                TrajL.kindAssistant -> D.sparkle
+                TrajL.kindTool, TrajL.kindSubtool -> D.trajectoryTool
+                TrajL.kindCompacted -> D.trajectoryCompacted
+                else -> D.trajectorySettings
+            }
+            Icon(icon, kind, Modifier.size(if (kind == TrajL.kindContext) 14.dp else 13.dp), tint = fg)
+        } else {
+            Text(kind, fontSize = 10.sp, fontWeight = FontWeight.SemiBold, color = fg, maxLines = 1)
+        }
+    }
 }
-
-@Composable
-private fun Seg(on: Boolean, label: String, onClick: () -> Unit) {
-    Text(
-        label,
-        fontSize = 12.sp,
-        color = if (on) T.Ink else T.Text2,
-        modifier = Modifier
-            .background(T.Fill, RoundedCornerShape(10.dp))
-            .padding(3.dp)
-            .background(if (on) T.Surface else Color.Transparent, RoundedCornerShape(8.dp))
-            .clickable(onClick = onClick)
-            .padding(horizontal = 10.dp, vertical = 4.dp),
-    )
-}
-
-@Composable
-private fun monoCap() = T.Mono.copy(fontSize = 11.sp, color = T.Caption)

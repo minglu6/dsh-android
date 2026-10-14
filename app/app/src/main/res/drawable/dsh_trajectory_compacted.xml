@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- From deepseek-harness ui-trajectory TrajectoryTable CompactedIcon. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android" android:width="13dp" android:height="13dp" android:viewportWidth="16" android:viewportHeight="16">
+  <path android:pathData="m2.5 2.5 3.75 3.75M3 6.25h3.25V3" android:strokeColor="#FF000000" android:strokeWidth="1.5" android:strokeLineCap="round" android:strokeLineJoin="round" />
+  <path android:pathData="m13.5 2.5-3.75 3.75M13 6.25H9.75V3" android:strokeColor="#FF000000" android:strokeWidth="1.5" android:strokeLineCap="round" android:strokeLineJoin="round" />
+  <path android:pathData="m2.5 13.5 3.75-3.75M3 9.75h3.25V13" android:strokeColor="#FF000000" android:strokeWidth="1.5" android:strokeLineCap="round" android:strokeLineJoin="round" />
+  <path android:pathData="m13.5 13.5-3.75-3.75M13 9.75H9.75V13" android:strokeColor="#FF000000" android:strokeWidth="1.5" android:strokeLineCap="round" android:strokeLineJoin="round" />
+</vector>

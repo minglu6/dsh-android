@@ -36,6 +36,12 @@ object D {
     /** Sidebar Plugins panel glyph (ui-plugin-manager PluginsPanelIcon). */
     val pluginPinwheel @Composable get() = v(R.drawable.dsh_plugin_pinwheel)
     val clock @Composable get() = v(R.drawable.dsh_clock)
+    /** TrajectoryTable and TrajectoryToolbar use their own official glyph geometry. */
+    val trajectoryTool @Composable get() = v(R.drawable.dsh_trajectory_tool)
+    val trajectoryContext @Composable get() = v(R.drawable.dsh_trajectory_context)
+    val trajectoryCompacted @Composable get() = v(R.drawable.dsh_trajectory_compacted)
+    val trajectoryClock @Composable get() = v(R.drawable.dsh_trajectory_clock)
+    val trajectorySettings @Composable get() = v(R.drawable.dsh_trajectory_settings)
     /** WorkspaceBrowser view-options (IconSlidersTwoOutlineRegular). */
     val sliders @Composable get() = v(R.drawable.dsh_sliders_two)
     /** WorkspaceBrowser add-workspace (IconProjectAddOutlineRegular). */

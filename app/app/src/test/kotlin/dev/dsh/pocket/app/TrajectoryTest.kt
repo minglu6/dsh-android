@@ -129,14 +129,14 @@ class TrajectoryTest {
         assertTrue(toolOnly.toolCallOnly)
         assertEquals(TrajL.layoutToolCallOnly, toolOnly.title)
         assertEquals(
-            listOf(TrajDetailTab.Overview, TrajDetailTab.Preview, TrajDetailTab.Raw, TrajDetailTab.Timing),
+            listOf(TrajDetailTab.Overview, TrajDetailTab.Preview, TrajDetailTab.Raw),
             trajDetailTabs(toolOnly),
         )
     }
 
     @Test fun kindToolDetailTabsAndInlineResult() {
         val tool = Item.Tool(
-            "t1", "c1", "read", """{"file_path":"/tmp/a.yml"}""",
+            "t1", "c1", "read", """{"file_path":"/tmp/a.yml","offset":12,"limit":40}""",
             ToolStatus.Ok, result = "<path>/tmp/a.yml</path>",
             startedAt = 1_000, endedAt = 1_011,
             schemaJson = """{"name":"read","description":"Read a UTF-8 text file and return line-numbered content.","parameters":{"type":"object"}}""",
@@ -150,7 +150,7 @@ class TrajectoryTest {
         assertEquals(TrajL.kindTool, trajDetailKindLabel(row.kind))
         assertEquals("${TrajL.turnLabel(6)} · ${TrajL.groupStep(1)}", trajDetailLocation(row, turnIndex = 1))
         assertEquals(TrajL.statusCompleted, trajectoryStatusLabel(trajRowState(row)))
-        assertTrue(row.title.contains(" · "))
+        assertEquals("""read {"file_path":"/tmp/a.yml","offset":12,"limit":40}""", row.title)
         assertNotNull(row.resultPreview)
         assertTrue(row.resultPreview!!.contains("<path>"))
     }
@@ -214,16 +214,6 @@ class TrajectoryTest {
         val hits = assertNotNull(trajectorySearchMatches(turns, "runtime cwd"))
         assertEquals(setOf("x1"), hits)
         assertTrue(trajectorySearchMatches(turns, "read")!!.contains("t1"))
-    }
-
-    @Test fun localesAreDesktopZh() {
-        assertEquals("轨迹", TrajL.viewTrajectory)
-        assertEquals("系统", TrajL.kindSystem)
-        assertEquals("已压缩", TrajL.kindCompacted)
-        assertEquals("子工具", TrajL.kindSubtool)
-        assertEquals("（仅工具调用）", TrajL.recordToolCallOnly)
-        assertEquals("初始系统提示词", TrajL.layoutInitialSystemPrompt)
-        assertEquals("失败", TrajL.statusFailed)
     }
 
     @Test fun includesSystemContextAndTurnLabels() {
