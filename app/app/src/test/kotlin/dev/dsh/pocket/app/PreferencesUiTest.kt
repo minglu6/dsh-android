@@ -16,7 +16,9 @@ import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
 import org.robolectric.annotation.Config
+import dev.dsh.pocket.protocol.jsonOf
 import org.robolectric.annotation.GraphicsMode
+import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 
 @RunWith(RobolectricTestRunner::class)
@@ -58,7 +60,7 @@ class PreferencesUiTest {
         rule.runOnIdle { assertTrue(renderedBackground.luminance() > 0.8f, "Selecting Light must repaint without navigation") }
     }
 
-    @Test fun desktopChangeUpdatesThemeTokensWithoutRemounting() {
+    @Test fun hostThemeEventDoesNotOverrideLocalAppearance() {
         var renderedToken = Color.Unspecified
         rule.setContent {
             PocketTheme {
@@ -67,10 +69,14 @@ class PreferencesUiTest {
                 GeneralSettingsScreen {}
             }
         }
+        rule.runOnIdle { assertTrue(renderedToken.luminance() > 0.8f) }
         rule.runOnIdle {
-            host.desktopSet(SharedSetting.Appearance, kotlinx.serialization.json.JsonPrimitive("dark"))
+            host.desktopReplace("ui-theme", jsonOf("preference" to "dark", "fontSize" to 22))
         }
-        rule.runOnIdle { assertTrue(renderedToken.luminance() < 0.1f) }
+        rule.runOnIdle {
+            assertTrue(renderedToken.luminance() > 0.8f, "Host ui-theme must not repaint the phone theme")
+            assertEquals(Appearance.Light, Pocket.prefs.appearance)
+        }
     }
 
     @Test fun failedSettingsReadCanBeRetriedWithoutReopeningThePage() {

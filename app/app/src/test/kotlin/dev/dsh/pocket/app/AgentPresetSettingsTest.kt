@@ -342,14 +342,19 @@ class AgentPresetSettingsTest {
     @Test
     @Config(sdk = [34], qualifiers = "w900dp-h1000dp-xhdpi")
     fun wideDarkScreenUsesTwoColumnsWithIndependentActions() {
-        preferences.desktopSet(SharedSetting.Appearance, JsonPrimitive("dark"))
-        mount()
-        val first = rule.onNodeWithTag("preset-select-standard").fetchSemanticsNode().boundsInRoot
-        val second = rule.onNodeWithTag("preset-select-ptc").fetchSemanticsNode().boundsInRoot
-        assertEquals(first.top, second.top)
-        assertTrue(second.left > first.right)
-        rule.onNodeWithTag("preset-view-ptc").performClick()
-        rule.onNodeWithTag("preset-configuration-dialog").assertExists()
-        assertTrue(writes().isEmpty())
+        val previousAppearance = Pocket.prefs.appearance
+        Pocket.prefs.appearance = Appearance.Dark
+        try {
+            mount()
+            val first = rule.onNodeWithTag("preset-select-standard").fetchSemanticsNode().boundsInRoot
+            val second = rule.onNodeWithTag("preset-select-ptc").fetchSemanticsNode().boundsInRoot
+            assertEquals(first.top, second.top)
+            assertTrue(second.left > first.right)
+            rule.onNodeWithTag("preset-view-ptc").performClick()
+            rule.onNodeWithTag("preset-configuration-dialog").assertExists()
+            assertTrue(writes().isEmpty())
+        } finally {
+            Pocket.prefs.appearance = previousAppearance
+        }
     }
 }

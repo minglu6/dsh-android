@@ -10,7 +10,6 @@ internal class HostSettingsFixture(private val settings: HostSettings) {
     init {
         SharedSetting.entries.forEach { values[it.namespace] = JsonObject(emptyMap()) }
         values["locale"] = jsonOf("preference" to "zh")
-        values["ui-theme"] = jsonOf("preference" to "light")
         settings.bind(::describe, ::mutate)
     }
     fun describe(): JsonElement = buildJsonObject {
@@ -30,6 +29,13 @@ internal class HostSettingsFixture(private val settings: HostSettings) {
     }
     fun desktopSet(setting: SharedSetting, value: JsonElement) {
         mutate(setting.namespace, buildJsonArray { add(jsonOf("op" to "set", "path" to listOf(setting.field), "value" to value)) }, revisions[setting.namespace] ?: 0)
+        settings.refresh()
+    }
+
+    /** Inject a Host namespace that is not a phone-mirrored [SharedSetting], then refresh. */
+    fun desktopReplace(ns: String, value: JsonObject) {
+        values[ns] = value
+        revisions[ns] = (revisions[ns] ?: 0) + 1
         settings.refresh()
     }
 }
