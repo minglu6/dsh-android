@@ -54,6 +54,12 @@ Inline code preserves its full literal text and is not promoted to a file chip b
 
 Paragraphs use one native text layout across emphasis, links and inline chips. Bold labels and their following punctuation/body share the same line; code and explicit file links retain their inline appearance and interaction. Quotes draw their rule without intrinsic measurement so nested rich text remains supported.
 
+Long inline-code chips use the same explicit typography for measurement and drawing, with the desktop inline-code background, L1 hairline and 8dp radius. A chip that wraps at the available width receives its own paragraph-height range: Compose's fixed body line height must not make a tall placeholder overlap preceding or following prose. Short chips remain inline. The desktop CSS also wraps the reported `403 {"code":"105","message":"Login expired"}` example at phone width; keeping it on one line is not the parity target.
+
+Unordered-list markers are drawn discs rather than OEM font bullet glyphs. Their diameter scales with body text, their secondary-label color follows the theme, and their optical center follows the first text baseline rather than the height of a wrapped item. Native rendering regressions check code-slot clearance and marker pixels at normal/enlarged text sizes.
+
+OnePlus captures for the reported code/list examples: [light](screenshots/markdown-code-markers-light-14.png), [dark](screenshots/markdown-code-markers-dark-14.png), [enlarged text](screenshots/markdown-code-markers-light-22.png). The instrumented fixture binds a read-only `ui-theme.preference` and verifies the captured background; setting an offline Host-backed preference alone does not prove dark-mode coverage.
+
 Inline file links use the surrounding paragraph's font and line height for both placeholder measurement and native text drawing. They render without a pill background, with the official medium code-bracket glyph rather than a textual `</>` approximation; standalone file cards keep their existing styling. Light/dark, enlarged-text and file-opening regressions cover the `httpErrorCode` example, with a native-device check for text extending beyond its visible inline bounds.
 
 The installed release was also checked in the original OnePlus `ping` conversation: `httpErrorCode` and `adapter.ts:128` render fully, without rerunning the prompt or changing its recorded response.

@@ -2,6 +2,7 @@ package dev.dsh.pocket.app
 
 import android.content.Intent
 import android.net.Uri
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -41,6 +42,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.FirstBaseline
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalUriHandler
@@ -50,6 +52,7 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.LinkAnnotation
+import androidx.compose.ui.text.ParagraphStyle
 import androidx.compose.ui.text.Placeholder
 import androidx.compose.ui.text.PlaceholderVerticalAlign
 import androidx.compose.ui.text.TextLinkStyles
@@ -68,6 +71,7 @@ import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.delay
+import kotlin.math.roundToInt
 import org.commonmark.ext.gfm.tables.TableBlock
 import org.commonmark.ext.gfm.tables.TableBody
 import org.commonmark.ext.gfm.tables.TableCell
@@ -353,8 +357,21 @@ private fun MdBlockView(block: MdBlock, bodySp: TextUnit, bodyColor: Color) {
             block.items.forEachIndexed { idx, item ->
                 if (idx > 0) Spacer(Modifier.height(6.dp))
                 Row(Modifier.fillMaxWidth()) {
-                    Text("•", color = T.Text2, fontSize = bodySp, modifier = Modifier.width(18.dp))
-                    Column(Modifier.weight(1f)) { item.forEach { MdBlockView(it, bodySp, bodyColor) } }
+                    val markerColor = T.Text2
+                    val density = LocalDensity.current
+                    val markerBaselineOffset = with(density) { bodySp.toPx() * 0.35f }
+                    Canvas(
+                        Modifier.width(18.dp).height(with(density) { (bodySp.value + 10).sp.toDp() })
+                            .alignBy { (it.measuredHeight / 2f + markerBaselineOffset).roundToInt() },
+                    ) {
+                        // A CSS disc, not a font-dependent bullet glyph. Align
+                        // its optical center to the first text line's x-height.
+                        drawCircle(markerColor, radius = bodySp.toPx() * 0.15f,
+                            center = androidx.compose.ui.geometry.Offset(5.dp.toPx(), size.height / 2f))
+                    }
+                    Column(Modifier.weight(1f).alignBy(FirstBaseline)) {
+                        item.forEach { MdBlockView(it, bodySp, bodyColor) }
+                    }
                 }
             }
         }
@@ -566,6 +583,7 @@ private fun InlineRichText(spans: List<MdSpan>, style: TextStyle) {
     val codeStyle = TextStyle(
         fontFamily = LocalFonts.code,
         fontSize = (style.fontSize.value * 0.875f).sp,
+        lineHeight = (style.fontSize.value + 5).sp,
         color = style.color,
     )
     // Measure and draw the exact same typography; Material Text's inherited
@@ -603,7 +621,7 @@ private fun InlineRichText(spans: List<MdSpan>, style: TextStyle) {
                             else -> error("Not inline content")
                         }
                         val chipStyle = if (isCode) codeStyle else fileStyle
-                        val padding = if (isCode) 12.dp else fileIconSize + 5.dp
+                        val padding = if (isCode) 11.dp else fileIconSize + 5.dp
                         val measured = measurer.measure(
                             label,
                             chipStyle,
@@ -614,20 +632,20 @@ private fun InlineRichText(spans: List<MdSpan>, style: TextStyle) {
                         )
                         val width = with(density) { (measured.size.width.toDp() + padding).coerceAtMost(maxWidth).toSp() }
                         val height = with(density) {
-                            (if (isCode) measured.size.height.toDp() + 4.dp
+                            (if (isCode) measured.size.height.toDp() + 1.dp
                             else measured.size.height.toDp().coerceAtLeast(fileIconSize)).toSp()
                         }
                         val id = "chip-$i"
                         inlineContent[id] = InlineTextContent(
-                            Placeholder(width, height, PlaceholderVerticalAlign.TextCenter),
+                            Placeholder(width, height, if (isCode) PlaceholderVerticalAlign.Center else PlaceholderVerticalAlign.TextCenter),
                         ) {
                             when (span) {
-                                is MdSpan.Code -> Text(
+                                is MdSpan.Code -> BasicText(
                                     span.text,
                                     style = codeStyle,
-                                    modifier = Modifier.clip(T.R4).background(T.Fill)
-                                        .border(0.5.dp, T.Border, T.R4)
-                                        .padding(horizontal = 5.dp, vertical = 1.dp),
+                                    modifier = Modifier.clip(T.R8).background(ThemeState.colors.MarkdownInlineCode)
+                                        .border(0.5.dp, ThemeState.colors.BorderL1, T.R8)
+                                        .padding(horizontal = 5.5.dp, vertical = 0.5.dp),
                                 )
                                 is MdSpan.FileChip -> Row(
                                     Modifier.fillMaxSize(),
@@ -659,7 +677,14 @@ private fun InlineRichText(spans: List<MdSpan>, style: TextStyle) {
                                 appendInlineContent(id, label)
                             }
                         } else {
+                            val start = length
                             appendInlineContent(id, label)
+                            if (isCode && measured.lineCount > 1) {
+                                // CSS inline-flex occupies its own line when
+                                // wider than the paragraph. Compose's fixed
+                                // lineHeight otherwise overlaps a tall slot.
+                                addStyle(ParagraphStyle(lineHeight = height), start, length)
+                            }
                         }
                     }
                 }
