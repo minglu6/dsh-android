@@ -230,13 +230,15 @@ Packages: `ui-sidebar`, `ui-workspace`, `ui-plugin-manager`, `ui-schedule`.
 | Group / order / filter | `groupBy.*`, `orderBy.*`, `viewOptions.*` | workspace registry | **done** — drawer sliders menu + prefs |
 | Search | `search.placeholder` 搜索会话名称 | `sessionController.search` | **done** — header search expands; `sessions.search` |
 | Add workspace | `workspace.add` 添加工作区 | Official directory browser + `workspace.create` | **done** — desktop-style modal, editable breadcrumbs, two directory panes, hidden toggle, new folder and Cancel/Open; narrow screens scroll panes and wrap footer actions. Native-only Hosts retain path entry. |
-| Rename / delete workspace | `rename.*`, `delete.workspace` | workspace controller | delete workspace **hide**/limited; rename session **feasible** |
+| Rename / delete workspace | `rename.*`, `delete.workspace` | workspace controller | **done** — anchored icon menu contains Rename and red Delete workspace only; New session is a separate trailing row button. Delete confirmation preserves folders/session logs and explains Ungrouped placement. |
 | Session row menu: fork / archive / pin | `menu.fork`, `menu.archiveSession`, `menu.pinSession` | `fork`; `workspace/{un,}archiveSession`; `workspace/{un,}pinSession` | **done** |
 | 插件 | plugin-manager `panel` 插件 | pinwheel → native Plugins | **done** (drawer panellist under 新会话) |
 | 自动化任务 | schedule `panel` 自动化任务 | clock → native Schedules | **done** (drawer panellist under 新会话) |
 | 设置 | settings `trigger` 设置 | — | keep |
 
 Empty: `empty.none` 暂无会话 / `empty.noMatches` 无匹配结果.
+
+Workspace action buttons retain 48dp touch targets. Opening actions never toggles the group. Cancelling rename discards its draft before reopening; cancelling deletion leaves the workspace unchanged. Verified on a physical Android device with `WorkspaceDisplayInstrumentedTest`, plus release-APK menu inspection and direct New session navigation against the connected Host.
 
 ---
 
