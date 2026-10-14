@@ -103,8 +103,32 @@ fun formatMessageClock(timestampMs: Long, nowMs: Long = System.currentTimeMillis
 }
 
 /** Desktop todo status labels (`todo.status.*`). */
-fun todoStatusLabel(status: String): String = when (status) {
-    "completed" -> "已完成"
-    "in_progress" -> "进行中"
-    else -> "待处理"
+fun todoStatusLabel(status: String, language: AppLanguage = AppLanguage.Zh): String = when (status) {
+    "completed" -> if (language == AppLanguage.En) "Completed" else "已完成"
+    "in_progress" -> if (language == AppLanguage.En) "In progress" else "进行中"
+    else -> if (language == AppLanguage.En) "Pending" else "待处理"
+}
+
+/** Desktop TodoPanel order and zero-count suppression. */
+internal fun todoProgressLabel(todos: List<dev.dsh.pocket.protocol.TodoItem>, language: AppLanguage): String {
+    var done = 0
+    var active = 0
+    var pending = 0
+    for (item in todos) when (item.status) {
+        "completed" -> done++
+        "in_progress" -> active++
+        else -> pending++
+    }
+    val english = language == AppLanguage.En
+    return buildString {
+        if (done > 0) append(done).append(' ').append(if (english) "completed" else "已完成")
+        if (active > 0) {
+            if (isNotEmpty()) append("\u2002·\u2002")
+            append(active).append(' ').append(if (english) "in progress" else "进行中")
+        }
+        if (pending > 0) {
+            if (isNotEmpty()) append("\u2002·\u2002")
+            append(pending).append(' ').append(if (english) "pending" else "待处理")
+        }
+    }
 }

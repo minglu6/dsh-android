@@ -76,7 +76,7 @@ data class PendingAttach(
 
 enum class Sheet {
     None, Model, Permission, PermissionRisk, Preset, Plus, More, Panel, Team, Workspace, Goal, Feedback,
-    Files, Jobs, Terminal, Browser, SessionInspector, Todo, Commands, Mentions, FeedbackCategory, FilePreview,
+    Files, Jobs, Terminal, Browser, SessionInspector, Commands, Mentions, FeedbackCategory, FilePreview,
 }
 
 /** Themed handshake hint — warn tint matching approval cards. */
@@ -391,17 +391,7 @@ fun ChatRoot(
             if (question != null && !questionVisible) TextButton({ hiddenQuestion = null }, Modifier.fillMaxWidth()) {
                 Text("问题等待回答 · 重新打开")
             }
-            if (st.todos.isNotEmpty()) {
-                Row(
-                    Modifier.fillMaxWidth().clickable { sheet = Sheet.Todo }.padding(horizontal = 20.dp, vertical = 10.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Icon(D.plan, null, tint = T.Text3, modifier = Modifier.size(16.dp))
-                    Text("任务", color = T.Text2, fontSize = 13.sp, modifier = Modifier.padding(start = 8.dp).weight(1f))
-                    Text("${st.todos.count { it.status == "completed" }}/${st.todos.size}", color = T.Text3, fontSize = 12.sp)
-                    Icon(D.chevronRight, null, tint = T.Text3, modifier = Modifier.padding(start = 8.dp).size(16.dp))
-                }
-            }
+            TodoPanel("${active.orEmpty()}:${st.sessionId}", st.todos)
             GoalBar(st) { sheet = Sheet.Goal }
             PromptQueue(
                 sessionId = st.sessionId, prompts = st.queuedPrompts, running = st.running,
@@ -569,7 +559,6 @@ fun ChatRoot(
         Sheet.SessionInspector -> sid?.let {
             SessionInspectorSheet(it, onDismiss = { sheet = Sheet.None }, onBack = { sheet = Sheet.Panel })
         }
-        Sheet.Todo -> TodoSheet(chat?.todos.orEmpty(), onDismiss = { sheet = Sheet.None })
         Sheet.FilePreview -> {
             val p = previewPath
             if (sid != null && p != null) {
@@ -677,9 +666,9 @@ internal fun Transcript(
     feedback: Map<String, dev.dsh.pocket.protocol.MessageFeedback> = emptyMap(),
     onLike: (String) -> Unit = {},
     onDislike: (String) -> Unit = {},
+    onLoadOlder: () -> Unit = { Pocket.loadOlderHistory() },
 ) {
     var followBottom by remember(st.sessionId) { mutableStateOf(true) }
-    val scrollScope = rememberCoroutineScope()
     val revealItemKey = InspectorNavigation.revealItemKey.takeIf { InspectorNavigation.sessionId == st.sessionId }
     var highlightedRow by remember(st.sessionId) { mutableStateOf<String?>(null) }
     // Shared presentation preferences are read from the connected Host.
@@ -736,7 +725,7 @@ internal fun Transcript(
         if (index < 0) {
             // The reveal effect first opens the containing Turn; do not page or clear it meanwhile.
             if (inspectorRowIndex(allRows, target) >= 0) return@LaunchedEffect
-            if (st.loaded && st.hasMore && !st.loadingOlder) Pocket.loadOlderHistory()
+            if (st.loaded && st.hasMore && !st.loadingOlder) onLoadOlder()
             else if (st.loaded && !st.hasMore && !st.loadingOlder) InspectorNavigation.revealItemKey = null
             return@LaunchedEffect
         }
@@ -756,27 +745,38 @@ internal fun Transcript(
         if (inspection || !followBottom || n == 0 || st.loadingOlder) return@LaunchedEffect
         if (skipMotion) list.requestScrollToItem(n) else list.animateScrollToItem(n)
     }
-    // Scroll-to-top loads older history (no extra chrome — same LazyColumn).
+    // Folded process rows can leave the latest window shorter than the viewport.
+    // Fill that window without requiring a scroll gesture that cannot happen.
     var historyArmed by remember(st.sessionId) { mutableStateOf(false) }
-    LaunchedEffect(list.firstVisibleItemIndex, list.firstVisibleItemScrollOffset) {
-        if (list.firstVisibleItemIndex > 0 || list.firstVisibleItemScrollOffset > 0) historyArmed = true
+    var requestedBefore by remember(st.sessionId) { mutableStateOf<Long?>(null) }
+    val atTop by remember(list) { derivedStateOf { !list.canScrollBackward } }
+    val shortWindow by remember(list) { derivedStateOf { !list.canScrollBackward && !list.canScrollForward } }
+    val laidOutItems by remember(list) { derivedStateOf { list.layoutInfo.totalItemsCount } }
+    LaunchedEffect(atTop) {
+        if (!atTop) {
+            historyArmed = true
+            requestedBefore = null
+        }
     }
-    LaunchedEffect(list.firstVisibleItemIndex, st.hasMore, st.loadingOlder, st.loaded, n) {
-        if (historyArmed && st.loaded && st.hasMore && !st.loadingOlder && n > 0 &&
-            list.firstVisibleItemIndex == 0 && list.firstVisibleItemScrollOffset == 0
+    LaunchedEffect(atTop, shortWindow, laidOutItems, historyArmed, st.hasMore, st.loadingOlder, st.loaded, st.firstSeq, n, st.running) {
+        val expectedItems = n + if (st.running) 2 else 1
+        if (!inspection && st.loaded && laidOutItems == expectedItems && atTop &&
+            dev.dsh.pocket.protocol.HistoryPagingPolicy.canLoadOlder(st.hasMore, st.loadingOlder, st.firstSeq) &&
+            (historyArmed || shortWindow) && requestedBefore != st.firstSeq
         ) {
-            historyArmed = false
-            Pocket.loadOlderHistory()
+            requestedBefore = st.firstSeq
+            historyArmed = true
+            followBottom = false
+            onLoadOlder()
         }
     }
     LaunchedEffect(list.isScrollInProgress, skipMotion) {
         if (skipMotion) return@LaunchedEffect
         if (!list.isScrollInProgress) followBottom = !list.canScrollForward
     }
-    if (st.loaded && st.items.isEmpty() && !st.running) { EmptyState(D.chat, "开始对话", "发送第一条消息"); return }
+    if (st.loaded && st.items.isEmpty() && !st.running && !st.hasMore) { EmptyState(D.chat, "开始对话", "发送第一条消息"); return }
     if (!st.loaded && st.items.isEmpty()) { Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator(color = T.Accent, strokeWidth = 2.dp, modifier = Modifier.size(24.dp)) }; return }
-    Box(Modifier.fillMaxSize()) {
-    LazyColumn(state = list, modifier = Modifier.fillMaxSize(), contentPadding = PaddingValues(16.dp)) {
+    LazyColumn(state = list, modifier = Modifier.fillMaxSize().testTag("transcriptHistory"), contentPadding = PaddingValues(16.dp)) {
         itemsIndexed(rows, key = { _, row -> row.key }) { index, row ->
             val previous = rows.getOrNull(index - 1)
             val gap = when {
@@ -885,20 +885,6 @@ internal fun Transcript(
             }
         }
         item(key = "bottom") { Spacer(Modifier.height(1.dp)) }
-    }
-        // Inspection/tests: a dirty Robolectric NATIVE Choreographer can make
-        // canScrollForward flicker, which would recompose this button forever.
-        if (!LocalInspectionMode.current && list.canScrollForward) FilledTonalIconButton(
-            onClick = {
-                followBottom = true
-                scrollScope.launch {
-                    val target = list.layoutInfo.totalItemsCount - 1
-                    if (skipMotion) list.requestScrollToItem(target)
-                    else list.animateScrollToItem(target)
-                }
-            },
-            modifier = Modifier.align(Alignment.BottomEnd).padding(12.dp).size(48.dp),
-        ) { Icon(D.chevronDown, "回到底部") }
     }
 }
 

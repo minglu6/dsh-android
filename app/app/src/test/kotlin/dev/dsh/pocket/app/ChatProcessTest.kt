@@ -281,10 +281,10 @@ class ChatProcessTest {
         reducer.event(1, "turn/start", 1000, """{"turn":7}""")
         reducer.event(2, "step/start", 1200, """{"turn":7,"step":1}""")
         reducer.apply(PocketJson.parseToJsonElement(
-            """{"type":"assistant-stream","frame":{"type":"start","attemptId":"a","turn":7,"step":1}}""",
+            """{"type":"assistant-stream","frame":{"type":"start","attemptId":"a","turn":7,"step":1,"startedAfterSeq":2,"revision":1}}""",
         ))
         reducer.apply(PocketJson.parseToJsonElement(
-            """{"type":"assistant-stream","frame":{"type":"chunk","attemptId":"a","time":2000,"chunk":{"type":"reasoning-delta","index":0,"text":"thinking"}}}""",
+            """{"type":"assistant-stream","frame":{"type":"chunk","attemptId":"a","revision":2,"index":0,"time":2000,"chunk":{"type":"reasoning-delta","index":0,"text":"thinking"}}}""",
         ))
         assertFalse(reducer.rows().groups().single().closed)
         assertFalse(reducer.rows(TranscriptView.Detailed).groups().single().grouped)

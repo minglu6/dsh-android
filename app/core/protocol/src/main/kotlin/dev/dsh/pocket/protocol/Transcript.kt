@@ -395,6 +395,12 @@ class TranscriptReducer {
     private var latestRequestProvider: String? = null
     private var latestRequestModel: String? = null
     private var live: LiveAttempt? = null
+    private var assistantRevision = 0L
+    private var streamSuppressed = false
+    private val retiredAttempts = HashSet<String>()
+    private val settlementSeqs = HashMap<Pair<Int, Int>, Long>()
+    /** A continuity fault locks incremental frames until an authoritative opening arrives. */
+    var needsResync = false; private set
     var cursor: Long = -1; private set
     /** Lowest event seq currently folded (for history.page beforeSeq). */
     var firstSeq: Long = -1; private set
@@ -430,7 +436,7 @@ class TranscriptReducer {
     fun todos(): List<TodoItem> = todos
     val planMode: Boolean get() = planActive
 
-    fun items(): List<Item> = committed + (live?.items() ?: emptyList())
+    fun items(): List<Item> = committed + (live?.takeIf { it.settlementSeq == null }?.items() ?: emptyList())
 
     fun queueMessages(): List<QueuedPrompt> {
         val host = inbox.getValue("next-turn").filterNot { message ->
@@ -443,6 +449,8 @@ class TranscriptReducer {
 
     /** Apply one follow frame; returns true when visible state changed. */
     fun apply(frame: JsonElement?): Boolean {
+        val type = frame["type"].str()
+        if (needsResync && type != "snapshot" && type != "resume") return false
         when (frame["type"].str()) {
             "snapshot" -> {
                 val keep = localEchoes.toMap()
@@ -490,7 +498,7 @@ class TranscriptReducer {
                 cursor = maxOf(cursor, frame["cursor"].long() ?: cursor)
                 baseline(frame["assistantStream"])
             }
-            "event" -> event(frame["event"])
+            "event" -> return event(frame["event"])
             "projection" -> {
                 val key = frame["key"].str() ?: return false
                 val seq = frame["seq"].long() ?: return false
@@ -502,7 +510,7 @@ class TranscriptReducer {
                     return readInbox(frame["value"], seq)
                 } else return composerProjections.apply(key, frame["value"], seq)
             }
-            "assistant-stream" -> stream(frame["frame"])
+            "assistant-stream" -> return stream(frame["frame"])
             else -> return false
         }
         return true
@@ -619,6 +627,8 @@ class TranscriptReducer {
         stepStartTimes.clear(); settledSteps.clear(); headerFacts.clear(); toolsByName.clear()
         toolsCatalogJson = null; previousToolsCatalogJson = null; lastSystemPromptText = null
         systemPromptSeen = false; live = null
+        assistantRevision = 0L; streamSuppressed = false; needsResync = false
+        retiredAttempts.clear(); settlementSeqs.clear()
         openRetry = null; openMaxRetries = null; openRetryDelayMs = null; openLastAttemptError = null
         latestRequestConfigJson = null; latestRequestProvider = null; latestRequestModel = null
         cursor = -1; firstSeq = -1; hasMore = false
@@ -660,32 +670,50 @@ class TranscriptReducer {
     private fun records(arr: JsonElement?) { arr.arr()?.forEach { r -> if (r["type"].str() == "event") event(r["event"]) } }
 
     private fun baseline(b: JsonElement?) {
+        live = null
+        retiredAttempts.clear()
+        assistantRevision = b["revision"].long() ?: 0L
+        needsResync = false
+        streamSuppressed = false
         val a = b["activeAttempt"].obj() ?: return
-        val l = LiveAttempt(
-            a["attemptId"].str() ?: "live",
-            a["turn"].long()?.toInt() ?: openTurn,
-            a["step"].long()?.toInt() ?: openStep,
-        )
-        a["stream"].arr()?.forEach { rec -> l.record(rec) }
+        val id = a["attemptId"].str() ?: run { continuityFault(); return }
+        val turn = a["turn"].long()?.toInt() ?: run { continuityFault(); return }
+        val step = a["step"].long()?.toInt() ?: run { continuityFault(); return }
+        val afterSeq = a["startedAfterSeq"].long() ?: run { continuityFault(); return }
+        val nextIndex = a["nextIndex"].long() ?: run { continuityFault(); return }
+        if (nextIndex < 0) { continuityFault(); return }
+        if (turnFacts[turn]?.closed == true || (settlementSeqs[turn to step] ?: -1) > afterSeq) {
+            retiredAttempts += id
+            return
+        }
+        val l = LiveAttempt(id, turn, step, afterSeq, nextIndex)
+        var remaining = nextIndex
+        for (rec in a["stream"].arr().orEmpty()) {
+            if (remaining == 0L) break
+            remaining -= l.record(rec, remaining)
+        }
         live = l
-        openTurn = l.turn ?: openTurn
-        openStep = l.step ?: openStep
-        l.turn?.let { turnFacts.getOrPut(it) { TurnRecord(it) } }
-        running = true
+        openTurn = turn
+        openStep = step
+        turnFacts.getOrPut(turn) { TurnRecord(turn) }
     }
 
-    private fun event(e: JsonElement?) {
-        if (e == null || e["ignorable"].bool() == true) return
-        val seq = e["seq"].long() ?: return
-        if (seq <= cursor) return
+    private fun event(e: JsonElement?): Boolean {
+        if (e == null || e["ignorable"].bool() == true) return false
+        val seq = e["seq"].long() ?: return false
+        if (seq <= cursor) return false
         cursor = seq
         turnUsageLedger.apply(e)
         val data = e["data"]
         when (e["type"].str()) {
             "turn/start" -> {
                 turns++
-                running = true
+                setRunning(true)
                 openTurn = data["turn"].long()?.toInt()
+                live?.takeIf { it.turn != openTurn }?.let {
+                    retiredAttempts += it.id
+                    live = null
+                }
                 openStep = null
                 openTurn?.let { turn ->
                     val fact = turnFacts[turn] ?: TurnRecord(turn)
@@ -693,9 +721,11 @@ class TranscriptReducer {
                 }
             }
             "turn/end" -> {
-                running = false; live = null
                 val reason = data["reason"]
                 val turn = data["turn"].long()?.toInt() ?: openTurn
+                val currentTurn = openTurn ?: live?.turn
+                val endsCurrent = currentTurn == null || turn == null || currentTurn == turn
+                if (endsCurrent) setRunning(false)
                 turn?.let {
                     val fact = turnFacts[it] ?: TurnRecord(it)
                     turnFacts[it] = fact.copy(
@@ -703,8 +733,10 @@ class TranscriptReducer {
                     )
                 }
                 refreshRetries()
-                openTurn = null
-                openStep = null
+                if (endsCurrent) {
+                    openTurn = null
+                    openStep = null
+                }
                 when (reason["kind"].str()) {
                     "error" -> {
                         val err = reason["error"]
@@ -783,11 +815,12 @@ class TranscriptReducer {
             "agent/inbox/spliced" -> spliceInbox(data, seq, e["time"].long())
             "assistant/message" -> {
                 steps++
-                val firstTokenFromLive = live?.firstTokenTime
-                val ownerTurn = data["turn"].long()?.toInt() ?: live?.turn ?: openTurn
+                val matching = matchingAttempt(e)
+                val firstTokenFromLive = matching?.firstTokenTime
+                val ownerTurn = data["turn"].long()?.toInt() ?: openTurn
                 val turn = ownerTurn ?: turns
-                val step = data["step"].long()?.toInt() ?: live?.step ?: openStep ?: steps
-                live = null
+                val step = data["step"].long()?.toInt() ?: openStep ?: steps
+                settleAttempt(e)
                 val messageTime = e["time"].long()
                 ownerTurn?.let { turnFacts.getOrPut(it) { TurnRecord(it) } }
                 val stepStartTime = stepStartTimes.remove("$turn:$step")
@@ -865,6 +898,7 @@ class TranscriptReducer {
                 // (assistant cell isError) — do not invent a 系统 Context/System row here.
                 if (interrupted) committed += Item.Notice("i$seq", "已停止", turn = ownerTurn)
             }
+            "assistant/attempt" -> settleAttempt(e)
             "tool/call" -> {
                 val id = data["callId"].str() ?: "c$seq"
                 val time = e["time"].long()
@@ -881,7 +915,7 @@ class TranscriptReducer {
             "tool/result" -> {
                 val id = data["message"]["toolCallId"].str()
                     ?: data["message"]["source"]["callId"].str()
-                    ?: return
+                    ?: return false
                 val timing = toolTimings.getOrPut(id) { ToolCallTiming() }
                 timing.resultAt = timing.resultAt ?: e["time"].long()
                 val text = data["message"]["content"].arr().orEmpty().filter { it["type"].str() == "text" }.joinToString("\n") { it["text"].str().orEmpty() }
@@ -931,13 +965,14 @@ class TranscriptReducer {
             }
             "workspace/changes" -> {
                 val turn = data["turn"].long()?.takeIf { it in 0..Int.MAX_VALUE.toLong() }?.toInt()
-                    ?: return
+                    ?: return false
                 // The official event carries only turn; statistics come exclusively from the Host summary.
                 val change = Item.Changes(key = "ch$seq", turn = turn, seq = seq)
                 val previous = committed.indexOfLast { it is Item.Changes && it.turn == turn }
                 if (previous >= 0) committed[previous] = change else committed += change
             }
         }
+        return true
     }
 
     private fun Item.Retry.identity() = RetryIdentity(retryId, turn, step)
@@ -1402,30 +1437,108 @@ class TranscriptReducer {
         }
     }
 
-    private fun stream(f: JsonElement?) {
-        when (f["type"].str()) {
-            "start" -> {
-                live = LiveAttempt(
-                    f["attemptId"].str() ?: "live",
-                    f["turn"].long()?.toInt() ?: openTurn,
-                    f["step"].long()?.toInt() ?: openStep,
-                )
-                openTurn = live?.turn ?: openTurn
-                openStep = live?.step ?: openStep
-                live?.turn?.let { turnFacts.getOrPut(it) { TurnRecord(it) } }
-                running = true
-            }
-            "chunk" -> {
-                val l = live ?: LiveAttempt(f["attemptId"].str() ?: "live", openTurn, openStep).also { live = it }
-                l.chunk(f["chunk"], f["time"].long())
-            }
-            // Cancel / abort ends the attempt with abandoned; clear running even if turn/end is delayed.
-            "end" -> if (f["outcome"]["kind"].str() == "abandoned") { live = null; running = false }
+    private fun matchingAttempt(e: JsonElement?): LiveAttempt? {
+        val attempt = live ?: return null
+        if (e["type"].str() == "assistant/message" && e["surfaceOp"].str()?.let { it != "append" } == true) return null
+        return attempt.takeIf {
+            (e["seq"].long() ?: -1) > it.startedAfterSeq &&
+                e["data"]["turn"].long()?.toInt() == it.turn &&
+                e["data"]["step"].long()?.toInt() == it.step
         }
     }
 
-    /** Host session status reported idle (e.g. after `cancel`); keep reducer in sync with chat UI. */
-    fun markIdle() { running = false; live = null }
+    private fun settleAttempt(e: JsonElement?) {
+        if (e["type"].str() == "assistant/message" && e["surfaceOp"].str()?.let { it != "append" } == true) return
+        val turn = e["data"]["turn"].long()?.toInt() ?: return
+        val step = e["data"]["step"].long()?.toInt() ?: return
+        val seq = e["seq"].long() ?: return
+        settlementSeqs[turn to step] = seq
+        matchingAttempt(e)?.let {
+            // Keep continuity metadata until end: durable settlement normally arrives first.
+            it.settlementSeq = seq
+            it.settlementType = e["type"].str()
+        }
+    }
+
+    private fun continuityFault(): Boolean {
+        needsResync = true
+        live = null
+        return true
+    }
+
+    private fun stream(f: JsonElement?): Boolean {
+        val revision = f["revision"].long() ?: return continuityFault()
+        if (revision <= assistantRevision) {
+            // Agent replacement can restart revision at 1 without replacing the
+            // Session's durable journal. A new attempt at the live cursor needs
+            // a new baseline; known attempts and historical starts are duplicates.
+            val id = f["attemptId"].str()
+            if (f["type"].str() == "start" && id != null && id != live?.id &&
+                id !in retiredAttempts && (f["startedAfterSeq"].long() ?: -1) >= cursor) {
+                return continuityFault()
+            }
+            return false
+        }
+        if (revision != assistantRevision + 1) return continuityFault()
+        assistantRevision = revision
+        val id = f["attemptId"].str() ?: return continuityFault()
+        if (id in retiredAttempts) return false
+        when (f["type"].str()) {
+            "start" -> {
+                val turn = f["turn"].long()?.toInt() ?: return continuityFault()
+                val step = f["step"].long()?.toInt() ?: return continuityFault()
+                val afterSeq = f["startedAfterSeq"].long() ?: return continuityFault()
+                if (streamSuppressed || turnFacts[turn]?.closed == true ||
+                    (openTurn?.let { turn < it } == true) ||
+                    (settlementSeqs[turn to step] ?: -1) > afterSeq) {
+                    retiredAttempts += id
+                    return false
+                }
+                val previous = live
+                if (previous != null) {
+                    if (previous.id == id) return false
+                    if (previous.settlementSeq == null) return continuityFault()
+                    retiredAttempts += previous.id
+                }
+                live = LiveAttempt(id, turn, step, afterSeq, 0)
+                turnFacts.getOrPut(turn) { TurnRecord(turn) }
+                return true
+            }
+            "chunk", "end" -> {
+                val attempt = live?.takeIf { it.id == id } ?: return false
+                val index = f["index"].long() ?: return continuityFault()
+                if (index < attempt.nextIndex) return false
+                if (index != attempt.nextIndex) return continuityFault()
+                if (f["type"].str() == "chunk") {
+                    attempt.nextIndex++
+                    if (attempt.settlementSeq != null) return false
+                    attempt.chunk(f["chunk"], f["time"].long())
+                    return true
+                }
+                when (f["outcome"]["kind"].str()) {
+                    "committed" -> if (attempt.settlementSeq == null ||
+                        f["outcome"]["seq"].long() != attempt.settlementSeq ||
+                        f["outcome"]["eventType"].str() != attempt.settlementType) return continuityFault()
+                    "abandoned" -> if (attempt.settlementSeq != null) return continuityFault()
+                    else -> return continuityFault()
+                }
+                retiredAttempts += id
+                live = null
+                return attempt.settlementSeq == null
+            }
+            else -> return continuityFault()
+        }
+    }
+
+    /** Host control owns turn activity; ending one model attempt does not end the turn. */
+    fun setRunning(running: Boolean) {
+        this.running = running
+        streamSuppressed = !running
+        if (!running) {
+            live?.let { retiredAttempts += it.id }
+            live = null
+        }
+    }
 
     companion object {
         /** Reasoning duration from compacted stream records (time0 + Σdt). */
@@ -1460,27 +1573,44 @@ class TranscriptReducer {
 }
 
 /** In-flight model attempt assembled from StreamChunks. */
-private class LiveAttempt(val id: String, val turn: Int?, val step: Int?) {
+private class LiveAttempt(
+    val id: String,
+    val turn: Int,
+    val step: Int,
+    val startedAfterSeq: Long,
+    var nextIndex: Long,
+) {
+    var settlementSeq: Long? = null
+    var settlementType: String? = null
     private class Block(val type: String, val sb: StringBuilder = StringBuilder(), var toolId: String? = null, var toolName: String? = null, var startedAt: Long? = null)
     private val blocks = sortedMapOf<Int, Block>()
     /** Desktop firstTokenTime — first non-reasoning delta wall time. */
     var firstTokenTime: Long? = null
         private set
 
-    fun record(rec: JsonElement) {
-        when (rec["type"].str()) {
-            "chunk" -> chunk(rec["chunk"], rec["time"].long())
-            "text-chunks" -> {
-                noteToken(rec["time0"].long() ?: rec["time"].long())
-                block(rec["index"].long()?.toInt() ?: 0, "text").sb.append(rec["texts"].arr().orEmpty().joinToString("") { it.str().orEmpty() })
+    fun record(rec: JsonElement, remaining: Long): Int {
+        val type = rec["type"].str()
+        val blockType = when (type) {
+            "text-chunks" -> "text"
+            "reasoning-chunks" -> "reasoning"
+            "tool-call-chunks" -> "tool-call"
+            else -> {
+                if (type == "chunk") chunk(rec["chunk"], rec["time"].long()) else chunk(rec, null)
+                return 1
             }
-            "reasoning-chunks" -> block(rec["index"].long()?.toInt() ?: 0, "reasoning").apply { startedAt = startedAt ?: rec["time0"].long() }.sb.append(rec["texts"].arr().orEmpty().joinToString("") { it.str().orEmpty() })
-            "tool-call-chunks" -> {
-                noteToken(rec["time0"].long() ?: rec["time"].long())
-                block(rec["index"].long()?.toInt() ?: 0, "tool-call").apply { toolId = rec["id"].str(); toolName = rec["name"].str() ?: toolName }.sb.append(rec["args"].arr().orEmpty().joinToString("") { it.str().orEmpty() })
-            }
-            else -> chunk(rec, null)
         }
+        val members = rec[if (blockType == "tool-call") "args" else "texts"].arr().orEmpty()
+        val count = minOf(members.size.toLong(), remaining).toInt()
+        if (count == 0) return 0
+        val time = rec["time0"].long() ?: rec["time"].long()
+        val block = block(rec["index"].long()?.toInt() ?: 0, blockType)
+        if (blockType == "reasoning") block.startedAt = block.startedAt ?: time else noteToken(time)
+        if (blockType == "tool-call") {
+            block.toolId = rec["id"].str()
+            block.toolName = rec["name"].str() ?: block.toolName
+        }
+        for (i in 0 until count) block.sb.append(members[i].str().orEmpty())
+        return count
     }
 
     fun chunk(c: JsonElement?, time: Long?) {

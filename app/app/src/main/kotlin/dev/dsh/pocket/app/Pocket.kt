@@ -90,6 +90,13 @@ object Pocket {
     val routes = MutableStateFlow<Map<String, Route>>(emptyMap())
     val active = MutableStateFlow<String?>(null)
     val sessions = MutableStateFlow<List<SessionSummary>>(emptyList())
+    private val completionReminders = CompletionReminders()
+    val completionUnread = completionReminders.unreadIds
+    private val completionViewLock = Mutex()
+    private var desiredViewedSession: String? = null
+    private var completionReadySession: String? = null
+    private var completionViewClient: PocketClient? = null
+    private var completionViewSession: String? = null
     val approvals = MutableStateFlow<List<Approval>>(emptyList())
     val userQuestions = MutableStateFlow<List<UserQuestion>>(emptyList())
     val archivedIds = MutableStateFlow<Set<String>>(emptySet())
@@ -162,6 +169,8 @@ object Pocket {
     private var inspectorLog = SessionInspectorLog()
     private var subId: String? = null
     private val followEpoch = AtomicLong()
+    private val transcriptPublisher = TranscriptPublisher(main) { publishTranscript() }
+    private var continuityRepairAttempts = 0
     private var pendingFollowEpoch: Long? = null
     private var terminalSubId: String? = null
     private val terminalOpenEpoch = AtomicLong()
@@ -251,6 +260,8 @@ object Pocket {
 
     fun connect(profileId: String) {
         connJob?.cancel(); client?.close(); client = null
+        completionReminders.reset()
+        desiredViewedSession = null
         clearFirstPrompt()
         prefs.hostSettings.clear()
         followEpoch.incrementAndGet()
@@ -300,8 +311,11 @@ object Pocket {
                 val hello = c.connect(factories, Auth.Token(token), CONNECT_TIMEOUT_MS)
                 applyCompatibility(hello)
                 client = c; ops.value = hello.ops
+                completionReminders.reset()
+                completionViewClient = null
                 followEpoch.incrementAndGet()
                 detachFollow()
+                continuityRepairAttempts = 0
                 reducer.clearComposerProjections()
                 permissionProjectionSeq = -1L
                 modelProjectionSeq = -1L
@@ -376,6 +390,14 @@ object Pocket {
     }
 
     private suspend fun refreshAll(c: PocketClient) {
+        if ("completion.state" in ops.value) {
+            try {
+                val snapshot = c.call("completion.state")
+                if (client === c) completionReminders.accept(snapshot)
+                syncCompletionView()
+            } catch (e: CancellationException) { throw e }
+            catch (e: Exception) { errors.tryEmit(e.message ?: "完成状态同步失败") }
+        }
         runCatching { sessions.value = c.listSessions().sortedByDescending { it.updatedAt } }
         runCatching { approvals.value = c.call("approval.pending")["approvals"].arr().orEmpty().mapNotNull { (it as? JsonObject)?.let(Approval::parse) } }
         loadModelCatalog(c)
@@ -553,14 +575,16 @@ object Pocket {
                 invalidatePermissionCatalog()
                 client?.let { c -> main.launch { loadPermissionCatalog(c) } }
             }
+            "completion" -> completionReminders.accept(m)
             "follow" -> {
                 val sid = m["subId"].str() ?: return
                 if (sid == subId) applyFrame(m["frame"])
                 else if (pendingFollowEpoch == followEpoch.get()) stray.getOrPut(sid) { mutableListOf() }.add(m)
             }
-            "follow.end" -> if (m["subId"].str() == subId) subId = null
+            "follow.end" -> if (m["subId"].str() == subId) recoverFollow()
             "follow.error" -> if (m["subId"].str() == subId) {
                 subId = null
+                transcriptPublisher.flush()
                 val msg = m["error"]["message"].str()
                     ?: m["error"]["code"].str()
                     ?: "follow error"
@@ -573,12 +597,10 @@ object Pocket {
                 "removed" -> sessions.value = sessions.value.filter { it.sessionId != m["sessionId"].str() }
                 "status" -> { val id = m["sessionId"].str(); val r = m["running"].bool() ?: false
                     sessions.value = sessions.value.map { if (it.sessionId == id) it.copy(running = r) else it }
-                    // Composer Stop uses chat.running (from the follow reducer). Cancel often clears
-                    // session status before / without a folded turn/end; mirror idle into the open chat.
-                    if (!r) chat.value?.takeIf { it.sessionId == id && it.running }?.let { st ->
-                        reducer.markIdle()
-                        chat.value = st.copy(running = false, runStartedAt = null, items = reducer.items(), steps = reducer.stepRecords(),
-                            queuedPrompts = reducer.queueMessages())
+                    // Host lifecycle is independent of the assistant's transient text stream.
+                    chat.value?.takeIf { it.sessionId == id }?.let {
+                        reducer.setRunning(r)
+                        transcriptPublisher.flush()
                     }
                     client?.let { c -> main.launch { refreshTitles(c); if (!r) { delay(4000); refreshTitles(c) } } } }
                 "activity" -> { val id = m["sessionId"].str(); val t = m["updatedAt"].long() ?: 0
@@ -651,8 +673,38 @@ object Pocket {
         val frameSession = f["sessionId"].str()
         if (frameSession != null && frameSession != st.sessionId) return
         if (f["type"].str() == "projection" && frameSession == null) return
-        reducer.apply(f)
+        val changed = reducer.apply(f)
+        if (reducer.needsResync) {
+            transcriptPublisher.flush()
+            recoverFollow()
+            return
+        }
         inspectorLog.apply(f)
+        val frameType = f["type"].str()
+        if (changed && (frameType == "event" ||
+                frameType == "assistant-stream" && f["frame"]["type"].str() == "chunk")) {
+            continuityRepairAttempts = 0
+        }
+        if (frameType == "assistant-stream" && f["frame"]["type"].str() == "chunk") {
+            if (changed) transcriptPublisher.schedule()
+            return
+        }
+        if (frameType == "snapshot" || frameType == "resume") {
+            // Inspect this opening's records, not merged turn metadata: withEarlier()
+            // may restore an old timestamp even when the new window omitted its start.
+            val boundary = f["records"].arr().orEmpty().lastOrNull {
+                val type = it["event"]["type"].str()
+                (type == "turn/start" || type == "turn/end") && it["event"]["ignorable"].bool() != true
+            }?.get("event")
+            val activeAttempt = f["assistantStream"]["activeAttempt"] as? JsonObject
+            val activeTurn = activeAttempt?.get("turn").long()
+            val boundaryTurn = boundary?.get("data")?.get("turn").long()
+            if (boundary == null || activeTurn != null && boundaryTurn != null && activeTurn > boundaryTurn) {
+                val known = sessions.value.firstOrNull { it.sessionId == st.sessionId }
+                reducer.setRunning(known?.running ?: (activeAttempt != null ||
+                    st.running && reducer.turnRecords().lastOrNull()?.closed == false))
+            }
+        }
         val projection = when (f["type"].str()) {
             "snapshot", "resume" -> f["projections"]
             else -> null
@@ -697,6 +749,19 @@ object Pocket {
                 preset = (values?.get("agentPreset") ?: f["value"]).str()
             }
         }
+        transcriptPublisher.cancel()
+        publishTranscript(goal, preset)
+        if (frameType == "snapshot" || frameType == "resume") {
+            completionReadySession = st.sessionId
+            syncCompletionView()
+        }
+    }
+
+    private fun publishTranscript(
+        goal: JsonObject? = chat.value?.goal,
+        preset: String? = chat.value?.agentPreset,
+    ) {
+        val st = chat.value ?: return
         val turns = reducer.turnRecords()
         chat.value = st.copy(
             items = reducer.items(),
@@ -720,10 +785,41 @@ object Pocket {
         )
     }
 
+    /** Revoke the damaged generation before any unsubscribe RPC can suspend. */
+    private fun recoverFollow() {
+        val c = client ?: return
+        val sessionId = chat.value?.sessionId ?: return
+        val expectedEpoch = followEpoch.get() + 1
+        continuityRepairAttempts++
+        if (continuityRepairAttempts > MAX_FOLLOW_ATTEMPTS) {
+            followEpoch.incrementAndGet()
+            val old = detachFollow()
+            errors.tryEmit("会话事件连续性校验失败，请重新打开会话")
+            if (old != null) main.launch {
+                try { c.unfollow(old) }
+                catch (e: CancellationException) { throw e }
+                catch (_: Exception) { /* Already detached locally. */ }
+            }
+            return
+        }
+        main.launch(start = CoroutineStart.UNDISPATCHED) {
+            try { refollow(c, sessionId, null) }
+            catch (e: CancellationException) { throw e }
+            catch (e: Exception) {
+                if (currentFollow(c, sessionId, expectedEpoch)) {
+                    errors.tryEmit(e.message ?: "会话重新同步失败，请重新打开会话")
+                }
+            }
+        }
+    }
+
     /** Revoke delivery eligibility synchronously, before any unsubscribe can suspend. */
     private fun detachFollow(): String? {
+        transcriptPublisher.cancel()
         val old = subId
         subId = null
+        completionReadySession = null
+        syncCompletionView()
         pendingFollowEpoch = null
         goalProjectionSeq = -1L
         presetProjectionSeq = -1L
@@ -781,16 +877,51 @@ object Pocket {
         }
     }
 
+    /** Called only by the foreground conversation surface, never by background following. */
+    fun setViewedSession(sessionId: String?) = main.launch {
+        desiredViewedSession = sessionId
+        syncCompletionView()
+    }
+
+    private fun syncCompletionView() = main.launch {
+        completionViewLock.withLock {
+            val c = client ?: return@withLock
+            if ("completion.view" !in ops.value) return@withLock
+            val viewed = desiredViewedSession?.takeIf {
+                it == chat.value?.sessionId && it == completionReadySession
+            }
+            if (completionViewClient === c && completionViewSession == viewed) return@withLock
+            try {
+                val snapshot = c.call("completion.view", jsonOf("sessionId" to (viewed ?: JsonNull)))
+                if (client === c) {
+                    completionViewClient = c
+                    completionViewSession = viewed
+                    completionReminders.accept(snapshot)
+                }
+            } catch (e: CancellationException) { throw e }
+            catch (e: Exception) {
+                if (client === c) {
+                    errors.tryEmit(e.message ?: "查看状态同步失败")
+                    // Release stale Host presence rather than silently acknowledging future tasks.
+                    c.close()
+                }
+            }
+        }
+    }
+
     private fun initializeChat(sessionId: String, seed: FirstPrompt? = null) {
+        transcriptPublisher.cancel()
+        continuityRepairAttempts = 0
         followAttempts.remove(sessionId)
         reducer = TranscriptReducer()
+        reducer.setRunning(sessions.value.firstOrNull { it.sessionId == sessionId }?.running ?: false)
         inspectorLog = SessionInspectorLog()
         permissionProjectionSeq = -1L
         modelProjectionSeq = -1L
         modelUsesDefault = false
         feedback.value = emptyMap()
         seed?.let { reducer.echo(it.text, it.requestId) }
-        chat.value = ChatState(sessionId, items = reducer.items(),
+        chat.value = ChatState(sessionId, items = reducer.items(), running = reducer.running,
             title = sessions.value.firstOrNull { it.sessionId == sessionId }?.title)
     }
 

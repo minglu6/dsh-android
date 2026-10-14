@@ -1,7 +1,6 @@
 package dev.dsh.pocket.protocol
 
 import kotlinx.coroutines.*
-import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.*
 import kotlinx.serialization.json.*
@@ -48,12 +47,17 @@ class PocketClient(
 
     private val nextId = AtomicLong(1)
     private val pending = ConcurrentHashMap<Long, CompletableDeferred<JsonObject>>()
-    private var transport: FrameTransport? = null
+    private val connectionLock = Any()
+    @Volatile private var transport: FrameTransport? = null
+    private var generation = 0L
     private var pump: Job? = null
+    private var publisher: Job? = null
+    private data class Push(val frame: JsonObject, val bytes: Long)
+    private var pushes: Channel<Push>? = null
     private val _state = MutableStateFlow(State.Idle)
     val state: StateFlow<State> = _state
-    private val _events = MutableSharedFlow<JsonObject>(extraBufferCapacity = 4096, onBufferOverflow = BufferOverflow.SUSPEND)
-    /** Server pushes (`ev` frames). */
+    private val _events = MutableSharedFlow<JsonObject>()
+    /** Ordered server pushes; bounded startup buffering also covers hello/pair. */
     val events: SharedFlow<JsonObject> = _events
     @Volatile var closeReason: String? = null; private set
     /** Live route from the active transport (Tailscale / LAN / local). */
@@ -69,81 +73,165 @@ class PocketClient(
     /** Connect using an ordered list of transports (host:port WebSocket). */
     suspend fun connect(factories: List<TransportFactory>, auth: Auth, timeoutMs: Long = 120_000): HelloResult =
         withTimeout(timeoutMs) {
-            close()
-            _state.value = State.Connecting
-            closeReason = null
-            val t = dialInOrder(factories)
-            attach(t)
-            val result = when (auth) {
-                is Auth.Token -> call(
-                    "hello",
-                    jsonOf(
-                        "proto" to VersionCompatibility.PROTO,
-                        "token" to auth.token,
-                        "app" to "dsh-android",
-                        "appVersion" to appVersion,
-                    ),
-                )
-                is Auth.Pair -> call(
-                    "pair",
-                    jsonOf(
-                        "proto" to VersionCompatibility.PROTO,
-                        "code" to auth.code,
-                        "name" to auth.deviceName,
-                        "app" to "dsh-android",
-                        "appVersion" to appVersion,
-                    ),
-                )
+            val (attempt, previousPublisher) = synchronized(connectionLock) {
+                close()
+                _state.value = State.Connecting
+                closeReason = null
+                generation to publisher
             }
-            _state.value = State.Open
-            HelloResult(result.obj() ?: JsonObject(emptyMap()), t.route)
+            try {
+                // Finish any in-flight old emission before attaching the next connection.
+                previousPublisher?.join()
+                val t = dialInOrder(factories)
+                synchronized(connectionLock) {
+                    if (attempt != generation) {
+                        t.close()
+                        throw PocketError("transport", "connection superseded")
+                    }
+                    attach(t, attempt)
+                }
+                val result = when (auth) {
+                    is Auth.Token -> request(
+                        "hello",
+                        jsonOf(
+                            "proto" to VersionCompatibility.PROTO,
+                            "token" to auth.token,
+                            "app" to "dsh-android",
+                            "appVersion" to appVersion,
+                        ),
+                        expectedGeneration = attempt,
+                    )
+                    is Auth.Pair -> request(
+                        "pair",
+                        jsonOf(
+                            "proto" to VersionCompatibility.PROTO,
+                            "code" to auth.code,
+                            "name" to auth.deviceName,
+                            "app" to "dsh-android",
+                            "appVersion" to appVersion,
+                        ),
+                        expectedGeneration = attempt,
+                    )
+                }
+                synchronized(connectionLock) {
+                    if (attempt != generation || transport !== t) {
+                        throw PocketError("transport", closeReason ?: "connection superseded")
+                    }
+                    _state.value = State.Open
+                }
+                HelloResult(result.obj() ?: JsonObject(emptyMap()), t.route)
+            } catch (e: Throwable) {
+                fail(attempt, e.message ?: "connection failed")
+                throw e
+            }
         }
 
     suspend fun connect(factory: TransportFactory, auth: Auth, timeoutMs: Long = 120_000): HelloResult =
         connect(listOf(factory), auth, timeoutMs)
 
-    private fun attach(t: FrameTransport) {
+    private fun attach(t: FrameTransport, attempt: Long) {
         transport = t
         negotiatedExtensions = (t as? WsTransport)?.negotiatedExtensions
-        pump = scope.launch {
+        val bytes = AtomicLong()
+        val inbox = Channel<Push>(
+            capacity = MAX_PENDING_PUSHES,
+            onUndeliveredElement = { bytes.addAndGet(-it.bytes) },
+        )
+        pushes = inbox
+        publisher = scope.launch {
             try {
-                t.incoming.collect { onFrame(it) }
+                for (push in inbox) {
+                    try {
+                        // SharedFlow otherwise discards pushes before the app subscribes.
+                        _events.subscriptionCount.first { it > 0 }
+                        ensureActive()
+                        _events.emit(push.frame)
+                    } finally {
+                        bytes.addAndGet(-push.bytes)
+                    }
+                }
             } catch (_: CancellationException) {
             } catch (e: Exception) {
-                fail(e.message ?: e.toString())
-            } finally {
-                if (_state.value == State.Open || _state.value == State.Connecting) {
-                    fail(t.closeReason ?: "closed")
+                fail(attempt, e.message ?: "push delivery failed")
+            }
+        }
+        pump = scope.launch {
+            try {
+                t.incoming.collect { text ->
+                    if (onFrame(text, attempt, bytes)) t.send("""{"op":"pong"}""")
                 }
+            } catch (_: CancellationException) {
+            } catch (e: Exception) {
+                fail(attempt, e.message ?: e.toString())
+            } finally {
+                fail(attempt, t.closeReason ?: "closed")
             }
         }
     }
 
-    private fun fail(reason: String) {
-        closeReason = reason
-        _state.value = State.Closed
-        val err = PocketError("transport", reason)
-        pending.values.forEach { it.completeExceptionally(err) }
-        pending.clear()
+    private fun fail(reason: String) = synchronized(connectionLock) {
+        fail(generation, reason)
     }
 
-    private fun onFrame(text: String) {
-        val m = runCatching { PocketJson.parseToJsonElement(text).jsonObject }.getOrNull() ?: return
-        val id = m["id"].long()
-        if (id != null && pending.containsKey(id)) { pending.remove(id)?.complete(m); return }
-        if (m["ev"].str() == "ping") {
-            scope.launch { runCatching { transport?.send("""{"op":"pong"}""") } }
-            return
+    private fun fail(attempt: Long, reason: String) = synchronized(connectionLock) {
+        if (attempt != generation) return@synchronized
+        closeReason = reason
+        close()
+        _state.value = State.Closed
+    }
+
+    // Keep the non-suspending entry point used by protocol fixtures injecting RPC replies.
+    private fun onFrame(text: String) = synchronized(connectionLock) {
+        onFrame(text, generation, null)
+    }
+
+    /** Returns whether the serial pump should answer a heartbeat on its own transport. */
+    private fun onFrame(text: String, attempt: Long, bytes: AtomicLong?): Boolean = synchronized(connectionLock) {
+        if (attempt != generation) return@synchronized false
+        if (text.length.toLong() * 2 > MAX_PENDING_PUSH_BYTES) {
+            fail(attempt, "incoming frame exceeds buffer budget; reconnect required")
+            return@synchronized false
         }
-        if (m["ev"] != null) scope.launch { _events.emit(m) }
+        val m = runCatching { PocketJson.parseToJsonElement(text).jsonObject }.getOrNull() ?: return@synchronized false
+        val id = m["id"].long()
+        if (id != null) {
+            pending.remove(id)?.complete(m)
+            return@synchronized false
+        }
+        if (m["ev"].str() == "ping") return@synchronized true
+        if (m["ev"] != null) {
+            val size = text.length.toLong() * 2
+            if (bytes == null || bytes.addAndGet(size) > MAX_PENDING_PUSH_BYTES) {
+                bytes?.addAndGet(-size)
+                fail(attempt, "push buffer overflow; reconnect required")
+            } else if (pushes?.trySend(Push(m, size))?.isSuccess != true) {
+                bytes.addAndGet(-size)
+                fail(attempt, "push buffer overflow; reconnect required")
+            }
+        }
+        false
     }
 
     /** Send one op; returns `result` or throws [PocketError], preserving caller cancellation. */
-    suspend fun call(op: String, args: JsonObject = JsonObject(emptyMap()), timeoutMs: Long = 60_000): JsonElement {
-        val t = transport ?: throw PocketError("transport", "not connected")
+    suspend fun call(op: String, args: JsonObject = JsonObject(emptyMap()), timeoutMs: Long = 60_000): JsonElement =
+        request(op, args, timeoutMs)
+
+    private suspend fun request(
+        op: String,
+        args: JsonObject,
+        timeoutMs: Long = 60_000,
+        expectedGeneration: Long? = null,
+    ): JsonElement {
         val id = nextId.getAndIncrement()
         val d = CompletableDeferred<JsonObject>()
-        pending[id] = d
+        val t = synchronized(connectionLock) {
+            if (expectedGeneration != null && expectedGeneration != generation) {
+                throw PocketError("transport", "connection superseded")
+            }
+            val current = transport ?: throw PocketError("transport", "not connected")
+            pending[id] = d
+            current
+        }
         val frame = buildJsonObject { put("id", id); put("op", op); put("args", args) }
         val reply = try {
             try {
@@ -232,7 +320,7 @@ class PocketClient(
     /** Observe without consuming the model's output cursor; cancellation detaches on the Host. */
     fun followJob(sessionId: String, jobId: String, from: Long? = null): Flow<JsonObject> = flow {
         coroutineScope {
-            val inbox = Channel<JsonObject>(Channel.UNLIMITED)
+            val inbox = Channel<JsonObject>(Channel.RENDEZVOUS)
             val collector = launch(start = CoroutineStart.UNDISPATCHED) {
                 events.collect { if (it["ev"].str()?.startsWith("job") == true) inbox.send(it) }
             }
@@ -450,13 +538,24 @@ class PocketClient(
     suspend fun credentialsUnset(ref: String): JsonElement =
         call("credentials.unset", jsonOf("ref" to ref))
 
-    fun close() {
+    fun close() = synchronized(connectionLock) {
+        generation++
         pump?.cancel(); pump = null
+        publisher?.cancel()
+        pushes?.cancel(); pushes = null
         transport?.close(); transport = null
+        negotiatedExtensions = null
+        val error = PocketError("transport", closeReason ?: "connection closed")
+        pending.values.forEach { it.completeExceptionally(error) }
+        pending.clear()
         if (_state.value != State.Idle) _state.value = State.Closed
     }
 
     companion object {
+        internal const val MAX_PENDING_PUSHES = 4096
+        /** UTF-16 payload budget; parsed event retention is also count-bounded. */
+        internal const val MAX_PENDING_PUSH_BYTES = 16L * 1024 * 1024
+
         /**
          * Loopback WS must bypass system HTTP proxies that break local upgrades.
          * OkHttp negotiates permessage-deflate by default; keep the 1 KiB threshold

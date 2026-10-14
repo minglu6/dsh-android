@@ -19,6 +19,10 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.platform.LocalWindowInfo
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import dev.dsh.pocket.protocol.PairingLink
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
@@ -95,6 +99,24 @@ private fun Root(deepLink: MutableStateFlow<PairingLink?>) {
         Pocket.prefs.sidebarCollapsed = sidebarCollapsed
     }
     var drawerMenuOpen by remember { mutableStateOf(false) }
+    val chat by Pocket.chat.collectAsState()
+    val lifecycle = LocalLifecycleOwner.current.lifecycle
+    val windowFocused = LocalWindowInfo.current.isWindowFocused
+    val viewedSession = chat?.takeIf {
+        screen == Screen.Chat && it.loaded && (twoPane || drawer.isClosed) && windowFocused
+    }?.sessionId
+    DisposableEffect(lifecycle, viewedSession) {
+        fun publish() {
+            Pocket.setViewedSession(viewedSession.takeIf { lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED) })
+        }
+        val observer = LifecycleEventObserver { _, _ -> publish() }
+        lifecycle.addObserver(observer)
+        publish()
+        onDispose {
+            lifecycle.removeObserver(observer)
+            Pocket.setViewedSession(null)
+        }
+    }
 
     LaunchedEffect(active) {
         if (active == null) return@LaunchedEffect

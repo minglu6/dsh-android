@@ -4,7 +4,7 @@ import kotlinx.coroutines.*
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.*
 import okhttp3.*
-import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicLong
 
 /** How the pocket frames are reaching the desktop. */
 enum class Route {
@@ -81,10 +81,17 @@ class WsTransport private constructor(
     override val route: Route,
     private val http: OkHttpClient,
 ) : FrameTransport {
-    private val ch = Channel<String>(capacity = 64)
-    override val incoming: Flow<String> = ch.receiveAsFlow()
-    private var ws: WebSocket? = null
-    private val closed = AtomicBoolean(false)
+    private val ch = Channel<String>(capacity = MAX_QUEUED_FRAMES)
+    private val queuedBytes = AtomicLong()
+    private val lock = Any()
+    override val incoming: Flow<String> = flow {
+        for (text in ch) {
+            queuedBytes.addAndGet(-text.length.toLong() * 2)
+            emit(text)
+        }
+    }
+    @Volatile private var ws: WebSocket? = null
+    private var closed = false
     @Volatile override var closeReason: String? = null; private set
     /** Negotiated Sec-WebSocket-Extensions from the upgrade response (e.g. permessage-deflate). */
     @Volatile var negotiatedExtensions: String? = null; private set
@@ -94,22 +101,45 @@ class WsTransport private constructor(
         if (!socket.send(text)) throw PocketError("transport", "send failed")
     }
 
-    override fun close() {
-        if (!closed.compareAndSet(false, true)) return
-        ws?.close(1000, "bye"); ws = null
-        ch.close()
+    override fun close() = finish(null)
+
+    private fun fail(reason: String) = finish(reason)
+
+    private fun finish(reason: String?) = synchronized(lock) {
+        if (closed) return@synchronized
+        closed = true
+        closeReason = reason
+        val socket = ws
+        ws = null
+        ch.close(reason?.let { PocketError("transport", it) })
+        // A failed connection cannot supply a contiguous stream. Release its backlog now.
+        while (true) {
+            val text = ch.tryReceive().getOrNull() ?: break
+            queuedBytes.addAndGet(-text.length.toLong() * 2)
+        }
+        if (reason == null) socket?.close(1000, "bye") else socket?.cancel()
+        Unit
     }
 
-    private fun fail(reason: String) {
-        if (!closed.compareAndSet(false, true)) return
-        closeReason = reason
-        ws = null
-        ch.close(PocketError("transport", reason))
+    private fun receive(text: String) = synchronized(lock) {
+        if (closed) return@synchronized
+        val bytes = text.length.toLong() * 2
+        if (bytes > MAX_QUEUED_BYTES || queuedBytes.addAndGet(bytes) > MAX_QUEUED_BYTES) {
+            if (bytes <= MAX_QUEUED_BYTES) queuedBytes.addAndGet(-bytes)
+            fail("incoming buffer overflow; reconnect required")
+        } else if (ch.trySend(text).isFailure) {
+            queuedBytes.addAndGet(-bytes)
+            fail("incoming buffer overflow; reconnect required")
+        }
     }
 
     companion object {
         /** OkHttp offers permessage-deflate by default; match pocket server threshold (~1 KiB). */
         const val MIN_MESSAGE_TO_COMPRESS = 1024L
+        /** Absorb brief Android scheduling pauses without abandoning a healthy high-rate stream. */
+        internal const val MAX_QUEUED_FRAMES = 512
+        /** UTF-16 payload budget, in addition to the frame-count bound. */
+        internal const val MAX_QUEUED_BYTES = 16L * 1024 * 1024
 
         suspend fun open(
             url: String,
@@ -119,23 +149,39 @@ class WsTransport private constructor(
         ): WsTransport = withTimeout(timeoutMs) {
             val t = WsTransport(url, routeHint, http)
             val opened = CompletableDeferred<Unit>()
-            t.ws = http.newWebSocket(Request.Builder().url(url).build(), object : WebSocketListener() {
+            val socket = http.newWebSocket(Request.Builder().url(url).build(), object : WebSocketListener() {
                 override fun onOpen(webSocket: WebSocket, response: Response) {
                     t.negotiatedExtensions = response.header("Sec-WebSocket-Extensions")
                     opened.complete(Unit)
                 }
                 override fun onMessage(webSocket: WebSocket, text: String) {
-                    t.ch.trySend(text)
+                    t.receive(text)
                 }
                 override fun onClosing(webSocket: WebSocket, code: Int, reason: String) { webSocket.close(1000, null) }
-                override fun onClosed(webSocket: WebSocket, code: Int, reason: String) { t.fail("closed $code $reason") }
+                override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
+                    val message = "closed $code $reason"
+                    t.fail(message)
+                    opened.completeExceptionally(PocketError("transport", message))
+                }
                 override fun onFailure(webSocket: WebSocket, th: Throwable, response: Response?) {
-                    if (!opened.isCompleted) opened.completeExceptionally(PocketError("transport", th.message ?: th.toString()))
-                    else t.fail(th.message ?: th.toString())
+                    val message = th.message ?: th.toString()
+                    t.fail(message)
+                    opened.completeExceptionally(PocketError("transport", message))
                 }
             })
-            opened.await()
-            t
+            synchronized(t.lock) {
+                if (t.closed) socket.cancel() else t.ws = socket
+            }
+            try {
+                opened.await()
+                synchronized(t.lock) {
+                    if (t.closed) throw PocketError("transport", t.closeReason ?: "closed")
+                }
+                t
+            } catch (e: Throwable) {
+                t.close()
+                throw e
+            }
         }
 
         /** Loopback / local-dev factory. */

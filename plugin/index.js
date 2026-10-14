@@ -20,6 +20,7 @@ import {
   modelsSettingsOps, pluginsOps, pluginSettingsOps, pluginInventoryOps, scheduleOps, credentialsOps,
 } from './src/settings-ops.js'
 import { registerPairRoute } from './src/web-route.js'
+import { registerCompletionRoutes } from './src/completion-route.js'
 import { createManageApi, pairingString } from './src/manage.js'
 import { startIrohSidecar } from './src/iroh.js'
 import { loadTransport, saveTransport, normalizeTransport } from './src/transport-pref.js'
@@ -274,7 +275,10 @@ export function apply(ctx, config = {}) {
   ctx.inject(['credentials'], (c) => {
     c.effect(() => server.registerOps(credentialsOps({ credentials: c.credentials })))
   })
-  ctx.inject(['webServer'], (webCtx) => registerPairRoute(webCtx, manage))
+  ctx.inject(['webServer'], (webCtx) => {
+    registerPairRoute(webCtx, manage)
+    registerCompletionRoutes(webCtx, server.completion)
+  })
   ctx.inject(['webServer', 'connection'], (webCtx) => {
     webCtx.effect(() => server.installHostUi({
       webServer: webCtx.webServer,

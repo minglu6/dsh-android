@@ -49,6 +49,7 @@ class DrawerSidebarParityTest {
     @get:Rule val rule = createComposeRule()
 
     @Before fun state() {
+        completionState().reset()
         Pocket.init(RuntimeEnvironment.getApplication())
         installHostSettingsFixture()
         Pocket.prefs.language = AppLanguage.Zh
@@ -161,6 +162,55 @@ class DrawerSidebarParityTest {
         rule.onNodeWithText("History 7").assertExists()
         rule.onNodeWithText("History 8").assertExists()
         rule.onNodeWithTag("sessionOverflow:flat").assertDoesNotExist()
+    }
+
+    private fun completionState() = Pocket.javaClass.getDeclaredField("completionReminders")
+        .apply { isAccessible = true }.get(Pocket) as CompletionReminders
+
+    @org.junit.After fun clearCompletion() { completionState().reset() }
+
+    @Test
+    @OptIn(com.github.takahirom.roborazzi.ExperimentalRoborazziApi::class)
+    fun unreadCompletionUsesGreenLeadingDotAndHonorsActivityAndArchivePrecedence() {
+        Pocket.workspaces.value = listOf(WorkspaceView("one", "/repo", "默认工作区", listOf("s1"), null, null))
+        Pocket.sessions.value = listOf(SessionSummary("s1", "介绍 Claude", "/repo", false, false, 2, null))
+        completionState().accept(dev.dsh.pocket.protocol.PocketJson.parseToJsonElement(
+            """{"epoch":"host","revision":1,"unreadIds":["s1"]}"""))
+        rule.setContent { PocketTheme { SessionDrawer({}, {}, {}, {}) } }
+        val dot = rule.onNodeWithTag("sessionCompletion:s1", useUnmergedTree = true)
+        dot.assertIsDisplayed().assertContentDescriptionEquals("已完成，未查看")
+        val bounds = dot.fetchSemanticsNode().boundsInRoot
+        val title = rule.onNodeWithText("介绍 Claude", useUnmergedTree = true).fetchSemanticsNode().boundsInRoot
+        assertTrue(bounds.right < title.left)
+        rule.onNodeWithTag("workspaceIcon:one", useUnmergedTree = true).assertIsDisplayed()
+        rule.onNodeWithTag("workspaceActivity:one", useUnmergedTree = true).assertDoesNotExist()
+        for (appearance in listOf(Appearance.Light, Appearance.Dark)) {
+            rule.runOnIdle { Pocket.prefs.appearance = appearance }
+            rule.onRoot().captureRoboImage("build/screenshots/sidebar-completion-${appearance.name}.png",
+                roborazziOptions = RoborazziOptions(taskType = RoborazziTaskType.Record))
+        }
+        rule.runOnIdle { Pocket.sessions.value = Pocket.sessions.value.map { it.copy(running = true) } }
+        dot.assertDoesNotExist()
+        rule.onNodeWithTag("sessionActivity:s1", useUnmergedTree = true).assertContentDescriptionEquals("运行中")
+        rule.runOnIdle {
+            Pocket.sessions.value = Pocket.sessions.value.map { it.copy(running = false) }
+            Pocket.approvals.value = listOf(Approval("a", "s1", "bash", null, null))
+        }
+        dot.assertDoesNotExist()
+        rule.onNodeWithTag("sessionActivity:s1", useUnmergedTree = true).assertContentDescriptionEquals("等待审批")
+        rule.runOnIdle {
+            Pocket.approvals.value = emptyList()
+            Pocket.prefs.archivedFilter = ArchivedFilter.Show
+            Pocket.archivedIds.value = setOf("s1")
+        }
+        dot.assertDoesNotExist()
+        rule.runOnIdle { Pocket.archivedIds.value = emptySet() }
+        dot.assertIsDisplayed()
+        rule.runOnIdle {
+            completionState().accept(dev.dsh.pocket.protocol.PocketJson.parseToJsonElement(
+                """{"epoch":"host","revision":2,"unreadIds":[]}"""))
+        }
+        dot.assertDoesNotExist()
     }
 
     @Test

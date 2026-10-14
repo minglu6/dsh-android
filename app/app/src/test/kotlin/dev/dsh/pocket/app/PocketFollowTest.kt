@@ -36,8 +36,10 @@ class PocketFollowTest {
     @Suppress("UNCHECKED_CAST")
     @Before fun setUp() {
         Pocket.init(RuntimeEnvironment.getApplication())
+        (get("transcriptPublisher") as TranscriptPublisher).cancel()
         val fields = listOf("client", "subId", "pendingFollowEpoch", "reducer", "inspectorLog", "permissionProjectionSeq",
-            "modelProjectionSeq", "modelUsesDefault", "firstPromptSessionId").associateWith(::get)
+            "modelProjectionSeq", "modelUsesDefault", "firstPromptSessionId", "continuityRepairAttempts",
+            "desiredViewedSession", "completionReadySession", "completionViewClient", "completionViewSession").associateWith(::get)
         val modelEpochs = listOf("modelCatalogEpoch", "modelSelectionEpoch").associateWith { (get(it) as AtomicLong).get() }
         val modelFlows = listOf("catalog", "model", "_catalogLoading", "_catalogError", "_modelPending",
             "_firstPrompt", "permissionCatalog", "permissionCatalogLoading")
@@ -49,6 +51,7 @@ class PocketFollowTest {
         val stray = get("stray") as MutableMap<String, MutableList<JsonObject>>
         val originalStray = stray.toMap()
         val chat = Pocket.chat.value
+        val sessions = Pocket.sessions.value
         val permission = Pocket.permission.value
         val feedback = Pocket.feedback.value
         val ops = Pocket.ops.value
@@ -62,6 +65,7 @@ class PocketFollowTest {
             attempts.clear(); attempts.putAll(originalAttempts)
             stray.clear(); stray.putAll(originalStray)
             Pocket.chat.value = chat
+            Pocket.sessions.value = sessions
             Pocket.permission.value = permission
             Pocket.feedback.value = feedback
             Pocket.ops.value = ops
@@ -80,6 +84,7 @@ class PocketFollowTest {
         put("client", client)
         put("subId", "sub-A")
         put("pendingFollowEpoch", null)
+        put("continuityRepairAttempts", 0)
         put("reducer", TranscriptReducer())
         put("inspectorLog", SessionInspectorLog())
         put("permissionProjectionSeq", -1L)
@@ -91,12 +96,20 @@ class PocketFollowTest {
         epoch.set(0)
         attempts.clear(); stray.clear()
         Pocket.chat.value = ChatState("A")
+        Pocket.sessions.value = emptyList()
         Pocket.permission.value = emptyMap()
         Pocket.ops.value = emptySet()
+        put("desiredViewedSession", null)
+        put("completionReadySession", null)
+        put("completionViewClient", null)
+        put("completionViewSession", null)
+        (get("completionReminders") as CompletionReminders).reset()
     }
 
     @After fun tearDown() = runBlocking {
         jobs.forEach { it.cancelAndJoin() }
+        (get("transcriptPublisher") as TranscriptPublisher).cancel()
+        (get("completionReminders") as CompletionReminders).reset()
         client.close()
         requests.close()
         restore()
@@ -119,6 +132,37 @@ class PocketFollowTest {
         """{"type":"snapshot","cursor":$seq,"records":[],"projections":{"asOfSeq":$seq,"values":{"permissions":{"currentValue":"workspace-write"}}}}""")
     private fun open(session: String) = Pocket.openSession(session).also { jobs += it }
     private suspend fun finish(job: Job) = withTimeout(5000) { job.join() }
+
+    @Test fun unreadClearsOnlyAfterForegroundConversationHasARealSnapshot() = runBlocking {
+        Pocket.ops.value = setOf("completion.view")
+        fun state(revision: Int, ids: String = "[]") =
+            """{"epoch":"host","revision":$revision,"unreadIds":$ids}"""
+        fun completion(revision: Int, ids: String) {
+            val event = PocketJson.parseToJsonElement("""{"ev":"completion","epoch":"host","revision":$revision,"unreadIds":$ids}""").jsonObject
+            Pocket.javaClass.getDeclaredMethod("onPush", JsonObject::class.java).apply { isAccessible = true }.invoke(Pocket, event)
+        }
+        completion(1, """["A"]""")
+        finish(Pocket.setViewedSession("A"))
+        val beforeLoad = request("completion.view")
+        assertTrue(beforeLoad["args"]["sessionId"] is JsonNull)
+        reply(beforeLoad, state(1, """["A"]"""))
+        assertEquals(setOf("A"), Pocket.completionUnread.value)
+        snapshot("sub-A")
+        val viewed = request("completion.view")
+        assertEquals("A", viewed["args"]["sessionId"].str())
+        completion(3, "[]")
+        reply(viewed, state(2, """["A"]"""))
+        finish(Pocket.setViewedSession(null))
+        val background = request("completion.view")
+        assertTrue(background["args"]["sessionId"] is JsonNull)
+        reply(background, state(3))
+        completion(4, """["A"]""")
+        assertEquals(setOf("A"), Pocket.completionUnread.value)
+        // A background follow frame is not a new read acknowledgement.
+        snapshot("sub-A", 11)
+        delay(100)
+        assertTrue(requests.tryReceive().isFailure)
+    }
 
     private fun invalidateModels() {
         Pocket.javaClass.getDeclaredMethod("invalidateModelCatalog").apply { isAccessible = true }.invoke(Pocket)
@@ -874,5 +918,94 @@ class PocketFollowTest {
         finish(opening)
         assertEquals(ModelChoice("p", "next", "Next", null), Pocket.model.value["B"])
         assertNull(Pocket.model.value["A"])
+    }
+
+    private suspend fun onActor(action: () -> Unit) =
+        withContext((get("main") as CoroutineScope).coroutineContext) { action() }
+
+    private fun streamBaseline(sub: String = "sub-A") = push(sub,
+        """{"type":"snapshot","cursor":1,"records":[{"type":"event","event":{"seq":1,"time":100,"type":"turn/start","data":{"turn":1}}}],"projections":{},"assistantStream":{"revision":0}}""")
+
+    private fun streamStart(sub: String = "sub-A") = push(sub,
+        """{"type":"assistant-stream","frame":{"type":"start","attemptId":"attempt","turn":1,"step":1,"startedAfterSeq":1,"revision":1}}""")
+
+    @Test fun completionPublishesPendingTextAndLateStartCannotReopenTheTurn() = runBlocking {
+        onActor {
+            streamBaseline()
+            streamStart()
+            repeat(100) { index ->
+                push("sub-A", """{"type":"assistant-stream","frame":{"type":"chunk","attemptId":"attempt","revision":${index + 2},"index":$index,"time":150,"chunk":{"type":"text-delta","index":0,"text":"x"}}}""")
+            }
+            val answer = "x".repeat(100)
+            push("sub-A", """{"type":"event","event":{"seq":2,"time":200,"type":"assistant/message","data":{"turn":1,"step":1,"message":{"content":[{"type":"text","text":"$answer"}]}}}}""")
+            push("sub-A", """{"type":"assistant-stream","frame":{"type":"end","attemptId":"attempt","revision":102,"index":100,"outcome":{"kind":"committed","seq":2,"eventType":"assistant/message"}}}""")
+            push("sub-A", """{"type":"event","event":{"seq":3,"time":250,"type":"turn/end","data":{"turn":1}}}""")
+            assertEquals(answer, Pocket.chat.value!!.items.filterIsInstance<Item.Text>().single().text)
+            assertFalse(Pocket.chat.value!!.running)
+            streamStart()
+            assertFalse(Pocket.chat.value!!.running)
+            assertTrue(Pocket.chat.value!!.items.filterIsInstance<Item.Text>().none { it.live })
+        }
+        val completed = Pocket.chat.value
+        delay(100)
+        assertEquals(completed, Pocket.chat.value)
+        assertTrue(requests.tryReceive().isFailure)
+    }
+
+    @Test fun streamGapDetachesOldFramesAndRecoversFromFreshBaseline() = runBlocking {
+        onActor {
+            streamBaseline()
+            streamStart()
+            push("sub-A", """{"type":"assistant-stream","frame":{"type":"chunk","attemptId":"attempt","revision":3,"index":0,"time":150,"chunk":{"type":"text-delta","index":0,"text":"incomplete"}}}""")
+            assertNull(get("subId"))
+        }
+        val unfollow = request("unfollow")
+        assertEquals("sub-A", unfollow["args"]["subId"].str())
+        onActor {
+            push("sub-A", """{"type":"event","event":{"seq":999,"type":"turn/start","data":{"turn":99}}}""")
+        }
+        reply(unfollow, """{"stopped":true}""")
+        val follow = request("follow")
+        assertNull(follow["args"]["afterSeq"].long())
+        reply(follow, """{"subId":"recovered"}""")
+        withTimeout(5000) { while (get("subId") != "recovered") delay(1) }
+        onActor {
+            push("recovered", """{"type":"snapshot","cursor":3,"records":[{"type":"event","event":{"seq":2,"type":"assistant/message","data":{"turn":1,"step":1,"message":{"content":[{"type":"text","text":"recovered answer"}]}}}},{"type":"event","event":{"seq":3,"type":"turn/end","data":{"turn":1}}}],"projections":{},"assistantStream":{"revision":5}}""")
+            assertFalse((get("reducer") as TranscriptReducer).needsResync)
+            assertFalse(Pocket.chat.value!!.running)
+            assertEquals("recovered answer", Pocket.chat.value!!.items.filterIsInstance<Item.Text>().single().text)
+            assertTrue(Pocket.chat.value!!.turns.none { it.turn == 99 })
+        }
+        assertTrue(requests.tryReceive().isFailure)
+    }
+
+    @Test fun activeBaselineRestoresRunningEvenWhenMergedMetadataRemembersTheOldStart() = runBlocking {
+        onActor {
+            streamBaseline()
+            Pocket.sessions.value = listOf(SessionSummary("A", "Active", "/repo", true, false, 1, null))
+            push("sub-A", """{"type":"snapshot","cursor":2,"records":[{"type":"event","event":{"seq":2,"type":"step/start","data":{"turn":1,"step":1}}}],"projections":{},"assistantStream":{"revision":2,"activeAttempt":{"attemptId":"attempt","turn":1,"step":1,"startedAfterSeq":2,"nextIndex":1,"stream":[{"type":"text-chunks","index":0,"time0":150,"texts":["prefix"],"dt":[]}]}}}""")
+            assertTrue(Pocket.chat.value!!.running)
+            assertEquals(100L, Pocket.chat.value!!.runStartedAt)
+            assertEquals("prefix", Pocket.chat.value!!.items.filterIsInstance<Item.Text>().single().text)
+            push("sub-A", """{"type":"event","event":{"seq":3,"time":250,"type":"turn/end","data":{"turn":1}}}""")
+            assertFalse(Pocket.chat.value!!.running)
+        }
+    }
+
+    @Test fun followFailureKeepsAlreadyReceivedTextInsteadOfCancellingItsLastPaint() = runBlocking {
+        onActor {
+            streamBaseline()
+            streamStart()
+            push("sub-A", """{"type":"assistant-stream","frame":{"type":"chunk","attemptId":"attempt","revision":2,"index":0,"time":150,"chunk":{"type":"text-delta","index":0,"text":"last received text"}}}""")
+            val failure = jsonOf("ev" to "follow.error", "subId" to "sub-A",
+                "error" to jsonOf("code" to "frame/too-large", "message" to "stream failed"))
+            Pocket.javaClass.getDeclaredMethod("onPush", JsonObject::class.java).apply { isAccessible = true }.invoke(Pocket, failure)
+            assertNull(get("subId"))
+            assertEquals("last received text", Pocket.chat.value!!.items.filterIsInstance<Item.Text>().single().text)
+            assertTrue(Pocket.chat.value!!.running) // Failure is not a fabricated turn completion.
+        }
+        val shown = Pocket.chat.value
+        delay(100)
+        assertEquals(shown, Pocket.chat.value)
     }
 }

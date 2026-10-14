@@ -521,8 +521,10 @@ private fun SessionRow(
     val ops by Pocket.ops.collectAsState()
     val archivedIds by Pocket.archivedIds.collectAsState()
     val pinnedIds by Pocket.pinnedIds.collectAsState()
+    val completionUnread by Pocket.completionUnread.collectAsState()
     val isArchived = archived || s.sessionId in archivedIds
     val isPinned = s.sessionId in pinnedIds
+    val completionColor = T.Ok
     var renameOpen by remember(s.sessionId) { mutableStateOf(false) }
     var renameTitle by remember(s.sessionId, s.title) { mutableStateOf(s.title.orEmpty()) }
     var busy by remember { mutableStateOf(false) }
@@ -554,7 +556,15 @@ private fun SessionRow(
             Column(Modifier.weight(1f)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Box(Modifier.width(16.dp).height(14.dp), contentAlignment = Alignment.Center) {
-                        SidebarActivityIndicator(activity, Modifier.size(14.dp).testTag("sessionActivity:${s.sessionId}"))
+                        if (activity == SidebarActivity.Idle && !isArchived && s.sessionId in completionUnread) {
+                            Canvas(Modifier.size(14.dp).testTag("sessionCompletion:${s.sessionId}").semantics {
+                                contentDescription = navText("已完成，未查看", "Completed, unread")
+                            }) {
+                                drawCircle(completionColor, radius = size.minDimension * 3f / 14f)
+                            }
+                        } else {
+                            SidebarActivityIndicator(activity, Modifier.size(14.dp).testTag("sessionActivity:${s.sessionId}"))
+                        }
                     }
                     Spacer(Modifier.width(6.dp))
                     Text(s.title ?: navText("新会话", "New session"), fontSize = 15.sp, color = if (isArchived) T.Caption else T.Ink, maxLines = 1, overflow = TextOverflow.Ellipsis)

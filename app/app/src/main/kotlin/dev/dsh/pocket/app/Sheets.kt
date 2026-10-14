@@ -11,13 +11,22 @@ import androidx.compose.material.icons.outlined.*
 import androidx.compose.material.icons.rounded.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.rotate
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -345,52 +354,67 @@ fun FeedbackSheet(onDismiss: () -> Unit) {
 
 
 
-/** Desktop TodoPanel — locale `todo.title` / status / progress. */
+/** Desktop TodoPanel: one dock card, with details expanding in place above the composer. */
 @Composable
-fun TodoSheet(todos: List<dev.dsh.pocket.protocol.TodoItem>, onDismiss: () -> Unit) {
-    PocketSheet(onDismiss) {
-        SheetTitle("任务")
-        if (todos.isEmpty()) {
-            Text("任务清单为空", fontSize = 14.sp, color = T.Text3, modifier = Modifier.padding(22.dp))
-            return@PocketSheet
+internal fun TodoPanel(sessionKey: String, todos: List<dev.dsh.pocket.protocol.TodoItem>) {
+    var expanded by rememberSaveable(sessionKey) { mutableStateOf(false) }
+    if (todos.isEmpty()) return
+    val language = Pocket.prefs.language
+    val progress = remember(todos, language) { todoProgressLabel(todos, language) }
+    val action = if (expanded) navText("收起任务", "Collapse tasks") else navText("展开任务", "Expand tasks")
+    Column(
+        Modifier.padding(horizontal = 22.dp, vertical = 4.dp).fillMaxWidth().testTag("todoPanel")
+            .shadow(2.dp, T.R16).clip(T.R16).background(ThemeState.colors.Specificmenu)
+            .border(0.5.dp, ThemeState.colors.BorderL1, T.R16).padding(horizontal = 12.dp, vertical = 6.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Row(
+            Modifier.fillMaxWidth().testTag("todoHeader").semantics {
+                stateDescription = if (expanded) navText("已展开", "Expanded") else navText("已收起", "Collapsed")
+            }.clickable(role = Role.Button, onClickLabel = action) { expanded = !expanded }
+                .heightIn(min = 48.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            Icon(D.checklist, null, tint = T.Text3, modifier = Modifier.size(14.dp))
+            Text(navText("任务", "To-dos"), color = T.Ink, fontSize = 13.sp, fontWeight = FontWeight.Medium)
+            Text(progress, color = T.Text3, fontSize = 13.sp, lineHeight = 20.sp, modifier = Modifier.weight(1f))
+            // Rotating the official down-chevron 180° gives its exact up-chevron geometry.
+            Icon(D.chevronDown, action, tint = T.Text3, modifier = Modifier.size(14.dp).rotate(if (expanded) 0f else 180f))
         }
-        val done = todos.count { it.status == "completed" }
-        val active = todos.count { it.status == "in_progress" }
-        val pending = todos.size - done - active
-        val progress = buildList {
-            if (done > 0) add("$done 已完成")
-            if (active > 0) add("$active 进行中")
-            if (pending > 0) add("$pending 待处理")
-        }.joinToString(" · ")
-        SelectableOutput {
-            Column {
-            Text(progress, fontSize = 13.sp, color = T.Text3, modifier = Modifier.padding(horizontal = 22.dp, vertical = 4.dp))
-            todos.forEach { item ->
-                Row(
-                    Modifier.padding(horizontal = 22.dp, vertical = 10.dp).fillMaxWidth(),
-                    verticalAlignment = Alignment.Top,
+        if (expanded) {
+            SelectableOutput {
+                Column(
+                    Modifier.fillMaxWidth().heightIn(max = 180.dp).testTag("todoItems").verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
-                    val mark = when (item.status) {
-                        "completed" -> "✓"
-                        "in_progress" -> "●"
-                        else -> "○"
-                    }
-                    val color = when (item.status) {
-                        "completed" -> T.Ok
-                        "in_progress" -> T.Accent
-                        else -> T.Caption
-                    }
-                    Text(mark, color = color, fontSize = 14.sp, modifier = Modifier.padding(top = 2.dp, end = 10.dp))
-                    Column(Modifier.weight(1f)) {
-                        Text(item.content, fontSize = 15.sp, color = T.Ink, lineHeight = 22.sp)
-                        Text(todoStatusLabel(item.status), fontSize = 12.sp, color = T.Text3, modifier = Modifier.padding(top = 2.dp))
+                    todos.forEach { item ->
+                        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                            TodoStatusIndicator(item.status)
+                            Text(item.content, fontSize = 13.sp, lineHeight = 20.sp, color = T.Text2,
+                                maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+                        }
                     }
                 }
-            }
             }
         }
     }
 }
+
+@Composable
+private fun TodoStatusIndicator(status: String) {
+    val label = todoStatusLabel(status, Pocket.prefs.language)
+    Box(Modifier.size(16.dp).semantics { contentDescription = label }, contentAlignment = Alignment.Center) {
+        if (status == "in_progress") {
+            SidebarActivityIndicator(SidebarActivity.Running, Modifier.size(14.dp).clearAndSetSemantics {})
+        } else {
+            val color = if (status == "completed") T.Ok else ThemeState.colors.StateIdlePrimary
+            Canvas(Modifier.size(10.dp)) { drawCircle(color, radius = size.minDimension * 0.3f) }
+        }
+    }
+}
+
 
 
 @Composable

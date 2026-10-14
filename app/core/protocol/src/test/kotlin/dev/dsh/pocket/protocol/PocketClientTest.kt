@@ -1,11 +1,21 @@
 package dev.dsh.pocket.protocol
 
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.flow.emitAll
+import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.flow.take
 import kotlinx.coroutines.flow.toList
@@ -15,6 +25,8 @@ import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.withContext
+import kotlin.coroutines.CoroutineContext
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.jsonObject
@@ -27,18 +39,32 @@ import kotlin.test.assertTrue
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class PocketClientTest {
-    private class FakeTransport : FrameTransport {
+    private class FakeTransport(
+        private val closeGate: CompletableDeferred<Unit>? = null,
+    ) : FrameTransport {
         override val route = Route.WsLocal
         override val closeReason: String? = null
         private val frames = Channel<String>(Channel.UNLIMITED)
-        override val incoming = frames.receiveAsFlow()
+        override val incoming = flow {
+            try {
+                emitAll(frames.receiveAsFlow())
+            } finally {
+                if (closeGate != null) withContext(NonCancellable) {
+                    closeGate.await()
+                    throw IllegalStateException("late failure from old transport")
+                }
+            }
+        }
         val requests = mutableListOf<JsonObject>()
         var onSend: suspend () -> Unit = {}
+        var onHello: suspend () -> Unit = {}
+        var closed = false
 
         override suspend fun send(text: String) {
             val request = PocketJson.parseToJsonElement(text).jsonObject
             requests += request
             if (request["op"].str() == "hello") {
+                onHello()
                 reply(request, jsonOf("proto" to 1))
             } else {
                 onSend()
@@ -62,6 +88,7 @@ class PocketClientTest {
         }
 
         override fun close() {
+            closed = true
             frames.close()
         }
     }
@@ -143,6 +170,156 @@ class PocketClientTest {
             assertEquals(0, pendingCount(client))
             assertNextRequestIgnoresLateReply(client, transport, request)
         }
+    }
+
+    /** Adversarial but deterministic scheduling: newly launched per-frame jobs run backwards. */
+    private class LifoDispatcher : CoroutineDispatcher() {
+        private val tasks = ArrayDeque<Runnable>()
+        override fun dispatch(context: CoroutineContext, block: Runnable) { tasks.addLast(block) }
+        fun drain() {
+            while (tasks.isNotEmpty()) tasks.removeLast().run()
+        }
+    }
+
+    @Test fun pushesStayInWireOrderIncludingTerminalUnderAdversarialScheduling() = runTest {
+        val dispatcher = LifoDispatcher()
+        val scope = CoroutineScope(SupervisorJob() + dispatcher)
+        val client = PocketClient(scope)
+        val transport = FakeTransport()
+        val received = mutableListOf<JsonObject>()
+        try {
+            val connecting = async { client.connect(TransportFactory { transport }, Auth.Token("test-token")) }
+            runCurrent()
+            dispatcher.drain()
+            runCurrent()
+            connecting.await()
+            scope.launch { client.events.collect { received += it } }
+            dispatcher.drain()
+            for (start in 0 until 10_000 step 64) {
+                for (seq in start until minOf(start + 64, 10_000)) {
+                    transport.push(jsonOf("ev" to "follow", "seq" to seq))
+                }
+                dispatcher.drain()
+            }
+            transport.push(jsonOf("ev" to "turn/end", "seq" to 10_000))
+            dispatcher.drain()
+            assertEquals((0..10_000).toList(), received.map { it["seq"].int() })
+            assertEquals("turn/end", received.last()["ev"].str())
+        } finally {
+            client.close()
+            scope.cancel()
+            dispatcher.drain()
+        }
+    }
+
+    @Test fun handshakePushWaitsForFirstSubscriberAndIsDeliveredOnce() = runTest {
+        val transport = FakeTransport()
+        val client = PocketClient(backgroundScope)
+        transport.onHello = {
+            transport.push(jsonOf("ev" to "first", "seq" to 1))
+            transport.push(jsonOf("ev" to "second", "seq" to 2))
+        }
+        try {
+            client.connect(TransportFactory { transport }, Auth.Token("test-token"))
+            runCurrent()
+            val received = async { client.events.take(2).toList() }
+            runCurrent()
+            assertEquals(listOf(1, 2), received.await().map { it["seq"].int() })
+            assertEquals(PocketClient.State.Open, client.state.value)
+        } finally {
+            client.close()
+        }
+    }
+
+    @Test fun stalledConsumerDoesNotBlockRpcButOverflowFailsPendingAndCloses() = runTest {
+        withClient { client, transport ->
+            val gate = CompletableDeferred<Unit>()
+            val received = mutableListOf<JsonObject>()
+            backgroundScope.launch(start = CoroutineStart.UNDISPATCHED) {
+                client.events.collect {
+                    received += it
+                    gate.await()
+                }
+            }
+            transport.push(jsonOf("ev" to "follow", "seq" to 0))
+            runCurrent()
+            transport.push(jsonOf("ev" to "follow", "seq" to 1))
+            runCurrent()
+            val rpc = async { client.call("quick") }
+            runCurrent()
+            transport.reply(transport.requests.last(), jsonOf("done" to true))
+            runCurrent()
+            assertEquals(true, rpc.await()["done"].bool())
+
+            val pending = async { assertFailsWith<PocketError> { client.call("pending") } }
+            runCurrent()
+            repeat(PocketClient.MAX_PENDING_PUSHES + 1) {
+                transport.push(jsonOf("ev" to "follow", "seq" to it + 2))
+            }
+            runCurrent()
+            assertEquals(PocketClient.State.Closed, client.state.value)
+            assertTrue(transport.closed)
+            assertTrue(client.closeReason.orEmpty().contains("overflow"))
+            assertEquals("transport", pending.await().code)
+            assertEquals(0, pendingCount(client))
+            gate.complete(Unit)
+            runCurrent()
+            assertEquals(listOf(0), received.map { it["seq"].int() })
+        }
+    }
+
+    @Test fun pushByteBudgetFailsWithoutWaitingForFrameCountLimit() = runTest {
+        withClient { client, transport ->
+            val payload = "x".repeat(1024 * 1024)
+            repeat(9) { transport.push(jsonOf("ev" to "follow", "data" to payload)) }
+            runCurrent()
+            assertEquals(PocketClient.State.Closed, client.state.value)
+            assertTrue(client.closeReason.orEmpty().contains("overflow"))
+            assertTrue(transport.closed)
+        }
+    }
+
+    @Test fun oldPumpLateFailureCannotCloseNewConnectionOrCompleteItsRpc() = runTest {
+        val closeGate = CompletableDeferred<Unit>()
+        val old = FakeTransport(closeGate)
+        val fresh = FakeTransport()
+        val client = PocketClient(backgroundScope)
+        try {
+            client.connect(TransportFactory { old }, Auth.Token("old"))
+            old.push(jsonOf("ev" to "stale"))
+            runCurrent()
+            val oldRpc = async { assertFailsWith<PocketError> { client.call("old-request") } }
+            runCurrent()
+            client.connect(TransportFactory { fresh }, Auth.Token("new"))
+            assertEquals("transport", oldRpc.await().code)
+            closeGate.complete(Unit)
+            runCurrent()
+            assertEquals(PocketClient.State.Open, client.state.value)
+            assertFalse(fresh.closed)
+            val received = async { client.events.take(1).toList() }
+            val rpc = async { client.call("fresh-request") }
+            runCurrent()
+            fresh.push(jsonOf("ev" to "fresh"))
+            fresh.reply(fresh.requests.last(), jsonOf("fresh" to true))
+            runCurrent()
+            assertEquals(true, rpc.await()["fresh"].bool())
+            assertEquals("fresh", received.await().single()["ev"].str())
+        } finally {
+            closeGate.complete(Unit)
+            client.close()
+        }
+    }
+
+    @Test fun handshakeTimeoutClosesTransportAndClearsPending() = runTest {
+        val transport = FakeTransport()
+        val client = PocketClient(backgroundScope)
+        transport.onHello = { awaitCancellation() }
+        assertFailsWith<TimeoutCancellationException> {
+            client.connect(TransportFactory { transport }, Auth.Token("test-token"), timeoutMs = 50)
+        }
+        assertTrue(transport.closed)
+        assertEquals(PocketClient.State.Closed, client.state.value)
+        assertEquals(0, pendingCount(client))
     }
 
     @Test fun jobOutputBeforeSubscribeReplyIsRetainedAndCollectorCancellationUnfollows() = runTest {

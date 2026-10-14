@@ -97,6 +97,7 @@ dependencies {
     debugImplementation("androidx.compose.ui:ui-test-manifest")
     testImplementation(kotlin("test"))
     testImplementation("junit:junit:4.13.2")
+    testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.9.0")
     testImplementation("org.robolectric:robolectric:4.14.1")
     testImplementation("io.github.takahirom.roborazzi:roborazzi:1.39.0")
     testImplementation("io.github.takahirom.roborazzi:roborazzi-compose:1.39.0")

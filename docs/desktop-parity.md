@@ -22,6 +22,8 @@ Phone constraints (always): desktop `--dsw-alias-*` chrome (light/dark via Appea
 Package: `packages/client/ui-chat` (+ folding helpers in `ui-conversation`).  
 Data: `sessionController.follow` / `page` event stream (pocket `follow` / `history.page`).
 
+The transcript has no floating “back to bottom” button. Manual scrolling, history loading at the top, and the existing follow-bottom behavior remain unchanged.
+
 ### 1.1 Message kinds
 
 | Kind | Desktop behaviour | Locale (zh / en) | Data source |
@@ -157,6 +159,8 @@ Verification: reducer replay covers exhaustion, recovery, cancellation, chain is
 
 Assistant completion actions wait for the Host Turn to close and belong to its last answer, not every durable intermediate reply. The running process therefore does not gain a copy/time/action row merely because one assistant step has committed.
 
+When the Host supports branching, a later running turn does not hide the fork icon on previously completed answers. Historical/non-tail targets remain visible but disabled, matching desktop `MessageIconActions`; the available completed transcript tail becomes enabled after the active turn finishes.
+
 Turn usage follows the desktop token meter's durable attempt lifecycle, including billed failed attempts and retries. Final message usage overrides streaming samples; missing boundaries, unsafe counts or contradictory totals hide the entire disclosure. Optional cache/reasoning buckets and model routes appear only when every attempt reports them. History paging can complete a partial turn; snapshots and duplicate events never reuse or double-count old totals. Switching to Compact removes both the pill and any open details dialog. The phone bridge is unchanged.
 
 **Icon chrome (desktop MessageIconActions / MessageFeedbackActions):** Android uses the official ui-primitives Regular SVG paths. User messages show clock → copy, without a branch control. Assistant messages show copy → like/dislike → branch → optional usage → clock; copy/branch are 17dp and feedback icons 15dp, with tertiary `T.Text3` tint. Feedback selection swaps outline/fill rather than inventing blue/red colors. Icon controls occupy 36dp horizontally with no extra inter-button gap, retain a 48dp-high touch area, and leave 8dp before/after the clock; unavailable branch actions retain their disabled state and reason. Icon labels remain accessibility labels/tooltips. The usage pill shares the row's remaining width without pushing the clock off a narrow screen. No standalone “本轮用量” row is appended below answers; composer statistics and trajectory usage details remain available. Process/reasoning chevrons use vector artwork and rotate on expansion instead of text glyphs.
@@ -179,6 +183,12 @@ IconActions clock beside copy/branch (`formatMessageClock` + `clock.*`). Shown o
 ### 1.11 Streaming
 
 Live attempt baseline + stream records in follow frames; Android `TranscriptReducer` already mirrors this. Keep stop button wired to `cancel` (`input.stop` 停止生成).
+
+Pocket delivers raw pushes serially through bounded queues; overflow fails the connection rather than silently dropping a terminal frame. RPC replies do not wait behind UI consumption, and old connection generations cannot publish into replacements. `TranscriptReducer` validates assistant `revision`, `attemptId`, `startedAfterSeq`, and dense `index`; missing continuity or a new Agent's revision reset requests a fresh follow baseline. Durable settlements retire only the matching preview. Turn activity belongs to durable turn boundaries / Host control, not assistant attempt start/end.
+
+`TranscriptPublisher` coalesces only presentation requests for ordinary chunks in fixed 50ms windows, never the underlying events. Structural/terminal/error updates flush pending text immediately; subscription/session replacement cancels stale publication. Follow repair is bounded and never replays prompts or invents a successful terminal state.
+
+Transcript history backfills a folded/empty window that cannot fill the viewport. Once paging starts, reaching or remaining at the top advances through successive older boundaries, including pages merged into the same process row. Prepending pauses follow-bottom; failed or non-advancing pages are not retried merely because live output changes. Scrolling away and back permits another attempt at the same boundary. Paging remains read-only and uses the existing `history.page` contract.
 
 ---
 
@@ -240,10 +250,6 @@ OnePlus device evidence with the real Host catalog: [model list](screenshots/pho
 
 ## 4. Sidebar (left)
 
-Session history follows desktop `WorkspaceBrowser.collapsedSessionRows`: each workspace (keyed by entity ID, not path), Ungrouped group and flat list initially shows five idle rows. Running sessions, parents with running subagents and the current blank session remain visible without consuming that quota or changing the existing order. The muted, title-aligned `展开其余 {n} 个会话` / `Show {n} more sessions` control reveals five more idle rows per tap; the final batch stays fully expanded as history changes. `收起` / `Show less`, or closing and reopening a workspace, restores five rows. Search results and the separate pinned section remain unbounded. Expansion state is local to the active Host and does not mutate session history.
-
-Verified with 19 passing `DrawerSidebarParityTest` cases (including batch boundaries, live running-state changes, blank rows, same-path workspace isolation, group reset, search and pinned rows), light/dark rendered captures, and the installed debug APK on OnePlus: the real 27-session Ungrouped history expanded 5 → 10 → 15 → 20 → 25 → 27 and collapsed back to five without sending a prompt.
-
 Packages: `ui-sidebar`, `ui-workspace`, `ui-plugin-manager`, `ui-schedule`.
 
 | Feature | Locale | Data | Phone decision |
@@ -264,9 +270,15 @@ Empty: `empty.none` 暂无会话 / `empty.noMatches` 无匹配结果.
 
 Workspace action buttons retain 48dp touch targets. Opening actions never toggles the group. Cancelling rename discards its draft before reopening; cancelling deletion leaves the workspace unchanged. Verified on a physical Android device with `WorkspaceDisplayInstrumentedTest`, plus release-APK menu inspection and direct New session navigation against the connected Host.
 
+Completed-but-unread sessions display a green dot in the leading status slot. Pocket's Host tracker owns the shared `{epoch, revision, unreadIds}` snapshot; Android uses `completion.state/view` plus pushed `completion` events, and the desktop plugin supplies the same state through `uiSession.setCompletionUnreadSource`. Viewing loaded content in either foreground client clears both ends; background follows, covered/hidden views and merely opening the drawer do not acknowledge it. Running/pending status takes precedence, archived rows hide the dot, and workspace folders do not aggregate completion dots. Reconnection preserves Host state; Host/plugin restart resets it. This requires the updated official desktop client as well as the bridge and APK.
+
 Workspace headers and session rows show their titles without working-directory subtitles or duplicate pinned/archived text. The current session row (or the row with an open menu) exposes the desktop-order `⋯ → archive/restore → pin/unpin` strip; other rows show the relative activity time and retain a filled pinned marker when pinned. Long-press opens a historical row's menu without opening the conversation; dismissing it restores the time. Touch targets remain 48dp while artwork uses the official Regular SVG paths at 14dp. The anchored menu contains only `置顶会话 → 重命名 → 分叉会话 → 归档会话`, with matching icons and state-dependent labels; no mobile-only move-up/down commands or unsupported desktop keyboard shortcuts. Blank sessions have no time or action strip, archived sessions have no pin/rename/fork actions, and archive confirmation continues to use the existing active-work safeguards. Full paths remain in the workspace picker, not the sidebar.
 
 Session times use the Host's `updatedAt` in epoch milliseconds and the desktop's elapsed-time buckets: now, minutes, hours, days, 30-day months and 365-day years, rounded down with future timestamps clamped to now. Chinese and English labels match `ui-workspace` (`2分钟` / `2min`, `9小时` / `9h`, `1个月` / `1mo`). A shared 30-second clock refreshes visible drawer rows, pauses in the background and refreshes on resume. Workspace, pinned, flat and search rows share this renderer; long titles ellipsize before the right-aligned time.
+
+Session history follows desktop `WorkspaceBrowser.collapsedSessionRows`: each workspace (keyed by entity ID, not path), Ungrouped group and flat list initially shows five idle rows. Running sessions, parents with running subagents and the current blank session remain visible without consuming that quota or changing the existing order. The muted, title-aligned `展开其余 {n} 个会话` / `Show {n} more sessions` control reveals five more idle rows per tap; the final batch stays fully expanded as history changes. `收起` / `Show less`, or closing and reopening a workspace, restores five rows. Search results and the separate pinned section remain unbounded. Expansion state is local to the active Host and does not mutate session history.
+
+Verified with 19 passing `DrawerSidebarParityTest` cases (including batch boundaries, live running-state changes, blank rows, same-path workspace isolation, group reset, search and pinned rows), light/dark rendered captures, and the installed debug APK on OnePlus: the real 27-session Ungrouped history expanded 5 → 10 → 15 → 20 → 25 → 27 and collapsed back to five without sending a prompt.
 
 ---
 
@@ -301,7 +313,7 @@ Phone picking temporarily exposes the actual conversation, intercepts the pick w
 | Surface | Desktop home | Locale | Phone |
 |---|---|---|---|
 | 后台任务 | **Session header** job list action | `job.list.aria` 后台任务 | beside chat/trajectory tabs; hidden for an empty session roster, otherwise shows live (`running` / `stopping`) count or retained total and opens `JobsSheet`; refreshes every 3s only while visible and connected; session/Host changes clear old state and errors show unavailable rather than stale counts |
-| 任务 / 清单 (Todo) | **Conversation dock** `TodoPanel` (+ `todo_write` tool row) | `todo.title` 任务 | progress row above the composer, opening `TodoSheet` |
+| 任务 / 清单 (Todo) | **Conversation dock** `TodoPanel` (+ `todo_write` tool row) | `todo.title` 任务 | inline 16dp-radius menu card above the composer; desktop checklist and up/down chevrons, nonzero completed/in-progress/pending counts, and a capped 180dp scrolling list with green/animated-gray/idle-gray status glyphs; no modal sheet |
 
 ---
 
@@ -373,7 +385,7 @@ Model settings use the desktop UI, not the mere existence of Host APIs, as their
 | Stopped / interrupted copy | **done** (`message.stopped` 已停止) | feasible |
 | Deliverable / changed-file cards | **done** (official artwork, full summary statistics, four-row disclosure, single-file status and snapshot review) | Host summary/diff lifetime applies; no fabricated fallback |
 | Streaming + stop | present | — |
-| Todo panel (清单) | **done** (parse `todo/write` + projections; sheet) | was needs-plugin |
+| Todo panel (清单) | **done** (parse `todo/write` + projections; inline expand/collapse and live status counts) | was needs-plugin |
 | User-questions prompts | **done** (push `user-question` + `userQuestions.answer`) | was needs-plugin |
 
 ### Header / composer / sidebar / panels / settings
@@ -392,7 +404,7 @@ Model settings use the desktop UI, not the mere existence of Host APIs, as their
 | Archive / pin / fork from sidebar | **done** (workspace archive/pin + row ⋯ / long-press) | was needs-plugin |
 | 插件 / 自动化任务 | **done** (drawer under 新会话 + Settings; pinwheel/clock icons from ui-primitives) | was hide |
 | Drawer search / view options / add workspace | **done** (ui-workspace header icons + locales) | was needs-plugin / subset |
-| Files / terminal / jobs / todo sheets | present | — |
+| Files / terminal / jobs sheets | present | — |
 | Browser / session diagnostics | present | native WebView / read-only loaded event window |
 | Settings general rows | present | — |
 | Language / appearance prefs | **done** (labels wired via L; en for new surfaces) | was feasible (partial) |
@@ -474,7 +486,7 @@ Every **output** text surface supports Compose `SelectionContainer` (helper `Sel
 | Thinking / reasoning body | Fold header stays clickable; body in `SelectableOutput` |
 | Notices / errors / approvals / questions / deliverables / changes | `SelectableOutput` on content |
 | Tool / file preview `CodeBox` | `SelectableOutput` |
-| Todo sheet items | `SelectableOutput` |
+| Inline Todo panel items | `SelectableOutput`; single-line desktop rows with ellipsis |
 | Trajectory ledger title / preview | `SelectableOutput` (tap still opens detail); metrics remain in the inspector |
 | Trajectory + Request detail tabs / payloads | `SelectableOutput` on payloads & KV values |
 | Terminal (Canvas grid) | Long-press → selectable plain-text overlay (`AnsiTerminal.plainText()`); tap exits |
