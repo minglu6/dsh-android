@@ -1,6 +1,6 @@
 # dsh-plugin-pocket
 
-[dsh-android](../README.md) 的 Host 桥接插件。在电脑端 dsh 进程中调用官方会话、配置、工作区等服务，通过带鉴权的 JSON/WebSocket 协议供原生 Android 客户端使用。手机不运行另一套任务数据库、包管理器或模型执行引擎。
+[dsh-android](../README.zh-CN.md) 的 Host 桥接插件。在电脑端 dsh 进程中调用官方会话、配置、工作区等服务，通过带鉴权的 JSON/WebSocket 协议供原生 Android 客户端使用。手机不运行另一套任务数据库、包管理器或模型执行引擎。
 
 ## 安装与升级
 
@@ -13,7 +13,7 @@
 
 ### 从源码安装
 
-从仓库根目录执行；尚未安装 dsh／pnpm 时，可先执行根 README 中的 [环境安装命令](../README.md#快速开始)。不依赖该插件已发布到 npm。
+从仓库根目录执行；尚未安装 dsh／pnpm 时，可先执行根 README 中的 [环境安装命令](../README.zh-CN.md#安装桥接)。不依赖该插件已发布到 npm。
 
 ```bash
 cd plugin
