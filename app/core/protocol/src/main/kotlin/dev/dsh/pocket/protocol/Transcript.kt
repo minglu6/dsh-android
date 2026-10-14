@@ -342,6 +342,7 @@ class TranscriptReducer {
     private val stepStartTimes = HashMap<String, Long>()
     private val settledSteps = ArrayList<StepRecord>()
     private val turnFacts = LinkedHashMap<Int, TurnRecord>()
+    private val turnUsageLedger = TurnUsageLedger()
     private val headerFacts = ArrayList<RequestHeaderFact>()
     /**
      * Latest tool catalog from `request/header` (`EpochHeader.tools`), keyed by tool name.
@@ -398,6 +399,7 @@ class TranscriptReducer {
     val usage get() = Usage(turns, steps, inputTokens, cacheRead, outputTokens)
     fun stepRecords(): List<StepRecord> = settledSteps.toList()
     fun turnRecords(): List<TurnRecord> = turnFacts.values.sortedBy { it.turn }
+    fun turnTokenUsage(): Map<Int, TurnTokenUsage> = turnUsageLedger.snapshot()
     fun requestHeaders(): List<RequestHeaderFact> = headerFacts.toList()
     fun todos(): List<TodoItem> = todos
     val planMode: Boolean get() = planActive
@@ -500,6 +502,7 @@ class TranscriptReducer {
             put("records", JsonArray(filtered))
             put("projections", buildJsonObject {})
         })
+        val olderTurnUsage = turnUsageLedger.prepend(prior.turnUsageLedger)
         for ((turn, earlier) in prior.turnFacts) {
             val later = turnFacts[turn]
             turnFacts[turn] = later?.withEarlier(earlier) ?: earlier
@@ -531,7 +534,7 @@ class TranscriptReducer {
         val min = filtered.mapNotNull { it["event"]["seq"].long() }.minOrNull()
         if (min != null) firstSeq = if (firstSeq < 0) min else minOf(firstSeq, min)
         return shift > 0 || olderSteps.isNotEmpty() || olderHeaders.isNotEmpty() ||
-            prior.toolTimings.isNotEmpty() || prior.turnFacts.isNotEmpty()
+            prior.toolTimings.isNotEmpty() || prior.turnFacts.isNotEmpty() || olderTurnUsage
     }
 
     private fun rebuildIndexes() {
@@ -564,6 +567,7 @@ class TranscriptReducer {
         inboxSeq = -1L
         toolTimings.clear()
         turnFacts.clear()
+        turnUsageLedger.clear()
         stepStartTimes.clear(); settledSteps.clear(); headerFacts.clear(); toolsByName.clear()
         toolsCatalogJson = null; previousToolsCatalogJson = null; lastSystemPromptText = null
         systemPromptSeen = false; live = null
@@ -627,6 +631,7 @@ class TranscriptReducer {
         val seq = e["seq"].long() ?: return
         if (seq <= cursor) return
         cursor = seq
+        turnUsageLedger.apply(e)
         val data = e["data"]
         when (e["type"].str()) {
             "turn/start" -> {

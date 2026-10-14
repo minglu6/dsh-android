@@ -1,8 +1,10 @@
 package dev.dsh.pocket.app
 
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
@@ -11,6 +13,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
@@ -25,6 +28,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
@@ -33,11 +37,15 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.vectorResource
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.dsh.pocket.protocol.ComposerMetrics
+import dev.dsh.pocket.protocol.TurnTokenUsage
 import java.util.Locale
 import kotlin.math.floor
 
@@ -140,6 +148,91 @@ fun ComposerStats(metrics: ComposerMetrics, modifier: Modifier = Modifier) {
             }
         },
         confirmButton = { TextButton(onClick = { dialog = null }) { Text(label("关闭", "Close")) } },
+        containerColor = T.Surface,
+        titleContentColor = T.Ink,
+        textContentColor = T.Text2,
+    )
+}
+
+/** Completed-turn action only; its caller owns detailed-mode and accounting eligibility. */
+@Composable
+internal fun TurnUsageAction(turn: Int, usage: TurnTokenUsage) {
+    val en = Pocket.prefs.language == AppLanguage.En
+    fun label(zh: String, english: String) = if (en) english else zh
+    var expanded by remember(turn) { mutableStateOf(false) }
+    val count = "${statisticsTokens(usage.totalTokens.toDouble())} tok"
+    val actionLabel = label("用量 $count", "Usage $count")
+    Box(
+        modifier = Modifier.widthIn(max = 180.dp).height(48.dp).clip(T.R8)
+            .testTag("turnUsage:$turn")
+            .clickable(role = Role.Button) { expanded = !expanded }
+            .semantics {
+                contentDescription = actionLabel
+                stateDescription = if (expanded) label("已展开", "Expanded") else label("已收起", "Collapsed")
+            },
+        contentAlignment = Alignment.Center,
+    ) {
+        Row(
+            modifier = Modifier.background(T.HoverBg, T.R8).padding(horizontal = 2.dp, vertical = 5.dp),
+            horizontalArrangement = Arrangement.spacedBy(2.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(ImageVector.vectorResource(R.drawable.dsh_statistics_database), null, Modifier.size(14.dp), tint = T.Text3)
+            Text(
+                actionLabel,
+                modifier = Modifier.weight(1f, fill = false),
+                color = T.Text3,
+                fontSize = 12.sp,
+                maxLines = 1,
+                softWrap = false,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+    }
+    if (!expanded) return
+    AlertDialog(
+        modifier = Modifier.testTag("turnUsageDialog:$turn"),
+        onDismissRequest = { expanded = false },
+        title = { Text(label("本轮用量", "Turn usage")) },
+        text = {
+            Column(
+                Modifier.fillMaxWidth().verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                StatisticsDetail(label("合计", "Total"), "${statisticsExact(usage.totalTokens)} tok")
+                usage.routes?.takeIf { it.isNotEmpty() }?.let { routes ->
+                    Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Text(label("模型", "Model"), color = T.Text2, fontSize = 13.sp)
+                        routes.forEach { route ->
+                            Text(
+                                "${route.provider}/${route.model}",
+                                modifier = Modifier.fillMaxWidth(),
+                                color = T.Ink,
+                                fontSize = 13.sp,
+                                softWrap = true,
+                            )
+                        }
+                    }
+                }
+                val promptTokens = usage.totalTokens - usage.outputTokens
+                usage.cacheReadTokens?.takeIf { promptTokens > 0 }?.let { cached ->
+                    StatisticsDetail(
+                        label("缓存命中率", "Cache hit"),
+                        String.format(Locale.ROOT, "%.1f%%", cached.toDouble() / promptTokens * 100),
+                    )
+                }
+                StatisticsDetail(label("未缓存输入", "Uncached input"), "${statisticsExact(usage.uncachedInputTokens)} tok")
+                usage.cacheReadTokens?.let { StatisticsDetail(label("缓存读取", "Cache read"), "${statisticsExact(it)} tok") }
+                usage.cacheWriteTokens?.let { StatisticsDetail(label("缓存写入", "Cache write"), "${statisticsExact(it)} tok") }
+                StatisticsDetail(label("输出", "Output"), "${statisticsExact(usage.outputTokens)} tok")
+                usage.reasoningTokens?.let {
+                    Column(Modifier.padding(start = 12.dp)) {
+                        StatisticsDetail(label("其中推理输出", "Of which reasoning"), "${statisticsExact(it)} tok")
+                    }
+                }
+            }
+        },
+        confirmButton = { TextButton(onClick = { expanded = false }) { Text(label("关闭", "Close")) } },
         containerColor = T.Surface,
         titleContentColor = T.Ink,
         textContentColor = T.Text2,

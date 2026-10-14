@@ -121,14 +121,16 @@ Slash menu pick consumes the typed `/` (desktop `slash/input-consume-token`) the
 | Copy | common `copy` 复制 / `copied` 复制成功 | clipboard |
 | Branch / fork | `message.branch` 在新对话中分支; `message.branchUnavailable` | `sessionController.fork({sessionId, atSeq?})` |
 | Like / dislike | `feedback.action.like` 好的回答; `action.dislike` 有问题的回答; dialog `feedback.dialog.*` | message-feedback Host service + `/feedback` |
-| Turn usage pill (desktop only) | `message.turnUsage.*` | shown in the action row only for detailed performance/usage mode with turn token data; Android does not add a standalone turn-usage row |
+| Turn usage pill | `message.turnUsage.*` | inline `用量 {total} tok` in detailed performance/usage mode, only with complete per-turn accounting; tap for exact token/model/cache details |
 | Clock | `clock.md` / `clock.ymd` | event `time` |
 
 Retry is **display** of Host `llm/retry` chains (`message.retry.*`), not a user button.
 
 Assistant completion actions wait for the Host Turn to close and belong to its last answer, not every durable intermediate reply. The running process therefore does not gain a copy/time/action row merely because one assistant step has committed.
 
-**Icon chrome (desktop MessageIconActions / MessageFeedbackActions):** Android uses the official ui-primitives Regular SVG paths. User messages show clock → copy, without a branch control. Assistant messages show copy → like/dislike → branch → clock; copy/branch are 17dp and feedback icons 15dp, with tertiary `T.Text3` tint. Feedback selection swaps outline/fill rather than inventing blue/red colors. Controls occupy 36dp horizontally with no extra inter-button gap, retain a 48dp-high touch area, and leave 8dp before/after the clock; unavailable branch actions retain their disabled state and reason. Locale strings remain accessibility labels/tooltips, not visible text buttons. No standalone “本轮用量” row is appended below answers; composer statistics and trajectory usage details remain available. Process/reasoning chevrons use vector artwork and rotate on expansion instead of text glyphs.
+Turn usage follows the desktop token meter's durable attempt lifecycle, including billed failed attempts and retries. Final message usage overrides streaming samples; missing boundaries, unsafe counts or contradictory totals hide the entire disclosure. Optional cache/reasoning buckets and model routes appear only when every attempt reports them. History paging can complete a partial turn; snapshots and duplicate events never reuse or double-count old totals. Switching to Compact removes both the pill and any open details dialog. The phone bridge is unchanged.
+
+**Icon chrome (desktop MessageIconActions / MessageFeedbackActions):** Android uses the official ui-primitives Regular SVG paths. User messages show clock → copy, without a branch control. Assistant messages show copy → like/dislike → branch → optional usage → clock; copy/branch are 17dp and feedback icons 15dp, with tertiary `T.Text3` tint. Feedback selection swaps outline/fill rather than inventing blue/red colors. Icon controls occupy 36dp horizontally with no extra inter-button gap, retain a 48dp-high touch area, and leave 8dp before/after the clock; unavailable branch actions retain their disabled state and reason. Icon labels remain accessibility labels/tooltips. The usage pill shares the row's remaining width without pushing the clock off a narrow screen. No standalone “本轮用量” row is appended below answers; composer statistics and trajectory usage details remain available. Process/reasoning chevrons use vector artwork and rotate on expansion instead of text glyphs.
 
 ### 1.9 Timestamps
 

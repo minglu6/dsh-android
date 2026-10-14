@@ -14,10 +14,10 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 import dev.dsh.pocket.protocol.Item
-import dev.dsh.pocket.protocol.StepRecord
-import dev.dsh.pocket.protocol.StepUsage
 import dev.dsh.pocket.protocol.ToolStatus
 import dev.dsh.pocket.protocol.TurnRecord
+import dev.dsh.pocket.protocol.PocketJson
+import dev.dsh.pocket.protocol.TranscriptReducer
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -32,10 +32,7 @@ import org.robolectric.RuntimeEnvironment
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
 
-/**
- * Message action row must be icon-only (desktop MessageIconActions):
- * locale strings are contentDescription / tooltip, not visible Text buttons.
- */
+/** Message actions preserve desktop ordering, turn boundaries, and conditional usage disclosure. */
 @RunWith(RobolectricTestRunner::class)
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
 @Config(sdk = [34], qualifiers = "w412dp-h915dp-xxhdpi")
@@ -186,23 +183,69 @@ class MessageActionsTest {
         rule.onAllNodesWithTag("messageBranch").assertCountEquals(1)
     }
 
-    @Test fun settledTurnDoesNotAppendSeparateUsageRow() {
-        val answer = Item.Text("a1", "回答正文", false, at = System.currentTimeMillis(),
-            seq = 3, messageId = "m1", turn = 1, step = 1)
-        val state = Pocket.chat.value!!.copy(
-            items = listOf(answer),
-            turns = listOf(TurnRecord(1, 1, 4, 1000, 2000, "completed")),
-            steps = listOf(StepRecord(
-                seq = 3, turn = 1, step = 1, stepStartTime = 1000, messageTime = 2000,
-                replyText = answer.text, reasoningText = "",
-                usage = StepUsage(inputTokens = 202_000, outputTokens = 2_000),
-                provider = "deepseek", model = "flash", toolCallIds = emptyList(),
-            )),
-        )
+    @Test
+    @Config(sdk = [34], qualifiers = "w320dp-h720dp-xhdpi")
+    fun completedUsageOpensDetailsAndFollowsLivePerformancePreference() {
+        Pocket.prefs.performanceUsage = PerformanceUsage.Detailed
+        val state = completedUsageState()
+        rule.setContent { PocketTheme { Transcript(state, {}, canFork = true) } }
+        val usage = rule.onNodeWithTag("turnUsage:1")
+        usage.assertIsDisplayed().assertHasClickAction()
+        rule.onNodeWithText("用量 11.5K tok").assertIsDisplayed()
+        val branchBounds = rule.onNodeWithTag("messageBranch").fetchSemanticsNode().boundsInRoot
+        val usageBounds = usage.fetchSemanticsNode().boundsInRoot
+        val clockBounds = rule.onNodeWithTag("messageClock").fetchSemanticsNode().boundsInRoot
+        assertTrue(branchBounds.right <= usageBounds.left)
+        assertTrue(usageBounds.right <= clockBounds.left)
+        assertTrue(clockBounds.right <= rule.onRoot().fetchSemanticsNode().boundsInRoot.right)
+        usage.performClick()
+        rule.onNodeWithTag("turnUsageDialog:1").assertIsDisplayed()
+        rule.onNodeWithText("11,500 tok").assertIsDisplayed()
+        rule.onNodeWithText("deepseek/flash").assertIsDisplayed()
+        rule.onNodeWithText("95.2%").assertIsDisplayed()
+        rule.onNodeWithText("500 tok").assertIsDisplayed()
+        rule.onNodeWithText("10,000 tok").assertIsDisplayed()
+        rule.onNodeWithText("1,000 tok").assertIsDisplayed()
+        rule.runOnIdle { Pocket.prefs.performanceUsage = PerformanceUsage.Compact }
+        usage.assertDoesNotExist()
+        rule.onNodeWithTag("turnUsageDialog:1").assertDoesNotExist()
+        rule.onNodeWithTag("messageCopy").assertIsDisplayed()
+        rule.runOnIdle { Pocket.prefs.performanceUsage = PerformanceUsage.Detailed }
+        usage.assertIsDisplayed()
+        rule.onNodeWithTag("turnUsageDialog:1").assertDoesNotExist()
+        usage.performClick()
+        rule.onNodeWithText("关闭").performClick()
+        rule.onNodeWithTag("turnUsageDialog:1").assertDoesNotExist()
+    }
+
+    @Test fun completedAnswerWithoutCompleteAccountingKeepsActionsButHidesUsage() {
+        Pocket.prefs.performanceUsage = PerformanceUsage.Detailed
+        val state = completedUsageState(includeStart = false)
         rule.setContent { PocketTheme { Transcript(state, {}) } }
-        rule.onNodeWithText(answer.text).assertIsDisplayed()
         rule.onNodeWithTag("messageCopy").assertIsDisplayed()
         rule.onNodeWithTag("turnUsage:1").assertDoesNotExist()
+    }
+
+    private fun completedUsageState(includeStart: Boolean = true): ChatState {
+        val reducer = TranscriptReducer()
+        val now = System.currentTimeMillis()
+        fun event(seq: Int, type: String, data: String) {
+            reducer.apply(PocketJson.parseToJsonElement(
+                """{"type":"event","event":{"seq":$seq,"time":${now + seq},"type":"$type","data":$data}}""",
+            ))
+        }
+        if (includeStart) event(1, "turn/start", """{"turn":1}""")
+        event(2, "step/start", """{"turn":1,"step":1}""")
+        event(3, "assistant/message", """{"turn":1,"step":1,
+            "message":{"id":"answer","role":"assistant","source":{"provider":"deepseek","model":"flash"},
+                "content":[{"type":"text","text":"仅此而已。你想干点什么，直说就行。"}]},
+            "usage":{"inputTokens":500,"outputTokens":1000,"cacheReadTokens":10000,
+                "cacheWriteTokens":0,"reasoningTokens":200,"totalTokens":11500}}""")
+        event(4, "step/end", """{"turn":1,"step":1}""")
+        event(5, "turn/end", """{"turn":1,"reason":{"kind":"completed"}}""")
+        return ChatState("usage-session", loaded = true, items = reducer.items(),
+            turns = reducer.turnRecords(), steps = reducer.stepRecords(),
+            turnTokenUsage = reducer.turnTokenUsage())
     }
 
     @Test fun actionOrderClipboardAndCallbacksRemainFunctional() {

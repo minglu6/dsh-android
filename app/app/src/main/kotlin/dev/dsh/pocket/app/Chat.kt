@@ -685,6 +685,7 @@ internal fun Transcript(
     // Shared presentation preferences are read from the connected Host.
     val livePolicy = presentationPolicyFor(Pocket.prefs.transcriptView, Pocket.prefs.collapseTiming)
     val en = Pocket.prefs.language == AppLanguage.En
+    val detailedUsage = Pocket.prefs.performanceUsage == PerformanceUsage.Detailed
     val allRows = remember(st.items, st.turns, st.running, livePolicy, en) {
         foldChatItems(st.items, livePolicy, st.running, turnRecords = st.turns, en = en)
     }
@@ -818,6 +819,7 @@ internal fun Transcript(
                     val turn = row.item.turn
                     val showActions = !row.item.live && if (turn == null) !st.running else
                         st.turns.firstOrNull { it.turn == turn }?.closed == true && lastAnswers[turn] == row.key
+                    val usage = if (detailedUsage && turn != null) st.turnTokenUsage[turn] else null
                     Column(Modifier.fillMaxWidth()) {
                         MarkdownView(row.item.text, streaming = row.item.live)
                         if (showActions) MessageActions(
@@ -831,6 +833,9 @@ internal fun Transcript(
                             rating = rating,
                             onLike = mid?.let { { onLike(it) } },
                             onDislike = mid?.let { { onDislike(it) } },
+                            usageAction = if (usage != null && turn != null) {
+                                { TurnUsageAction(turn, usage) }
+                            } else null,
                         )
                     }
                 }
@@ -879,8 +884,8 @@ internal fun Transcript(
 private enum class MessageClock { Start, End }
 
 /**
- * Desktop MessageIconActions row: icon-only copy / feedback / branch + clock.
- * Order matches desktop: (user clock?) → copy → like/dislike → branch → (assistant clock?).
+ * Desktop MessageIconActions row: copy / feedback / branch, optional turn usage, and clock.
+ * Order matches desktop: (user clock?) → copy → like/dislike → branch → usage → (assistant clock?).
  * Locale strings live in contentDescription / long-press tooltip only.
  */
 @Composable
@@ -895,6 +900,7 @@ private fun MessageActions(
     rating: String? = null,
     onLike: (() -> Unit)? = null,
     onDislike: (() -> Unit)? = null,
+    usageAction: (@Composable () -> Unit)? = null,
 ) {
     val clip = androidx.compose.ui.platform.LocalClipboardManager.current
     var copied by remember { mutableStateOf(false) }
@@ -974,6 +980,7 @@ private fun MessageActions(
                 )
             }
         }
+        if (usageAction != null) Box(Modifier.weight(1f, fill = false)) { usageAction() }
         if (clock == MessageClock.End && timeMs != null) {
             Text(
                 formatMessageClock(timeMs),
