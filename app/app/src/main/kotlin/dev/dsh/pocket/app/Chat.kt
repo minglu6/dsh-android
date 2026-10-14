@@ -279,7 +279,9 @@ fun ChatRoot(
     val summary = sessions.firstOrNull { it.sessionId == sid }
     val dot = status[active]
     val workspaceCatalog by Pocket.workspaces.collectAsState()
-    val workspaces = workspaceCatalog.map { it.path }
+    val draftWorkspace = if (draftCwd == null) workspaceCatalog.firstOrNull()
+        else workspaceCatalog.firstOrNull { it.path == draftCwd }
+    val draftWorkspacePath = draftCwd ?: draftWorkspace?.path
     val modelMenu: @Composable () -> Unit = {
         if (sheet == Sheet.Model) {
             ModelPicker(
@@ -349,7 +351,8 @@ fun ChatRoot(
         if (visibleChat == null) {
             Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) { Hero() }
             Row(Modifier.padding(horizontal = 16.dp, vertical = 6.dp), horizontalArrangement = Arrangement.spacedBy(14.dp)) {
-                Chip(D.folderOpen, (draftCwd ?: workspaces.firstOrNull())?.substringAfterLast('/') ?: "选择工作区") { sheet = Sheet.Workspace }
+                Chip(D.folderOpen, draftWorkspacePath?.let { workspaceDisplayTitle(draftWorkspace?.title, it) }
+                    ?: navText("选择工作区", "Choose workspace")) { sheet = Sheet.Workspace }
                 if (presetRoster.isNotEmpty()) presetLabel(effectivePreset, presetRoster)?.let { label ->
                     Chip(D.agentPreset, label) { sheet = Sheet.Preset }
                 }
@@ -462,7 +465,7 @@ fun ChatRoot(
                     val imgs = pendingImages
                     when {
                         chat == null -> Pocket.newSession(text, effectivePreset.takeIf { it.isNotBlank() },
-                            curPerm.takeIf { it.isNotEmpty() }, draftModel, draftCwd ?: workspaces.firstOrNull())
+                            curPerm.takeIf { it.isNotEmpty() }, draftModel, draftWorkspacePath)
                         imgs.isNotEmpty() || ready.isNotEmpty() ->
                             Pocket.sendWithFiles(text, imgs, ready.map { PromptFile(it.receiptId!!) })
                         else -> Pocket.send(text)
@@ -533,7 +536,7 @@ fun ChatRoot(
             onInspector = { sheet = Sheet.SessionInspector },
         )
         Sheet.Team -> TeamSheet(onDismiss = { sheet = Sheet.None })
-        Sheet.Workspace -> WorkspaceSheet(draftCwd ?: workspaces.firstOrNull(), onDismiss = { sheet = Sheet.None }) { Pocket.draftWorkspacePath.value = it }
+        Sheet.Workspace -> WorkspaceSheet(draftWorkspacePath, onDismiss = { sheet = Sheet.None }) { Pocket.draftWorkspacePath.value = it }
         Sheet.Goal -> GoalSheet(onDismiss = { sheet = Sheet.None })
         Sheet.Feedback -> FeedbackSheet(onDismiss = { sheet = Sheet.None })
         Sheet.FeedbackCategory -> FeedbackCategorySheet(

@@ -73,7 +73,7 @@ internal fun WorkspaceNavigationGroups(
             } else {
                 registered.forEachIndexed { index, workspace ->
                     val key = "workspace:${workspace.workspaceId}"
-                    WorkspaceGroupHeader(workspace.title?.takeIf { it.isNotBlank() } ?: workspace.path.substringAfterLast('/').ifEmpty { workspace.path }, workspace.path,
+                    WorkspaceGroupHeader(workspaceDisplayTitle(workspace.title, workspace.path), workspace.path,
                         key in collapsed, { onToggle(key) }, workspace, onPick, depth,
                         active = workspace.workspaceId == currentWorkspace?.workspaceId || (index == 0 && children.any(::containsCurrent)),
                         activity = mergeSidebarActivity(workspaceActivities.getValue(workspace.workspaceId),
@@ -105,7 +105,7 @@ private fun WorkspaceGroupHeader(
     var menu by remember { mutableStateOf(false) }
     var rename by remember { mutableStateOf(false) }
     var remove by remember { mutableStateOf(false) }
-    var draft by remember(title) { mutableStateOf(title) }
+    var draft by remember(workspace?.title, title) { mutableStateOf(workspace?.title?.takeIf { it.isNotBlank() } ?: title) }
     var busy by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
     fun action(block: suspend () -> Unit) {

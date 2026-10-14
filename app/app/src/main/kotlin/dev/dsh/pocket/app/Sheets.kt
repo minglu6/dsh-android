@@ -171,7 +171,7 @@ fun WorkspaceSheet(cur: String?, onDismiss: () -> Unit, onPick: (String) -> Unit
     PocketSheet(onDismiss) {
         SheetTitle("选择工作区")
         workspaces.forEach { workspace ->
-            OptionRow(workspace.title ?: workspace.path.substringAfterLast('/'), workspace.path, D.folderOpen, selected = workspace.path == cur) {
+            OptionRow(workspaceDisplayTitle(workspace.title, workspace.path), workspace.path, D.folderOpen, selected = workspace.path == cur) {
                 onPick(workspace.path); onDismiss()
             }
         }

@@ -5,6 +5,17 @@ import kotlinx.serialization.json.JsonElement
 
 internal fun navText(zh: String, en: String): String =
     if (Pocket.prefs.language == AppLanguage.En) en else zh
+
+/** Match the desktop's automatic title; paths remain unchanged for Host operations. */
+internal fun workspaceDisplayTitle(
+    title: String?, path: String,
+    localizedDefault: String = navText("默认工作区", "Default workspace"),
+): String {
+    val label = title?.takeIf { it.isNotBlank() } ?: path.trimEnd('/', '\\')
+        .substringAfterLast('/').substringAfterLast('\\').ifEmpty { path }
+    return if (label == "default-workspace") localizedDefault else label
+}
+
 /** Host paths are identities, never their display basenames. Preserve absent cwd as ungrouped. */
 internal fun workspacePathKey(path: String?): String =
     if (path.isNullOrBlank()) "" else path.trimEnd('/').ifEmpty { "/" }

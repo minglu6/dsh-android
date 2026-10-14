@@ -8,6 +8,24 @@ class NavigationPolicyTest {
     private fun session(id: String, parent: String? = null, origin: String? = null, blank: Boolean = false, time: Long = 1) =
         SessionSummary(id, id, "/work/project", false, blank, time, parent, origin = origin)
 
+    @Test fun workspaceLabelsLocalizeOnlyAutomaticNamesAndPreserveCustomTitles() {
+        val path = """C:\Users\luming2\Documents\deepseek-harness\default-workspace"""
+        assertEquals("默认工作区", workspaceDisplayTitle("default-workspace", path, "默认工作区"))
+        assertEquals("Default workspace", workspaceDisplayTitle("default-workspace", path, "Default workspace"))
+        assertEquals("我的工程", workspaceDisplayTitle("我的工程", path, "默认工作区"))
+        assertEquals("Default-workspace", workspaceDisplayTitle("Default-workspace", path, "默认工作区"))
+    }
+
+    @Test fun untitledWorkspaceLabelsHandleHostSeparatorsWithoutChangingPaths() {
+        assertEquals("project", workspaceDisplayTitle(null, """C:\work\project\""", "默认工作区"))
+        assertEquals("project", workspaceDisplayTitle("", "/work/project/", "默认工作区"))
+        assertEquals("project", workspaceDisplayTitle(" ", """\\server\share\project""", "默认工作区"))
+        assertEquals("project", workspaceDisplayTitle(null, """C:\work/mixed\project""", "默认工作区"))
+        assertEquals("/", workspaceDisplayTitle(null, "/", "默认工作区"))
+        assertEquals("C:", workspaceDisplayTitle(null, """C:\""", "默认工作区"))
+        assertEquals("默认工作区", workspaceDisplayTitle(null, """C:\work\default-workspace""", "默认工作区"))
+    }
+
     @Test fun forksRemainVisibleButSubagentsAndInactiveBlanksDoNot() {
         assertTrue(visibleDrawerSession(session("fork", "parent"), null, emptySet(), ArchivedFilter.Default))
         assertFalse(visibleDrawerSession(session("child", "parent", "subagent"), "child", emptySet(), ArchivedFilter.Show))

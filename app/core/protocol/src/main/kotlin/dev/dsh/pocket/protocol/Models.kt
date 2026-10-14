@@ -51,7 +51,7 @@ data class WorkspaceView(
         fun parse(e: JsonElement?): WorkspaceView? {
             val id = e["workspaceId"].str() ?: return null
             val path = e["path"].str() ?: return null
-            return WorkspaceView(id, path, e["title"].str() ?: path,
+            return WorkspaceView(id, path, e["title"].str().orEmpty(),
                 e["sessionIds"].arr().orEmpty().mapNotNull { it.str() },
                 e["createdAt"].str(), e["updatedAt"].str())
         }
