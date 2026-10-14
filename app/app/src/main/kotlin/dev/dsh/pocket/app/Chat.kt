@@ -158,7 +158,7 @@ fun ChatRoot(
     var draftPermissionOverride by remember(active, chat?.sessionId) { mutableStateOf<String?>(null) }
     val draftPerm = draftPermissionOverride ?: Pocket.prefs.defaultPermission
     var draftModel by remember(active, chat?.sessionId) { mutableStateOf<ModelChoice?>(null) }
-    var draftCwd by remember { mutableStateOf<String?>(null) }
+    val draftCwd by Pocket.draftWorkspacePath.collectAsState()
     var pendingImages by remember { mutableStateOf<List<PromptImage>>(emptyList()) }
     var pendingFiles by remember { mutableStateOf<List<PendingAttach>>(emptyList()) }
     var feedbackTarget by remember { mutableStateOf<String?>(null) }
@@ -533,7 +533,7 @@ fun ChatRoot(
             onInspector = { sheet = Sheet.SessionInspector },
         )
         Sheet.Team -> TeamSheet(onDismiss = { sheet = Sheet.None })
-        Sheet.Workspace -> WorkspaceSheet(draftCwd ?: workspaces.firstOrNull(), onDismiss = { sheet = Sheet.None }) { draftCwd = it }
+        Sheet.Workspace -> WorkspaceSheet(draftCwd ?: workspaces.firstOrNull(), onDismiss = { sheet = Sheet.None }) { Pocket.draftWorkspacePath.value = it }
         Sheet.Goal -> GoalSheet(onDismiss = { sheet = Sheet.None })
         Sheet.Feedback -> FeedbackSheet(onDismiss = { sheet = Sheet.None })
         Sheet.FeedbackCategory -> FeedbackCategorySheet(

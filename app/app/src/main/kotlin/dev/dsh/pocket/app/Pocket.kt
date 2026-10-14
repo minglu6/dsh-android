@@ -108,6 +108,8 @@ object Pocket {
     private var modelUsesDefault = false
     val presetRoster = MutableStateFlow<List<JsonObject>>(emptyList())
     val workspaces = MutableStateFlow<List<WorkspaceView>>(emptyList())
+    /** New-chat workspace selection shared by the composer and navigation. */
+    val draftWorkspacePath = MutableStateFlow<String?>(null)
     val goalActivation = MutableStateFlow<String?>(null)
     val pluginCatalogRevision = MutableStateFlow(0L)
     val scheduleCatalogRevision = MutableStateFlow(0L)
@@ -254,6 +256,7 @@ object Pocket {
         detachFollow()
         active.value = profileId; prefs.activeProfile = profileId
         sessions.value = emptyList(); chat.value = null; approvals.value = emptyList()
+        draftWorkspacePath.value = null
         inspectorLog = SessionInspectorLog()
         userQuestions.value = emptyList(); archivedIds.value = emptySet(); pinnedIds.value = emptySet()
         workspaces.value = emptyList(); presetRoster.value = emptyList(); ops.value = emptySet()
@@ -1710,6 +1713,7 @@ object Pocket {
             detachFollow()
             active.value = null; prefs.activeProfile = null
             sessions.value = emptyList(); chat.value = null
+            draftWorkspacePath.value = null
             workspaces.value = emptyList(); presetRoster.value = emptyList(); ops.value = emptySet()
             approvals.value = emptyList(); userQuestions.value = emptyList()
             archivedIds.value = emptySet(); pinnedIds.value = emptySet()

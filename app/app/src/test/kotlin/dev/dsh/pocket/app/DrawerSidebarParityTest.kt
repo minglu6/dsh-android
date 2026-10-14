@@ -12,8 +12,10 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performClick
 import dev.dsh.pocket.protocol.SessionSummary
+import dev.dsh.pocket.protocol.WorkspaceView
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Before
@@ -53,6 +55,7 @@ class DrawerSidebarParityTest {
         Pocket.archivedIds.value = emptySet()
         Pocket.pinnedIds.value = emptySet()
         Pocket.chat.value = null
+        Pocket.draftWorkspacePath.value = null
     }
 
     @Test
@@ -132,6 +135,110 @@ class DrawerSidebarParityTest {
                 image.delete()
             }
         }
+    }
+
+    @Test
+    @OptIn(com.github.takahirom.roborazzi.ExperimentalRoborazziApi::class)
+    fun workspaceArtworkTracksSelectionAndExpansionWithoutHover() {
+        Pocket.workspaces.value = listOf(
+            WorkspaceView("parent", "/repo", "Projects", emptyList(), null, null),
+            WorkspaceView("one", "/repo/app", "Current project", listOf("s1"), null, null),
+            WorkspaceView("same-path", "/repo/app", "Separate workspace", listOf("s2"), null, null),
+            WorkspaceView("other", "/other", "Other project", listOf("s3"), null, null),
+        )
+        Pocket.sessions.value = listOf(
+            SessionSummary("s1", "Current session", "/repo/app", false, false, 3, null),
+            SessionSummary("s2", "Separate session", "/repo/app", false, false, 2, null),
+            SessionSummary("s3", "Other session", "/other", false, false, 1, null),
+        )
+        Pocket.prefs.sessionGroupBy = SessionGroupBy.WorkspaceTree
+        Pocket.chat.value = ChatState("s1")
+        var accent = Color.Unspecified
+        var grey = Color.Unspecified
+        var caption = Color.Unspecified
+        rule.setContent {
+            PocketTheme {
+                accent = T.Accent
+                grey = T.Text3
+                caption = T.Caption
+                SessionDrawer({}, {}, {}, {})
+            }
+        }
+        fun iconPixels(id: String, color: Color, tag: String = "workspaceIcon"): List<Pair<Int, Int>> {
+            val file = Files.createTempFile("workspace-icon-", ".png").toFile()
+            try {
+                rule.onNodeWithTag("$tag:$id", useUnmergedTree = true).captureRoboImage(file.absolutePath,
+                    roborazziOptions = RoborazziOptions(taskType = RoborazziTaskType.Record))
+                val bitmap = requireNotNull(BitmapFactory.decodeFile(file.absolutePath))
+                try {
+                    return buildList {
+                        for (y in 0 until bitmap.height) for (x in 0 until bitmap.width) {
+                            if (bitmap.getPixel(x, y) == color.toArgb()) add(x to y)
+                        }
+                    }
+                } finally { bitmap.recycle() }
+            } finally { file.delete() }
+        }
+        fun assertTint(id: String, expected: Color, absent: Color) {
+            assertTrue("Expected folder color for $id", iconPixels(id, expected).size > 10)
+            assertTrue("Unexpected folder color for $id", iconPixels(id, absent).isEmpty())
+        }
+        for (appearance in listOf(Appearance.Light, Appearance.Dark)) {
+            rule.runOnIdle {
+                Pocket.prefs.appearance = appearance
+                Pocket.chat.value = ChatState("s1")
+            }
+            rule.waitForIdle()
+            assertTint("one", accent, grey)
+            assertTint("same-path", grey, accent)
+            assertTint("other", grey, accent)
+            assertTint("parent", accent, grey)
+            rule.onRoot().captureRoboImage("build/screenshots/workspace-icons-${appearance.name}.png",
+                roborazziOptions = RoborazziOptions(taskType = RoborazziTaskType.Record))
+
+            val row = rule.onNodeWithText("Current project")
+            val down = iconPixels("one", caption, "workspaceToggle")
+            assertTrue("Expanded triangle is visible without hover and points down",
+                down.maxOf { it.first } - down.minOf { it.first } >
+                    down.maxOf { it.second } - down.minOf { it.second })
+            row.performClick()
+            rule.onNodeWithText("Current session").assertDoesNotExist()
+            val right = iconPixels("one", caption, "workspaceToggle")
+            assertTrue("Collapsed triangle points right", right.maxOf { it.second } - right.minOf { it.second } >
+                right.maxOf { it.first } - right.minOf { it.first })
+            rule.onRoot().captureRoboImage("build/screenshots/workspace-collapsed-${appearance.name}.png",
+                roborazziOptions = RoborazziOptions(taskType = RoborazziTaskType.Record))
+            assertTint("one", accent, grey)
+            rule.onNodeWithText("Projects").performClick()
+            rule.onNodeWithText("Current project").assertDoesNotExist()
+            assertTint("parent", accent, grey)
+            rule.onNodeWithText("Projects").performClick()
+            row.performClick()
+            rule.onNodeWithText("Current session").assertIsDisplayed()
+
+            rule.runOnIdle { Pocket.chat.value = ChatState("s3") }
+            rule.waitForIdle()
+            assertTint("one", grey, accent)
+            assertTint("parent", grey, accent)
+            assertTint("other", accent, grey)
+            rule.runOnIdle {
+                Pocket.chat.value = null
+                Pocket.draftWorkspacePath.value = "/repo/app"
+            }
+            rule.waitForIdle()
+            assertTint("one", accent, grey)
+            assertTint("same-path", grey, accent)
+            assertTint("other", grey, accent)
+            rule.runOnIdle { Pocket.draftWorkspacePath.value = "/other" }
+            rule.waitForIdle()
+            assertTint("one", grey, accent)
+            assertTint("other", accent, grey)
+            rule.runOnIdle { Pocket.draftWorkspacePath.value = null }
+            rule.waitForIdle()
+            assertTint("parent", accent, grey)
+            assertTint("other", grey, accent)
+        }
+        rule.runOnIdle { Pocket.prefs.appearance = Appearance.Light }
     }
 
     @Test
