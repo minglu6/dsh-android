@@ -1404,10 +1404,15 @@ fun GeneralSettingsScreen(onBack: () -> Unit) {
             shared.saving -> st("正在保存到 Host…", "Saving to Host…")
             shared.loading -> st("正在读取 Host 设置…", "Loading Host settings…")
             !shared.ready -> st("尚未连接可用的 Host 设置；修改不会在本机保存或排队。", "Host settings unavailable. Changes are not saved locally or queued.")
-            else -> st("以下设置由当前 Host 保存，并与桌面同步。", "These settings are saved by the current Host and synchronized with desktop.")
+            else -> null
         })
         SettingsMessage(shared.error, error = true)
-        if (!shared.loading && shared.online) TextButton(onClick = shared::refresh) { Text(st("重新读取 Host 设置", "Reload Host settings")) }
+        if (shared.error != null && shared.online) {
+            TextButton(
+                onClick = { shared.dismissError(); shared.refresh() },
+                enabled = !shared.loading && !shared.saving,
+            ) { Text(L.retry()) }
+        }
         if ("permissions.catalog" in ops) {
             GeneralPreferenceRow(st("权限", "Permissions"), st("Host 新会话的默认权限", "Default permissions for new Host conversations"), value = permissionLabel(perm, permissionDirectory?.find(perm)), onClick = { sheet = "perm" })
         }
