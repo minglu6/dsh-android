@@ -171,7 +171,7 @@ object L {
     fun connecting() = if (en) "Connecting" else "连接中"
     fun unknownStatus() = if (en) "Unknown" else "未知"
     fun rename() = if (en) "Rename" else "重命名"
-    fun connectAction() = if (en) "Connect" else "连接"
+    fun switchDevice() = if (en) "Switch" else "切换"
     fun repairNeeded() = if (en) "Pair again" else "请重新配对"
     // Task notifications (desktop-aligned; adapted from saya-ch/dsh-mobile labels)
     fun taskFinished() = if (en) "Task finished" else "任务已完成"

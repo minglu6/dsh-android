@@ -829,6 +829,9 @@ fun ConnectionsScreen(
                         divider = i < sorted.lastIndex,
                         onClick = { manageId = p.id },
                         leading = { StatusDot(d) },
+                        onSwitch = if (p.id != active) {
+                            { Pocket.connect(p.id); onConnected() }
+                        } else null,
                     )
                 }
             }
@@ -909,7 +912,6 @@ fun ConnectionsScreen(
             status = status[p.id],
             isActive = p.id == active,
             onDismiss = { manageId = null },
-            onConnect = { Pocket.connect(p.id); manageId = null; onConnected() },
             onRepair = {
                 manageId = null
                 repairTarget = p
@@ -964,6 +966,7 @@ private fun ConnDeviceRow(
     divider: Boolean,
     onClick: () -> Unit,
     leading: @Composable () -> Unit,
+    onSwitch: (() -> Unit)? = null,
 ) {
     Row(
         Modifier
@@ -1002,7 +1005,22 @@ private fun ConnDeviceRow(
                 )
             }
         }
-        Icon(D.chevronRight, null, tint = Conn.FgMute, modifier = Modifier.size(20.dp))
+        if (onSwitch != null) {
+            TextButton(
+                onClick = onSwitch,
+                enabled = !warn,
+                shape = T.R8,
+                colors = ButtonDefaults.textButtonColors(
+                    contentColor = Conn.Fg,
+                    disabledContentColor = Conn.Fg.copy(alpha = 0.4f),
+                ),
+            ) {
+                Text(L.switchDevice(), fontSize = 14.sp, lineHeight = 22.sp, fontWeight = FontWeight.Normal, letterSpacing = 0.sp)
+            }
+        }
+        IconButton(onClick = onClick) {
+            Icon(D.chevronRight, "$name，${L.moreActions()}", tint = Conn.FgMute, modifier = Modifier.size(20.dp))
+        }
     }
     if (divider) ConnHairline()
 }
@@ -1074,7 +1092,6 @@ fun ProfileManageSheet(
     status: Dot?,
     isActive: Boolean,
     onDismiss: () -> Unit,
-    onConnect: () -> Unit,
     onRepair: () -> Unit = {},
 ) {
     var renaming by remember(profile.id) { mutableStateOf(false) }
@@ -1135,10 +1152,8 @@ fun ProfileManageSheet(
         Spacer(Modifier.height(8.dp))
         if (profile.needsRepair) {
             Text(L.repairNeeded(), fontSize = 13.sp, color = Conn.FgMute, modifier = Modifier.padding(start = 22.dp, end = 22.dp, bottom = 8.dp))
-        } else if (!isActive || status != Dot.Online) {
-            ConnOptionRow(L.connectAction(), icon = D.link) { onConnect() }
         }
-        ConnOptionRow(L.repairPair(), icon = D.link) { onRepair() }
+        ConnOptionRow(L.repairPair(), icon = D.refresh) { onRepair() }
         ConnOptionRow(L.rename(), icon = D.edit) { renaming = true }
         ConnOptionRow(L.delete(), icon = D.trash) { Pocket.removeProfile(profile.id); onDismiss() }
     }

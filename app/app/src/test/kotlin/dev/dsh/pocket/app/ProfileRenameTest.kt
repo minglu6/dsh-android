@@ -61,7 +61,6 @@ class ProfileRenameTest {
                     status = Dot.Online,
                     isActive = true,
                     onDismiss = {},
-                    onConnect = {},
                 )
             }
         }
@@ -93,7 +92,6 @@ class ProfileRenameTest {
                     status = Dot.Online,
                     isActive = true,
                     onDismiss = {},
-                    onConnect = {},
                 )
             }
         }

@@ -324,12 +324,12 @@ class ScreenshotTest {
         }
     }
     @Test fun s17_profileManageSheet() = showWithDialogs("17-profile-manage") {
-        ProfileManageSheet(Pocket.profiles.value.first(), Dot.Online, isActive = true, onDismiss = {}, onConnect = {})
+        ProfileManageSheet(Pocket.profiles.value.first(), Dot.Online, isActive = true, onDismiss = {})
     }
     @Test fun s18_profileRenamePanel() {
         rule.setContent {
             PocketTheme {
-                ProfileManageSheet(Pocket.profiles.value.first(), Dot.Online, isActive = true, onDismiss = {}, onConnect = {})
+                ProfileManageSheet(Pocket.profiles.value.first(), Dot.Online, isActive = true, onDismiss = {})
             }
         }
         rule.mainClock.advanceTimeBy(1500)
