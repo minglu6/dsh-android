@@ -1,7 +1,11 @@
 package dev.dsh.pocket.app
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.*
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.waitForUpOrCancellation
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -28,6 +32,16 @@ import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionInWindow
+import androidx.compose.ui.layout.boundsInWindow
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.key.KeyEvent
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalInspectionMode
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.contentDescription
@@ -42,6 +56,13 @@ import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.IntRect
+import androidx.compose.ui.unit.IntSize
+import androidx.compose.ui.unit.LayoutDirection
+import androidx.compose.ui.window.Popup
+import androidx.compose.ui.window.PopupPositionProvider
+import androidx.compose.ui.window.PopupProperties
 import android.animation.ValueAnimator
 import android.graphics.BitmapFactory
 import dev.dsh.pocket.protocol.Approval
@@ -165,6 +186,31 @@ fun ChatRoot(
     var feedbackRating by remember { mutableStateOf("negative") }
     var hiddenQuestion by remember(active, chat?.sessionId) { mutableStateOf<String?>(null) }
     var composerDraft by rememberSaveable(active, stateSaver = TextFieldValue.Saver) { mutableStateOf(TextFieldValue("")) }
+    var mentionDrilled by remember(active) { mutableStateOf(false) }
+    var mentionKeyHandler by remember { mutableStateOf<(KeyEvent) -> Boolean>({ false }) }
+    val mentionTrigger = composerTrigger(composerDraft.text, composerDraft.selection.end)?.takeIf { it.kind == '@' }
+    fun dismissMentions() { sheet = Sheet.None; mentionDrilled = false }
+    fun updateDraft(value: TextFieldValue) {
+        composerDraft = value
+        if (sidebarDraft != null && chat == null) sidebarDraft = value
+        if (sheet == Sheet.Mentions && composerTrigger(value.text, value.selection.end)?.kind != '@') dismissMentions()
+    }
+    BackHandler(sheet == Sheet.Mentions) { dismissMentions() }
+    val density = LocalDensity.current
+    var mentionMaxHeight by remember { mutableStateOf(400.dp) }
+    var composerBounds by remember { mutableStateOf(Rect.Zero) }
+    var conversationOrigin by remember { mutableStateOf(Offset.Zero) }
+    val mentionPosition = remember(density) {
+        val inset = with(density) { 14.dp.roundToPx() }
+        val gap = with(density) { 4.dp.roundToPx() }
+        object : PopupPositionProvider {
+            override fun calculatePosition(anchorBounds: IntRect, windowSize: IntSize, layoutDirection: LayoutDirection, popupContentSize: IntSize): IntOffset =
+                IntOffset(
+                    (anchorBounds.left + inset).coerceIn(0, (windowSize.width - popupContentSize.width).coerceAtLeast(0)),
+                    (anchorBounds.top - popupContentSize.height - gap).coerceAtLeast(0),
+                )
+        }
+    }
     var previewPath by remember { mutableStateOf<String?>(null) }
     val questions by Pocket.userQuestions.collectAsState()
     val questionDrafts = rememberSaveable(active, chat?.sessionId, saver = questionDraftSaver) {
@@ -250,13 +296,17 @@ fun ChatRoot(
             previousSession = sid
         }
     }
+    val workspaceCatalog by Pocket.workspaces.collectAsState()
+    val draftWorkspace = if (draftCwd == null) workspaceCatalog.firstOrNull()
+        else workspaceCatalog.firstOrNull { it.path == draftCwd }
+    val draftWorkspacePath = draftCwd ?: draftWorkspace?.path
     val sessionPanel = sheet == Sheet.Files || sheet == Sheet.Terminal || sheet == Sheet.SessionInspector
     LaunchedEffect(active, sheet) {
-        if (sessionPanel && Pocket.chat.value == null && firstPrompt == null) {
+        if ((sessionPanel || sheet == Sheet.Mentions) && Pocket.chat.value == null && firstPrompt == null) {
             sidebarDraft = composerDraft
             try {
                 Pocket.prepareSidebarSession(
-                    cwd = draftCwd ?: sessions.firstNotNullOfOrNull { it.cwd } ?: Pocket.workspaces.value.firstOrNull()?.path,
+                    cwd = draftWorkspacePath,
                     preset = effectivePreset.takeIf { it.isNotBlank() },
                     pendingPermission = draftPerm.takeIf { "permissions.set" in ops && permissionDirectory?.find(it) != null },
                     pendingModel = draftModel,
@@ -278,10 +328,6 @@ fun ChatRoot(
     val currentPermissionLabel = permissionLabel(curPerm, permissionDirectory?.find(curPerm))
     val summary = sessions.firstOrNull { it.sessionId == sid }
     val dot = status[active]
-    val workspaceCatalog by Pocket.workspaces.collectAsState()
-    val draftWorkspace = if (draftCwd == null) workspaceCatalog.firstOrNull()
-        else workspaceCatalog.firstOrNull { it.path == draftCwd }
-    val draftWorkspacePath = draftCwd ?: draftWorkspace?.path
     val modelMenu: @Composable () -> Unit = {
         if (sheet == Sheet.Model) {
             ModelPicker(
@@ -336,7 +382,15 @@ fun ChatRoot(
         sheet = Sheet.FilePreview
     }) {
     InspectorChatSurface(sid) {
-    Column(Modifier.fillMaxSize().background(T.Bg).then(if (showMenuButton) Modifier.systemBarsPadding() else Modifier).imePadding()) {
+    Column(Modifier.fillMaxSize().background(T.Bg).then(if (showMenuButton) Modifier.systemBarsPadding() else Modifier).imePadding()
+        .onGloballyPositioned { conversationOrigin = it.positionInWindow() }
+        .pointerInput(sheet) {
+            awaitEachGesture {
+                val down = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
+                if (sheet == Sheet.Mentions && !composerBounds.contains(down.position + conversationOrigin)) dismissMentions()
+                waitForUpOrCancellation(pass = PointerEventPass.Initial)
+            }
+        }) {
         TopBar(
             summary?.title ?: chat?.title, sid != null,
             onMenu = if (showMenuButton) onMenu else null,
@@ -419,12 +473,17 @@ fun ChatRoot(
                     }) { Text("重新编辑", color = T.Ink) }
                 }
             }
+            BoxWithConstraints(Modifier.onGloballyPositioned { coordinates ->
+                composerBounds = coordinates.boundsInWindow()
+                val available = with(density) { coordinates.positionInWindow().y.toDp() } - 88.dp
+                mentionMaxHeight = available.coerceIn(0.dp, 400.dp)
+            }) {
             Composer(
                 if (visibleChat == null) "描述你想要构建的内容, / 调用指令, @ 文件或对话" else "发消息或创建任务, / 调用指令, @ 文件或对话",
                 visibleChat?.running == true, curPerm, curModel,
                 enabled = dot == Dot.Online && !inspectorPicking && firstPrompt == null &&
                     (chat != null || curPerm.isEmpty() || (!permissionLoading && permissionDirectory?.find(curPerm) != null)),
-                draft = composerDraft, onDraftChange = { composerDraft = it },
+                draft = composerDraft, onDraftChange = ::updateDraft,
                 planMode = visibleChat?.planMode == true,
                 queueAttached = visibleChat?.queuedPrompts?.isNotEmpty() == true,
                 pendingImages = pendingImages, pendingFiles = pendingFiles,
@@ -447,7 +506,13 @@ fun ChatRoot(
                     }
                 },
                 onSlash = { if (firstPrompt == null) sheet = Sheet.Commands },
-                onMention = { if (firstPrompt == null) sheet = Sheet.Mentions },
+                onMention = {
+                    if (firstPrompt == null) {
+                        if (sheet != Sheet.Mentions) mentionDrilled = false
+                        sheet = Sheet.Mentions
+                    }
+                },
+                onMentionKey = { event -> sheet == Sheet.Mentions && composerDraft.composition == null && mentionKeyHandler(event) },
                 onExitPlan = { Pocket.executeCommand("/plan off") },
                 onSend = { text ->
                     if (InspectorNavigation.picking || firstPrompt != null) return@Composer
@@ -464,6 +529,40 @@ fun ChatRoot(
                 },
                 onStop = { if (!InspectorNavigation.picking) Pocket.cancel() },
             )
+            if (sheet == Sheet.Mentions && mentionTrigger != null) {
+                Popup(
+                    popupPositionProvider = mentionPosition,
+                    onDismissRequest = ::dismissMentions,
+                    properties = PopupProperties(focusable = false, dismissOnClickOutside = false),
+                ) {
+                    MentionMenu(
+                        sessionId = sid.takeIf { chat?.loaded == true },
+                        query = mentionTrigger.query,
+                        quoted = mentionTrigger.quoted,
+                        drilled = mentionDrilled,
+                        onPick = { token ->
+                            val next = replaceComposerToken(composerDraft.text, composerDraft.selection.end, token, composerDraft.selection.start)
+                            updateDraft(TextFieldValue(next.first, TextRange(next.second)))
+                            dismissMentions()
+                        },
+                        onDrill = { token ->
+                            val trigger = composerTrigger(composerDraft.text, composerDraft.selection.end)
+                            if (trigger?.kind == '@') {
+                                val next = replaceComposerToken(
+                                    composerDraft.text, composerDraft.selection.end, token,
+                                    composerDraft.selection.start, appendSpace = false,
+                                )
+                                updateDraft(TextFieldValue(next.first, TextRange(next.second)))
+                                mentionDrilled = true
+                            }
+                        },
+                        onDismiss = ::dismissMentions,
+                        onKeyHandler = { mentionKeyHandler = it },
+                        modifier = Modifier.width((maxWidth - 28.dp).coerceAtLeast(0.dp)).heightIn(max = mentionMaxHeight),
+                    )
+                }
+            }
+            }
             if (visibleChat != null) ComposerStats(visibleChat.composerMetrics)
             else Spacer(Modifier.height(10.dp))
         }
@@ -548,7 +647,7 @@ fun ChatRoot(
             onExport = { doExport() },
             initialQuery = composerTrigger(composerDraft.text, composerDraft.selection.end)?.query.orEmpty(),
         )
-        Sheet.Mentions -> MentionPopupSheet(onDismiss = { sheet = Sheet.None }, initialQuery = composerTrigger(composerDraft.text, composerDraft.selection.end)?.query.orEmpty())
+        Sheet.Mentions -> Unit // Anchored above the composer without taking input focus.
         Sheet.Files -> sid?.let { FilesSheet(it, onDismiss = { sheet = Sheet.None }, onBack = { sheet = Sheet.Panel }) }
         Sheet.Jobs -> sid?.let { JobsSheet(it, onDismiss = { sheet = Sheet.None }) } ?: run { sheet = Sheet.None }
         Sheet.Terminal -> sid?.let { TerminalSheet(it, onDismiss = { sheet = Sheet.None }, onBack = { sheet = Sheet.Panel }) }
@@ -1641,6 +1740,7 @@ private fun Composer(
     onRetryFile: (Int) -> Unit = {},
     onSlash: () -> Unit = {},
     onMention: () -> Unit = {},
+    onMentionKey: (KeyEvent) -> Boolean = { false },
     onExitPlan: () -> Unit = {},
     onSend: (String) -> Unit,
     onStop: () -> Unit,
@@ -1652,7 +1752,7 @@ private fun Composer(
         Pocket.composerInsert.collect { token ->
             // Empty → consume slash trigger; leading `/` → claim/replace draft; else @-mention insert.
             val current = latestDraft
-            val next = replaceComposerToken(current.text, current.selection.end, token)
+            val next = replaceComposerToken(current.text, current.selection.end, token, current.selection.start)
             latestChange(TextFieldValue(next.first, TextRange(next.second)))
         }
     }
@@ -1688,17 +1788,19 @@ private fun Composer(
         }
         Box {
             if (text.isEmpty()) Text(placeholder, fontSize = 16.sp, color = T.Caption, maxLines = 2, overflow = TextOverflow.Ellipsis)
-            BasicTextField(
-                draft,
-                { next ->
+            ReferenceComposerField(
+                value = draft,
+                onValueChange = { next ->
                     onDraftChange(next)
-                    val trigger = composerTrigger(next.text, next.selection.end)
-                    if (trigger?.kind == '/') onSlash()
-                    if (trigger?.kind == '@') onMention()
+                    if (next.text != draft.text) {
+                        val trigger = composerTrigger(next.text, next.selection.end)
+                        if (trigger?.kind == '/') onSlash()
+                        if (trigger?.kind == '@') onMention()
+                    }
                 },
-                textStyle = MaterialTheme.typography.bodyLarge.copy(color = T.Ink),
-                cursorBrush = SolidColor(T.Accent),
-                modifier = Modifier.fillMaxWidth().heightIn(max = 160.dp).testTag("composerInput"),
+                onOpenFile = checkNotNull(LocalOpenFilePreview.current),
+                modifier = Modifier.fillMaxWidth().heightIn(max = 160.dp).testTag("composerInput")
+                    .onPreviewKeyEvent(onMentionKey),
             )
         }
         Spacer(Modifier.height(12.dp))

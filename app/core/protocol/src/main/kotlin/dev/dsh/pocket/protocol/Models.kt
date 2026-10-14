@@ -203,11 +203,29 @@ data class FileReference(val path: String, val kind: String? = null) {
 }
 
 /** `@` session / subagent mention candidate from `references.sessions`. */
-data class SessionReference(val mention: String, val title: String?, val kind: String? = null) {
+data class SessionReference(
+    val mention: String,
+    val title: String?,
+    val kind: String? = null,
+    val sessionId: String? = null,
+    val updatedAt: Long? = null,
+    val createdAt: Long? = null,
+    val cwd: String? = null,
+    val sameWorkspace: Boolean? = null,
+) {
     companion object {
         fun parse(e: JsonElement?): SessionReference? {
-            val mention = e["mention"].str() ?: e["sessionId"].str()?.let { "@$it" } ?: return null
-            return SessionReference(mention, e["title"].str(), e["kind"].str())
+            val mention = e["mention"].str() ?: return null
+            return SessionReference(
+                mention = mention,
+                title = e["displayTitle"].str() ?: e["title"].str() ?: e["label"].str(),
+                kind = e["kind"].str(),
+                sessionId = e["sessionId"].str(),
+                updatedAt = e["updatedAt"].long(),
+                createdAt = e["createdAt"].long(),
+                cwd = e["cwd"].str(),
+                sameWorkspace = e["sameWorkspace"].bool(),
+            )
         }
     }
 }

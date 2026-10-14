@@ -135,7 +135,15 @@ Phone: image picker → `prompt` images (done). Non-image files via `attachments
 | Mentions | `reference.*` | `@file` / `@session` via ui-reference |
 | Built-ins | goal/plan/feedback/compact/permission/export labels in `ui-commands` | `commands.execute` |
 
-Phone: Plus sheet + live `/` CommandPopupSheet + `@` MentionPopupSheet (`references.files` / `references.sessions`, insert into composer) — **done**.
+Phone: Plus sheet + live `/` CommandPopupSheet + an anchored, non-modal `@` MentionMenu above the composer (`references.files` / `references.sessions`). Typing stays in the original input; there is no separate mention search sheet.
+
+Implementation authority: official `ui-input-trigger/src/client/MenuView.tsx` / `.module.css`, `ui-primitives/src/useAnchoredMaxHeight.ts`, `ui-primitives/src/ReferenceIcon.tsx`, and `ui-reference/src/client/index.ts`. The native menu maps CSS dimensions to dp/sp: 34dp minimum rows, 14dp Regular reference glyphs, 13sp names/12sp descriptions, 4dp inner padding, and a 400dp cap further clamped above the composer/header. It uses the generated `Specificmenu`, `MenuIcon`, hover and scrollbar tokens, a subtle elevation instead of a heavy outline, and a 2dp scroll thumb with the desktop-style lower overflow fade. Inline references use the official Medium glyphs.
+
+Query refinement retains the preceding candidates but cannot pick them until the current request completes. IME composition bypasses candidate keyboard arbitration; Shift+Tab dismisses without insertion. Taps in the composer keep the menu open, while taps outside both composer and menu dismiss it.
+
+The mention menu follows desktop ordering (files, direct subagents, other sessions), hides empty groups, and shows short file names with parent paths or session titles with location/age. Picking a directory row inserts the directory; its trailing chevron or Tab drills into it. Drilled queries expose workspace breadcrumbs. Quoted paths only search files; unavailable discovery domains do not discard another domain's candidates. Arrow keys navigate, Enter picks, and Escape/Back dismisses.
+
+New-chat mentions prepare a blank Host session with the selected workspace/model/permission/preset and preserve the live draft, then wait for the initial history before discovering references; browsing never sends a prompt. Selected references render as native atomic icon/label spans while copying and sending retain the canonical file/session token. File references open the existing preview; deletion and selection keep the full reference identity intact.
 
 Slash menu pick consumes the typed `/` (desktop `slash/input-consume-token`) then runs the same actions as Plus / desktop: file picker, Goal/Feedback sheets, `/plan` toggle (+ PlanChip from host `plan` projection), `/compact`, permission/model pickers, session export. Connection status green dot stays in the **drawer** only — not the chat top bar (desktop session header has no pocket status dot).
 
@@ -376,7 +384,7 @@ Model settings use the desktop UI, not the mere existence of Host APIs, as their
 | Image bubbles in transcript | **done** (`session.attachment` + ImageRef) | was feasible |
 | Non-image file attach | **done** (`attachments.upload` + `prompt` files) | was needs-plugin; folders still hide |
 | `/` command popup | **done** (CommandPopupSheet when composer starts with `/`) | was feasible |
-| `@` file/session mentions | **done** (`references.files` / `references.sessions`) | was needs-plugin |
+| `@` file/session mentions | **done** (anchored completion, directory drill/breadcrumbs, atomic canonical references; `references.files` / `references.sessions`) | was needs-plugin |
 | Copy on messages | **done** (icon-only; was text) | feasible |
 | Branch / fork from message | **done** (icon-only + `sessions.fork`) | was needs-plugin |
 | Like / dislike | **done** (icon-only + feedback sheet) | was needs-plugin |

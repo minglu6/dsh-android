@@ -84,3 +84,34 @@ test('real dsh: permissions + presets ops', { skip: !hasDsh, timeout: 240_000 },
   assert.ok(roster, JSON.stringify(roster))
   c.close()
 })
+
+test('real dsh: file and session reference contracts', { skip: !hasDsh, timeout: 240_000 }, async (t) => {
+  const { bootDsh, pocketClient, PLUGIN_DIR } = await import('./helpers.js')
+  const port = 19500 + Math.floor(Math.random() * 500)
+  const { home } = await bootDsh(t, {
+    plugins: [PLUGIN_DIR],
+    patch: `- id: dsh-pocket\n  config:\n    host: 127.0.0.1\n    port: ${port}\n    token: ${TOKEN}\n`,
+  })
+  writeFileSync(join(home, 'reference-contract.txt'), 'reference contract fixture\n')
+  const c = await pocketClient(`ws://127.0.0.1:${port}`)
+  t.after(() => c.close())
+  await c.ok('hello', { token: TOKEN })
+  const source = await c.ok('sessions.create', { cwd: home })
+  const target = await c.ok('sessions.create', { cwd: home })
+  const targetFollow = await c.ok('follow', { sessionId: target.sessionId })
+  await c.next(e => e.ev === 'follow' && e.subId === targetFollow.subId && e.frame.type === 'snapshot')
+  await c.ok('sessions.rename', { sessionId: target.sessionId, title: 'Reference contract target' })
+  const sourceFollow = await c.ok('follow', { sessionId: source.sessionId })
+  await c.next(e => e.ev === 'follow' && e.subId === sourceFollow.subId && e.frame.type === 'snapshot')
+
+  const files = await c.ok('references.files', { sessionId: source.sessionId, query: 'reference-contract' })
+  assert.ok(files.items.some(item => item.path === 'reference-contract.txt' && item.kind === 'file'))
+  const sessions = await c.ok('references.sessions', { sessionId: source.sessionId, query: 'Reference contract target' })
+  const candidate = sessions.items.find(item => item.sessionId === target.sessionId)
+  assert.ok(candidate, 'real resolver returns the renamed target')
+  assert.equal(candidate.title, 'Reference contract target')
+  assert.equal(candidate.kind, 'session')
+  const encodedId = Buffer.from(JSON.stringify(target.sessionId)).toString('base64url')
+  assert.equal(candidate.mention, `@[Reference contract target](dsh-session:${encodedId})`)
+  assert.ok(!sessions.items.some(item => item.sessionId === source.sessionId), 'self is excluded')
+})

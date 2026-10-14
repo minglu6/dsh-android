@@ -121,6 +121,7 @@ WebSocket 管理操作要求 owner 身份。管理 UI 通过受本机信任边�
 | 工作区 | 使用官方实体、成员关系和归档状态；有活动任务时保留官方拒绝详情，由用户确认停止后再提交。 |
 | 目录选择 | `workspace.directoryList` 仅在官方 `browse` 模式公布；后端支持创建时才公布 `workspace.directoryCreate {path,name}`。返回官方绝对路径，保留空格及业务错误，不另写文件系统实现。仅有 `native` 时手机可输入完整路径，不弹电脑系统窗口。 |
 | 指令与目标 | 指令来自当前 Agent 的 `commands.list`；目标更新使用官方 `id/revision`，不能从文本猜版本。 |
+| `@` 引用 | 两类查询都要求已有 live Agent。`references.files` 调用 Host `fileReferences.list(agent, query, signal)`，返回 `{items:[{path,kind}]}`；`references.sessions` 调用 `sessionReferenceResolver.remoteExportCandidates(agent, query, signal)`（`candidates` 只是 Remote 名称），保留官方 canonical `mention`，将 `displayTitle ?? label` 映射为 `title`。`kind=subagent` 仅用于 `sessionQuery` 中 `origin=subagent` 且 `parentSession` 为当前会话的直接子智能体，其他候选为 `session`；普通 fork 不算子智能体。 |
 | 后台任务 | `jobs.follow` 推送 `job` / `job.end` / `job.error`，共享 `unfollow` 只取消订阅，不终止任务。 |
 | 页面更新 | `workspace.changed`、`schedule.changed`、`plugins.changed` 驱动对应页面；预设目录和默认值来自 Host。 |
 | 共享设置 | `plugins.settingsDescribe/settingsMutate` 复用官方配置；写入携带 `expectedRevision`，冲突重新读取，不静默覆盖。`settings.changed {ns,revision}` 通知手机更新镜像。 |
@@ -184,6 +185,8 @@ npm test
 ```bash
 npm run test:integration
 ```
+
+只验证真实 Host 的 `@` 引用契约（文件候选、标题映射、canonical mention、自身排除），可执行 `node --test --test-name-pattern='file and session reference contracts' test/integration/dsh.test.js`。测试使用临时 `DSH_HOME` 与回环桥接端口，不重启当前桌面 Host；它调用真实服务，不用同名 mock 模拟 Host 方法。PATH 中没有 `dsh` 时会跳过，不能把跳过视为通过。
 
 Android 协议联调还需 JDK 17 与 Android 开发环境：
 

@@ -16,6 +16,11 @@ object D {
     val users @Composable get() = v(R.drawable.dsh_users)
     val agentPreset @Composable get() = v(R.drawable.dsh_agent_preset)
     val folderOpen @Composable get() = v(R.drawable.dsh_folder_open)
+    val folderClose @Composable get() = v(R.drawable.dsh_folder_close)
+    /** Official ReferenceIconMedium; candidate menus use the Regular glyphs. */
+    val referenceFile @Composable get() = v(R.drawable.dsh_reference_file)
+    val referenceFolder @Composable get() = v(R.drawable.dsh_reference_folder)
+    val referenceSession @Composable get() = v(R.drawable.dsh_reference_session)
     val shield @Composable get() = v(R.drawable.dsh_shield)
     /** Same per-preset artwork as desktop PermissionSelect; custom presets have no glyph. */
     @Composable

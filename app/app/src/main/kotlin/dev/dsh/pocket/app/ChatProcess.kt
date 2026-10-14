@@ -517,10 +517,12 @@ private fun emitPlain(out: MutableList<ChatRow>, item: Item) {
 internal data class ComposerTrigger(val kind: Char, val start: Int, val end: Int, val query: String, val quoted: Boolean = false)
 
 private val quotedReferenceTrigger = Regex("""(?:^|\s)(@"([^"]*))$""")
+private val completedSessionMention = Regex("""@\[(?:\\.|[^\\\]])*\]\(dsh-session:[A-Za-z0-9_-]+\)""")
 
 /** Trigger only a token at the caret, never an email address or a slash inside a path. */
 internal fun composerTrigger(text: String, cursor: Int): ComposerTrigger? {
     val end = cursor.coerceIn(0, text.length)
+    if (completedSessionMention.findAll(text).any { end > it.range.first && end <= it.range.last + 1 }) return null
     quotedReferenceTrigger.find(text.substring(0, end))?.let { match ->
         return ComposerTrigger('@', end - match.groupValues[1].length, end, match.groupValues[2], quoted = true)
     }
@@ -530,30 +532,39 @@ internal fun composerTrigger(text: String, cursor: Int): ComposerTrigger? {
     val kind = text[start]
     if (kind != '@' && kind != '/') return null
     if (kind == '/' && text.take(start).isNotBlank()) return null
+    if (kind == '@' && (text.substring(start + 1, end).startsWith("[") || '"' in text.substring(start + 1, end))) return null
     return ComposerTrigger(kind, start, end, text.substring(start + 1, end))
 }
 
-internal fun replaceComposerToken(text: String, cursor: Int, token: String): Pair<String, Int> {
-    val at = cursor.coerceIn(0, text.length)
+internal fun replaceComposerToken(
+    text: String,
+    cursor: Int,
+    token: String,
+    selectionStart: Int = cursor,
+    appendSpace: Boolean = true,
+): Pair<String, Int> {
+    val at = minOf(cursor, selectionStart).coerceIn(0, text.length)
+    val selectedEnd = maxOf(cursor, selectionStart).coerceIn(0, text.length)
     val trigger = composerTrigger(text, at)
     val start = trigger?.start ?: at
-    var end = trigger?.end ?: at
+    var end = maxOf(trigger?.end ?: at, selectedEnd)
     if (trigger?.quoted == true) {
-        val closingQuote = text.indexOf('"', end)
-        if (closingQuote >= 0) end = closingQuote + 1
+        val closingQuote = text.indexOf('"', trigger.end)
+        val tokenEnd = if (closingQuote >= 0) closingQuote + 1 else text.indexOf('\n', trigger.end).takeIf { it >= 0 } ?: text.length
+        end = maxOf(end, tokenEnd)
     } else if (trigger != null) while (end < text.length && !text[end].isWhitespace()) end++
     val inserted = when {
         token.isEmpty() -> ""
-        token.startsWith("/") -> token + if (token.endsWith(" ")) "" else " "
-        else -> "@${token.removePrefix("@")} "
+        token.startsWith("/") -> token + if (!appendSpace || token.endsWith(" ")) "" else " "
+        else -> "@${token.removePrefix("@")}" + if (appendSpace) " " else ""
     }
     val result = text.replaceRange(start, end, inserted)
     return result to start + inserted.length
 }
 
 /** Match the official browser-safe file-reference grammar; unrepresentable paths are not candidates. */
-internal fun fileReferenceToken(path: String, directory: Boolean): String? {
+internal fun fileReferenceToken(path: String, directory: Boolean, preserveQuote: Boolean = false): String? {
     if (path.any { it == '"' || it.code in 0..31 || it.code in 127..159 }) return null
     val value = path.trimEnd('/') + if (directory) "/" else ""
-    return if (value.any(Char::isWhitespace)) "@\"$value\"" else "@$value"
+    return if (preserveQuote || value.any(Char::isWhitespace)) "@\"$value\"" else "@$value"
 }

@@ -40,7 +40,6 @@ import dev.dsh.pocket.protocol.get
 import dev.dsh.pocket.protocol.str
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.collect
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
@@ -613,63 +612,6 @@ internal fun builtinCommandName(definitionId: String?): String? = when (definiti
     "@deepseek-ai/dsh-permission-presets" -> "permission"
     "@deepseek-ai/dsh-session-log-export" -> "export"
     else -> null
-}
-
-/** `@` mention popup — files + sessions from Host reference services. */
-@Composable
-fun MentionPopupSheet(onDismiss: () -> Unit, initialQuery: String = "") {
-    val chat by Pocket.chat.collectAsState()
-    var query by remember { mutableStateOf(initialQuery) }
-    var files by remember { mutableStateOf<List<dev.dsh.pocket.protocol.FileReference>>(emptyList()) }
-    var sessions by remember { mutableStateOf<List<dev.dsh.pocket.protocol.SessionReference>>(emptyList()) }
-    var loading by remember { mutableStateOf(false) }
-    var error by remember { mutableStateOf<String?>(null) }
-    var attempt by remember { mutableIntStateOf(0) }
-    LaunchedEffect(chat?.sessionId, query, attempt) {
-        loading = true; error = null; files = emptyList(); sessions = emptyList()
-        try {
-            val id = chat?.sessionId ?: throw IllegalStateException("请先打开会话")
-            val results = kotlinx.coroutines.coroutineScope {
-                val fileRequest = async { Pocket.referenceFiles(id, query) }
-                val sessionRequest = async { Pocket.referenceSessions(id, query) }
-                fileRequest.await() to sessionRequest.await()
-            }
-            files = results.first
-            sessions = results.second
-        } catch (e: CancellationException) { throw e }
-        catch (e: Exception) { error = e.message ?: "搜索失败" }
-        finally { loading = false }
-    }
-    PocketSheet(onDismiss) {
-        SheetTitle("@ 文件或对话")
-        OutlinedTextField(query, { query = it }, placeholder = { Text(L.searchEllipsis()) },
-            singleLine = true, shape = T.R12, modifier = Modifier.padding(horizontal = 22.dp).fillMaxWidth())
-        if (query.contains('/')) TextButton({ query = query.trimEnd('/').substringBeforeLast('/', "").let { if (it.isEmpty()) "" else "$it/" } }) { Text("上一级目录") }
-        if (loading) LinearProgressIndicator(Modifier.fillMaxWidth())
-        error?.let { Text(it, color = T.Err, modifier = Modifier.padding(22.dp)); TextButton({ attempt++ }) { Text("重试") } }
-        fun pick(token: String) { Pocket.insertComposer("@${token.removePrefix("@")}"); onDismiss() }
-        SectionLabel(L.filesAndFolders())
-        if (!loading && files.isEmpty() && error == null) Text(L.noOptions(), color = T.Caption, modifier = Modifier.padding(horizontal = 22.dp))
-        files.forEach { f ->
-            val directory = f.kind == "directory" || f.kind == "folder"
-            val token = fileReferenceToken(f.path, directory) ?: return@forEach
-            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                Box(Modifier.weight(1f)) {
-                    OptionRow(f.path.trimEnd('/').substringAfterLast('/'), f.path, if (directory) D.folderOpen else D.document) {
-                        if (directory) query = "${f.path.trimEnd('/')}/" else pick(token)
-                    }
-                }
-                if (directory) TextButton({ pick(token) }) { Text("引用") }
-            }
-        }
-        val conversations = sessions.filter { it.kind != "subagent" }
-        val subagents = sessions.filter { it.kind == "subagent" }
-        listOf(L.conversations() to conversations, L.subagents() to subagents).forEach { (title, rows) ->
-            SectionLabel(title)
-            if (!loading && rows.isEmpty() && error == null) Text(L.noOptions(), color = T.Caption, modifier = Modifier.padding(horizontal = 22.dp))
-            rows.forEach { s -> OptionRow(s.title ?: s.mention, s.mention, if (s.kind == "subagent") D.user else D.chat) { pick(s.mention) } }
-        }
-    }
 }
 
 /** Dislike → feedback category + optional note (desktop feedback.dialog). */

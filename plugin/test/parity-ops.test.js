@@ -1,7 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import {
-  searchOps, workspaceOps, feedbackOps, fileReferenceOps, sessionReferenceOps,
+  searchOps, workspaceOps, feedbackOps,
   attachmentOps, workspaceChangesOps, uploadOps, userQuestionOps, goalOps, directoryOps,
 } from '../src/parity-ops.js'
 import { createUserQuestionHook } from '../src/user-question-hook.js'
@@ -192,20 +192,6 @@ test('feedback.get/set map to messageFeedback list/put/delete', async () => {
   assert.equal(cleared.absent, true)
   assert.equal(calls[1][0], 'put')
   assert.equal(calls[2][0], 'delete')
-})
-
-test('references.files / references.sessions forward to Host services', async () => {
-  const agents = { get: (id) => id === 's1' ? { id: 's1' } : undefined }
-  const fileOps = fileReferenceOps({
-    list: async (agent, query) => [{ path: `${query}.ts`, kind: 'file', agent: agent.id }],
-  }, agents)
-  const sessionOps = sessionReferenceOps({
-    candidates: async (_agent, query) => [{ mention: `@${query}`, title: query }],
-  }, agents)
-  const files = await fileOps['references.files']({ sessionId: 's1', query: 'src/a' }, AbortSignal.timeout(500))
-  assert.equal(files.items[0].path, 'src/a.ts')
-  const sessions = await sessionOps['references.sessions']({ sessionId: 's1', query: 'chat' }, AbortSignal.timeout(500))
-  assert.equal(sessions.items[0].mention, '@chat')
 })
 
 test('workspaceChanges.summary forwards Host summary', () => {

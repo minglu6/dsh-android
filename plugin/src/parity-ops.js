@@ -150,16 +150,28 @@ export function fileReferenceOps(fileReferences, agents) {
 }
 
 /** `@` session / subagent mention candidates (`ctx.sessionReferenceResolver`). */
-export function sessionReferenceOps(sessionReferenceResolver, agents) {
+export function sessionReferenceOps(sessionReferenceResolver, agents, sessionQuery) {
   return {
     'references.sessions': async (a, signal) => {
       const agent = agentOf(agents, a.sessionId)
-      if (!sessionReferenceResolver?.candidates) {
+      if (!sessionReferenceResolver?.remoteExportCandidates) {
         throw Object.assign(new Error('sessionReferenceResolver unavailable'), { code: 'unavailable' })
       }
       const query = typeof a.query === 'string' ? a.query : ''
-      const items = await sessionReferenceResolver.candidates(agent, query, signal)
-      return { items: items ?? [] }
+      // `candidates` is the Remote name, not the Host service method.
+      const candidates = await sessionReferenceResolver.remoteExportCandidates(agent, query, signal)
+      if (candidates.length === 0) return { items: [] }
+      const records = await sessionQuery.listSessions(signal)
+      const children = new Set(records
+        .filter(({ header }) => header.origin === 'subagent' && header.parentSession === agent.id)
+        .map(({ header }) => header.id))
+      return {
+        items: candidates.map(candidate => ({
+          ...candidate,
+          title: candidate.displayTitle ?? candidate.label,
+          kind: children.has(candidate.sessionId) ? 'subagent' : 'session',
+        })),
+      }
     },
   }
 }
