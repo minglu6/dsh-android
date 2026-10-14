@@ -417,7 +417,7 @@ fun ChatRoot(
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Text(
-                        prompt.error?.let { "发送失败：$it" } ?: "发送中",
+                        prompt.error?.let { "发送失败：$it" } ?: "发送中...",
                         color = if (prompt.error != null) T.Err else T.Text3,
                         fontSize = 12.sp,
                         modifier = Modifier.weight(1f),

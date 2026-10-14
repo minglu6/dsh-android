@@ -8,6 +8,7 @@ import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performTextInput
+import com.github.takahirom.roborazzi.captureRoboImage
 import dev.dsh.pocket.protocol.Item
 import kotlinx.coroutines.flow.MutableStateFlow
 import org.junit.After
@@ -55,10 +56,12 @@ class FirstPromptUiTest {
 
     @After fun tearDown() { restore() }
 
+    @OptIn(com.github.takahirom.roborazzi.ExperimentalRoborazziApi::class)
     @Test fun messageStaysVisibleThroughCreationAndSnapshotWhileNextDraftSurvives() {
         rule.setContent { PocketTheme { ChatRoot(onMenu = {}) } }
         rule.onNodeWithText("第一条消息").assertIsDisplayed()
-        rule.onNodeWithText("发送中").assertIsDisplayed()
+        rule.onNodeWithTag("firstPromptStatus").assertIsDisplayed()
+            .captureRoboImage("build/screenshots/first-prompt-sending.png")
         rule.onNodeWithTag("composerInput").performTextInput("下一条草稿")
         rule.onNodeWithTag("composerSend").assertIsNotEnabled()
         rule.runOnIdle {
