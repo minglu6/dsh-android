@@ -12,7 +12,6 @@ import android.util.Base64
 import dev.dsh.pocket.protocol.Route
 import dev.dsh.pocket.protocol.classifyWsRoute
 import dev.dsh.pocket.protocol.str
-import dev.dsh.pocket.protocol.int
 import dev.dsh.pocket.protocol.bool
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -137,7 +136,6 @@ fun migrateLegacyProfiles(raw: List<Profile>, now: Long = System.currentTimeMill
 
 enum class BusySend(val label: String, val mode: String) { Queue("排队发送", "queue"), Steer("插话发送", "steer") }
 
-/** Matches Host `ui-theme.preference`. */
 enum class Appearance(val label: String) { Light("浅色"), Dark("深色"), System("跟随系统") }
 
 /** Matches Host `ui-chat.transcriptView`. */
@@ -212,26 +210,29 @@ class AppPrefs(ctx: Context) {
         get() = if ((hostSettings.value(SharedSetting.Language).str() ?: java.util.Locale.getDefault().language).startsWith("zh")) AppLanguage.Zh else AppLanguage.En
         set(v) = hostSettings.set(SharedSetting.Language, JsonPrimitive(v.name.lowercase()))
     var appearance: Appearance
-        get() = when (hostSettings.value(SharedSetting.Appearance).str()) { "light" -> Appearance.Light; "dark" -> Appearance.Dark; else -> Appearance.System }
-        set(v) = hostSettings.set(SharedSetting.Appearance, JsonPrimitive(v.name.lowercase()))
+        get() {
+            val raw = p.getString("appearance", null) ?: return Appearance.System
+            return Appearance.valueOf(raw)
+        }
+        set(v) { p.edit().putString("appearance", v.name).apply() }
     var fontSize: Int
-        get() = hostSettings.value(SharedSetting.FontSize).int() ?: 14
-        set(v) = hostSettings.set(SharedSetting.FontSize, JsonPrimitive(v.coerceIn(10, 22)))
+        get() = p.getInt("fontSize", 14)
+        set(v) { p.edit().putInt("fontSize", v.coerceIn(10, 22)).apply() }
     var codeFontSize: Int
-        get() = hostSettings.value(SharedSetting.CodeFontSize).int() ?: 11
-        set(v) = hostSettings.set(SharedSetting.CodeFontSize, JsonPrimitive(v.coerceIn(10, 16)))
+        get() = p.getInt("codeFontSize", 11)
+        set(v) { p.edit().putInt("codeFontSize", v.coerceIn(10, 16)).apply() }
     var terminalFontSize: Int
-        get() = hostSettings.value(SharedSetting.TerminalFontSize).int() ?: 13
-        set(v) = hostSettings.set(SharedSetting.TerminalFontSize, JsonPrimitive(v.coerceIn(10, 20)))
+        get() = p.getInt("terminalFontSize", 13)
+        set(v) { p.edit().putInt("terminalFontSize", v.coerceIn(10, 20)).apply() }
     var textFontFamily: String
-        get() = hostSettings.value(SharedSetting.TextFontFamily).str().orEmpty()
-        set(v) = hostSettings.set(SharedSetting.TextFontFamily, JsonPrimitive(normalizeFontFamily(v)))
+        get() = p.getString("textFontFamily", null).orEmpty()
+        set(v) { p.edit().putString("textFontFamily", normalizeFontFamily(v)).apply() }
     var codeFontFamily: String
-        get() = hostSettings.value(SharedSetting.CodeFontFamily).str().orEmpty()
-        set(v) = hostSettings.set(SharedSetting.CodeFontFamily, JsonPrimitive(normalizeFontFamily(v)))
+        get() = p.getString("codeFontFamily", null).orEmpty()
+        set(v) { p.edit().putString("codeFontFamily", normalizeFontFamily(v)).apply() }
     var terminalFontFamily: String
-        get() = hostSettings.value(SharedSetting.TerminalFontFamily).str().orEmpty()
-        set(v) = hostSettings.set(SharedSetting.TerminalFontFamily, JsonPrimitive(normalizeFontFamily(v)))
+        get() = p.getString("terminalFontFamily", null).orEmpty()
+        set(v) { p.edit().putString("terminalFontFamily", normalizeFontFamily(v)).apply() }
     var showCodeWorkView: Boolean
         get() = hostSettings.value(SharedSetting.CodeWork).bool() ?: true
         set(v) = hostSettings.set(SharedSetting.CodeWork, JsonPrimitive(v))

@@ -21,10 +21,10 @@ class WorkspaceDisplayInstrumentedTest {
 
     @Test fun workspaceActionsKeepCollapseStateAndDiscardCancelledEdits() {
         Pocket.init(InstrumentationRegistry.getInstrumentation().targetContext)
+        Pocket.prefs.appearance = Appearance.Light
         Pocket.prefs.hostSettings.bind({
             jsonOf("writable" to false, "namespaces" to listOf(
                 jsonOf("ns" to "locale", "revision" to 0, "value" to jsonOf("preference" to "zh")),
-                jsonOf("ns" to "ui-theme", "revision" to 0, "value" to jsonOf("preference" to "light")),
             ))
         }, { _, _, _ -> error("This display test must not mutate Host settings") })
         val workspace = WorkspaceView("default", """C:\Users\luming2\Documents\deepseek-harness\default-workspace""",
