@@ -67,6 +67,8 @@ object D {
     val goal @Composable get() = v(R.drawable.dsh_goal)
     val plan @Composable get() = v(R.drawable.dsh_plan)
     val send @Composable get() = v(R.drawable.dsh_send)
+    /** InputBar's filled primary arrow, distinct from QueueDock's regular send icon. */
+    val composerSend @Composable get() = v(R.drawable.dsh_composer_send)
     /** QueueDock uses the same ChatLinesOutlineArtwork as session references. */
     val queue @Composable get() = v(R.drawable.dsh_chat_lines)
     val compact @Composable get() = v(R.drawable.dsh_compact)

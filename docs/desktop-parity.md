@@ -448,7 +448,7 @@ Source: harness `d743267` / `0.2.1-alpha.2` `@deepseek-ai/dsh-client-ui-primitiv
 | User message actions | Same chrome, clock start, right-aligned | Row present but text labels | **Fixed** — same ActionIconButton chrome |
 | Code block header | CodeToolbar: WrapFill/NowrapFill + Copy/Check icons | Language only; no wrap/copy | **Fixed** — wrap + copy icons with locale tooltips |
 | Composer permission | Shield + 「工作区内修改」 + chevron | Shield-only when narrow | **Fixed** — always shield + label like desktop |
-| Composer send | IconSendOutline | Material `ArrowUpward` | **Fixed** → `D.send` |
+| Composer send | `InputBar.tsx` inline filled arrow, 16×16 | Incorrectly reused QueueDock's thin `IconSendOutlineRegular` | **Fixed** → `D.composerSend` / `dsh_composer_send`, exact desktop path; queue actions retain `D.send`. Light/dark enabled/disabled native rendering verified; send/stop behavior unchanged. |
 | Top bar menu | PanelLeft (sidebar) | Material `Menu` hamburger | **Fixed** → `D.panelLeft` |
 | Trajectory search | IconSearchOutline | Material `Search` | **Fixed** → `D.search` |
 | Top bar ⋯ / new / panel / team / preset | Desktop SVGs already | Already `D.*` icons | OK |

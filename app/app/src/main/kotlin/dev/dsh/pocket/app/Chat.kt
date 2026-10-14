@@ -1771,7 +1771,7 @@ private fun Composer(
                         .testTag("composerSend"),
                     contentAlignment = Alignment.Center,
                 ) {
-                    Icon(D.send, sendLabel, tint = Color.White, modifier = Modifier.size(16.dp))
+                    Icon(D.composerSend, sendLabel, tint = Color.White, modifier = Modifier.size(16.dp))
                 }
             }
         }
