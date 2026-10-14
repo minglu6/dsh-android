@@ -276,7 +276,7 @@ Appearance values from `ui-theme` locales. Performance: `settings.performance.{c
 
 Android is a controller of the same Host, not an independent settings store. Shared fields read the official namespaces: `ui-chat` (transcript/performance), `ui-theme` (appearance/fonts/sizes), `locale.preference`, `ui-conversation.busyEnter`, `ui-settings.enabled`, `permission.defaultPreset`, and `session-log-deepseek.enabled`. Writes use the observed namespace revision through `plugins.settingsMutate`, then read back the effective value. Desktop changes push `settings.changed` and update open mobile pages and renderers. Read-only/offline/conflicting or overridden writes remain failures; they do not save a phone-local value or replay onto another Host. Old phone preferences never upload over Host settings.
 
-The missing-value transcript default follows Desktop (`standard`). Layout, code wrapping and connection preferences remain device-specific. Collapse timing remains explicitly client-local and in-memory because the official desktop policy has no Host setting for it. Font names synchronize, but each device resolves its own installed fonts.
+The missing-value transcript default follows Desktop (`standard`). Code wrapping and connection preferences remain device-specific. Collapse timing remains client-local and in-memory because the official desktop policy has no Host setting for it. Font names synchronize, but each device resolves its own installed fonts. Layout is always width-adaptive; no manual mode or persisted override remains. General settings uses the official row titles/descriptions without an extra “Mobile only” group or device/Host synchronization explanation.
 
 Model settings use the desktop UI, not the mere existence of Host APIs, as their feature boundary. API keys stay write-only inside provider editors. Opening a card and applying changes refresh its Host snapshot; external configuration changes require reopening the card. Saving settings never changes the current session model.
 
@@ -349,7 +349,7 @@ Model settings use the desktop UI, not the mere existence of Host APIs, as their
 | Browser / session diagnostics | present | native WebView / read-only loaded event window |
 | Settings general rows | present | — |
 | Language / appearance prefs | **done** (labels wired via L; en for new surfaces) | was feasible (partial) |
-| Models / plugins / schedules | **done** (native Compose; ops gated by hello `ops`) | was hide |
+| Models / plugins / schedules | **done** (native Compose over official Host APIs) | Models restores default provider configuration; custom plugin cards are temporarily omitted |
 | Open config file / local-path plugin install | hidden | hide (desktop OS chrome) |
 
 ---
@@ -360,7 +360,7 @@ Model settings use the desktop UI, not the mere existence of Host APIs, as their
 
 **Added in this pass (parity-ops):** `sessions.search`, `workspace.state` / `archiveSession` / `unarchiveSession` / `pinSession` / `unpinSession`, `feedback.get` / `feedback.set`, `references.files` / `references.sessions`, `session.attachment`, `attachments.upload`, `userQuestions.answer` (+ push `user-question` / `user-question.closed`).
 
-**Settings ops:** `models.providers` / `models.providerGet` / `models.settingsMutate` / `models.discover`; `plugins.list` / `plugins.setEnabled` / `plugins.install` / `plugins.inventory`; `schedule.catalog` / `list` / `create` / `update` / `delete` / `history`; `credentials.describe` / `set` / `unset` for model connection credentials. Describe returns metadata only. Native settings retain revision checks and draft handling. `ui.open` / `ui.close` provide a device/connection-bound short Web session through the bridge's own port; the original Host client renders installed settings sections, model footer/provider-card slots and other Web contributions. No Qoder-specific native card or arbitrary React execution inside Compose remains. Host process tokens/cookies stay server-side; explicit path/Origin gates and CSP protect the HTTP/WS proxy.
+**Settings ops:** Native Models uses `models.providers` / `models.providerGet` / `models.settingsMutate` / `models.discover` with write-only `credentials.*`, revision checks, draft retention and readback. Built-in Plugins independently uses `plugins.inventory`; its connection-bound load effect handles capability publication, invalidation and manual refresh without losing valid rows or accepting stale replies. Default settings do not enter WebView. Plugins retains its separate optional full-client entry via `ui.open` / `ui.close`; those device/connection-bound Web sessions keep Host process tokens/cookies server-side and enforce path/Origin/CSP restrictions.
 
 **Still limited / unfinished:**
 
@@ -370,7 +370,7 @@ Model settings use the desktop UI, not the mere existence of Host APIs, as their
 | Appearance theme tokens | **done** — full `--dsw-alias-*` / `--dsw-specific-*` from ui-theme design-platform.css @ d743267 → `DswColors` + theme-aware `T.*`; Appearance Light/Dark/System drives chrome |
 | Connections / pair / settings chrome | **done** — `Conn` aliases `T.*` (no Tokyo Night); settings cards use `--dsw-alias-settings-card-*`; pair sheet = PocketSheet + primary CTA |
 | Document preview (text / image / PDF) | **done** — tap file path/link in chat or trajectory → `FilePreviewSheet` via `files.read` / `files.readBytes`; copy uses common `copy`/`copied`; PDF via `PdfRenderer` (no GMS) |
-| Wide / foldable layout | **done** — ≥600dp two-pane sidebar (desktop-like) + Layout Auto/Phone/Desktop pref |
+| Wide / foldable layout | **done** — automatically uses two panes at ≥760dp, reserving 480dp for the conversation; narrower screens use the drawer. No Auto/Phone/Desktop preference. |
 | Drawer tap / safe-area | **done** — session row closes drawer; workspace collapse does not; drawer session menu is `DropdownMenu` (first tap not eaten); sheets/nav use system bar insets |
 | OS workspace picker / open-config / local-path plugin install | **hide** (desktop OS chrome) |
 | Schedule pause toggle | desktop has no pause — `inactive` means ended after delivery |

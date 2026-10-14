@@ -21,7 +21,15 @@ data class QueuedPrompt(
     val images: Int = 0,
     val files: Int = 0,
     val sending: Boolean = false,
+    val editable: Boolean = images == 0 && files == 0,
 )
+
+/** Mutations of a confirmed Host queue row; editing replaces text-only content. */
+sealed interface QueueAction {
+    data class Edit(val text: String) : QueueAction
+    data object Remove : QueueAction
+    data object Steer : QueueAction
+}
 
 /** One rendered row of a conversation. */
 sealed interface Item {
@@ -1012,6 +1020,7 @@ class TranscriptReducer {
             text = blocks.filter { it["type"].str() == "text" }.joinToString("\n") { it["text"].str().orEmpty() },
             images = blocks.count { it["type"].str() == "image" },
             files = blocks.count { it["type"].str() == "file" },
+            editable = blocks.isNotEmpty() && blocks.all { it["type"].str() == "text" },
         )
     }
 

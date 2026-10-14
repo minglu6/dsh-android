@@ -155,9 +155,6 @@ enum class PerformanceUsage(val label: String) { Compact("简洁"), Detailed("�
 
 enum class AppLanguage(val label: String) { Zh("中文"), En("English") }
 
-/** Wide-screen chrome: auto follows ≥600dp like desktop sidebar; phone/desktop force a mode. */
-enum class LayoutMode { Auto, Phone, Desktop }
-
 /** Desktop `ui-workspace` view store: groupBy / orderBy / archivedFilter. */
 enum class SessionGroupBy { Workspace, WorkspaceTree, Flat }
 enum class SessionOrderBy { Manual, Updated }
@@ -254,9 +251,6 @@ class AppPrefs(ctx: Context) {
     var performanceUsage: PerformanceUsage
         get() = if (hostSettings.value(SharedSetting.Performance).str() == "detailed") PerformanceUsage.Detailed else PerformanceUsage.Compact
         set(v) = hostSettings.set(SharedSetting.Performance, JsonPrimitive(v.name.lowercase()))
-    var layoutMode: LayoutMode
-        get() = runCatching { LayoutMode.valueOf(p.getString("layoutMode", null) ?: "Auto") }.getOrDefault(LayoutMode.Auto)
-        set(v) = p.edit().putString("layoutMode", v.name).apply()
 
     /** Persist drawer session list view options (desktop `dsh.workspace.view.v5`). */
     var sessionGroupBy: SessionGroupBy

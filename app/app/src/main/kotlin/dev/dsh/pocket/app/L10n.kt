@@ -244,12 +244,6 @@ object L {
     fun pdfPage(page: Int) = if (en) "PDF page $page" else "PDF 第 $page 页"
     fun pdfUnsupported() = if (en) "PDF preview requires the complete file contents." else "PDF 预览需要完整文件内容"
 
-    // Layout (phone chrome; mirrors desktop always-on sidebar on wide screens)
-    fun layout() = if (en) "Layout" else "布局"
-    fun layoutAuto() = if (en) "Auto" else "自动"
-    fun layoutPhone() = if (en) "Phone" else "手机"
-    fun layoutDesktop() = if (en) "Desktop" else "桌面"
-
     // Version compatibility (handshake)
     fun pluginTooOld(required: String?) = if (en) {
         "Desktop plugin is too old" + (required?.let { " (need ≥ $it)" } ?: "") +

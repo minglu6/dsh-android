@@ -4,6 +4,7 @@ import android.annotation.SuppressLint
 import android.graphics.Bitmap
 import android.net.Uri
 import android.net.http.SslError
+import android.view.ViewGroup
 import android.webkit.*
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
@@ -144,6 +145,8 @@ private fun createHostUiWebView(
     context: android.content.Context, policy: HostUiPolicy,
     onLoading: (Boolean) -> Unit, onFailure: (String) -> Unit,
 ): WebView = WebView(context).apply {
+    // WRAP_CONTENT makes Chromium's viewport units resolve to zero in AndroidView.
+    layoutParams = ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
     contentDescription = st("主机插件界面", "Host plugin interface")
     settings.apply {
         javaScriptEnabled = true

@@ -19,6 +19,28 @@ class QueuedPromptTest {
         json("""{"type":"$type","cursor":$seq,"records":[$records],"projections":{"asOfSeq":$seq,"values":{"inbox":{"next-turn":[$queue],"next-step":[$steer]}}}}""")
     private fun TranscriptReducer.users() = items().filterIsInstance<Item.User>()
 
+    @Test fun editingRequiresNonemptyEntirelyTextContentAcrossProjectionAndRestore() {
+        val cases = listOf(
+            """[{"type":"text","text":"one"},{"type":"text","text":"two"}]""" to true,
+            """[{"type":"text","text":"caption"},{"type":"image"}]""" to false,
+            """[{"type":"text","text":"caption"},{"type":"file"}]""" to false,
+            """[{"type":"text","text":"caption"},{"type":"future-content"}]""" to false,
+            "[]" to false,
+        )
+        cases.forEach { (content, editable) ->
+            val row = """{"id":"m","role":"user","source":{"kind":"user","rpcId":"r"},"content":$content}"""
+            val r = TranscriptReducer()
+            r.apply(projection(1, row))
+            assertEquals(editable, r.queueMessages().single().editable)
+            r.apply(snapshot(2, row))
+            assertEquals(editable, r.queueMessages().single().editable)
+            assertFalse(r.queueMessages().single().sending)
+        }
+        assertTrue(QueuedPrompt("q", "text").editable)
+        assertFalse(QueuedPrompt("q", "text", images = 1).editable)
+        assertFalse(QueuedPrompt("q", "text", files = 1).editable)
+    }
+
     @Test fun busyQueueWaitsForItsOwnTurnWhileSteerRemainsInTranscript() {
         val r = TranscriptReducer()
         r.apply(event(1, "turn/start", """{"turn":1}"""))

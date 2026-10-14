@@ -2,6 +2,8 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { once } from 'node:events'
 import { createServer, request } from 'node:http'
+import { runInNewContext } from 'node:vm'
+import { gunzipSync } from 'node:zlib'
 import { WebSocket, WebSocketServer } from 'ws'
 import { createPocketServer } from '../src/server.js'
 import { UI_COOKIE, UI_TICKET_MS, UI_SESSION_MS } from '../src/host-ui.js'
@@ -11,13 +13,16 @@ const LAUNCH = 'fixture-process-launch-secret'
 const HOST_COOKIE = 'fixture-host-cookie-secret'
 const OWNER = 'fixture-pocket-owner-secret'
 
-function http(origin, path, { method = 'GET', headers = {}, body } = {}) {
+function http(origin, path, { method = 'GET', headers = {}, body, binary = false } = {}) {
   return new Promise((resolve, reject) => {
     const req = request(origin, { path, method, headers }, (res) => {
       const chunks = []
       res.on('data', (chunk) => chunks.push(chunk))
       res.on('error', reject)
-      res.on('end', () => resolve({ status: res.statusCode, headers: res.headers, body: Buffer.concat(chunks).toString('utf8') }))
+      res.on('end', () => {
+        const bytes = Buffer.concat(chunks)
+        resolve({ status: res.statusCode, headers: res.headers, body: binary ? bytes : bytes.toString('utf8') })
+      })
     })
     req.on('error', reject)
     req.end(body)
@@ -219,7 +224,13 @@ test('official HTML graph, assets, POST and mux work without publishing Host cre
   assert.match(page.body, /custom-plugin/u)
   assert.match(page.body, /backoffBaseMs/u)
   assert.match(page.body, /official shell/u)
-  assert.doesNotMatch(page.body, /__DSH_TRANSPORT__|streamBaseUrl|ownsHost|launchUrl/u)
+  assert.doesNotMatch(page.body, /streamBaseUrl|launchUrl/u)
+  const browser = {}
+  for (const [, attributes, source] of page.body.matchAll(/<script\b([^>]*)>([\s\S]*?)<\/script\s*>/giu)) {
+    if (!/\bsrc\s*=/iu.test(attributes)) runInNewContext(source, browser)
+  }
+  assert.equal(browser.__DSH_TRANSPORT__.ownsHost, true)
+  assert.deepEqual(Object.keys(browser.__DSH_TRANSPORT__), ['ownsHost'])
   for (const secret of [LAUNCH, HOST_COOKIE, OWNER]) assert.equal(JSON.stringify(page).includes(secret), false)
   assert.equal(page.headers['set-cookie'], undefined)
   assert.equal(page.headers.location, undefined)
@@ -239,6 +250,21 @@ test('official HTML graph, assets, POST and mux work without publishing Host cre
   ws.terminate()
   assert.equal(f.exchanges(), 1)
   assert.ok(f.seen.every((entry) => entry.headers.cookie === `host-auth=${HOST_COOKIE}`))
+})
+
+test('slow-link documents and modules negotiate gzip without changing authenticated content', async (t) => {
+  const f = await fixture(t)
+  const { cookie } = await f.session()
+  for (const path of ['/?pocket-ui=1&section=models', '/assets/app.js']) {
+    const plain = await http(f.origin, path, { headers: { cookie } })
+    const compressed = await http(f.origin, path, { headers: { cookie, 'accept-encoding': 'br, gzip;q=0.8' }, binary: true })
+    assert.equal(compressed.status, 200)
+    assert.equal(compressed.headers['content-encoding'], 'gzip')
+    assert.equal(gunzipSync(compressed.body).toString('utf8'), plain.body)
+    const disabled = await http(f.origin, path, { headers: { cookie, 'accept-encoding': 'gzip;q=0, identity' } })
+    assert.equal(disabled.headers['content-encoding'], undefined)
+    assert.equal(disabled.body, plain.body)
+  }
 })
 
 test('valid cookies cannot bypass origin, fetch metadata or authority checks', { timeout: 10_000 }, async (t) => {

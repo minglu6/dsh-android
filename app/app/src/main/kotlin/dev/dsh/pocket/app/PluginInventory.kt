@@ -11,12 +11,15 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import dev.dsh.pocket.protocol.PocketClient
 import dev.dsh.pocket.protocol.arr
 import dev.dsh.pocket.protocol.bool
 import dev.dsh.pocket.protocol.get
 import dev.dsh.pocket.protocol.str
 import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.launch
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.isActive
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 
@@ -75,6 +78,46 @@ private fun inventoryPhase(row: JsonElement): String = when (row["fiberPhase"].s
     else -> inventoryText("未运行", "Not running")
 }
 
+internal class PluginInventoryLoadState {
+    var snapshot by mutableStateOf<JsonElement?>(null)
+    var loading by mutableStateOf(false)
+    var error by mutableStateOf<Exception?>(null)
+}
+
+/** One effect owns automatic and manual loads; cancellation must not suppress its replacement. */
+@Composable
+internal fun rememberPluginInventory(
+    profile: String?,
+    online: Boolean,
+    supported: Boolean,
+    connection: PocketClient?,
+    revision: Long,
+    refresh: Int,
+    fetch: suspend (PocketClient) -> JsonElement = { it.pluginsInventory() },
+): PluginInventoryLoadState {
+    val state = remember(profile) { PluginInventoryLoadState() }
+    LaunchedEffect(state, online, supported, connection, revision, refresh) {
+        state.loading = false
+        state.error = null
+        if (!online || !supported) return@LaunchedEffect
+        state.loading = true
+        try {
+            val result = fetch(checkNotNull(connection) { "Host connection unavailable" })
+            currentCoroutineContext().ensureActive()
+            state.snapshot = result
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            currentCoroutineContext().ensureActive()
+            state.error = e
+        } finally {
+            // A cancelled request may finish after its replacement has already started.
+            if (currentCoroutineContext().isActive) state.loading = false
+        }
+    }
+    return state
+}
+
 @Composable
 internal fun BuiltInPluginsScreen(onBack: () -> Unit) {
     val profile by Pocket.active.collectAsState()
@@ -83,35 +126,21 @@ internal fun BuiltInPluginsScreen(onBack: () -> Unit) {
         val ops by Pocket.ops.collectAsState()
         val revision by Pocket.pluginCatalogRevision.collectAsState()
         val online = profile != null && status[profile] == Dot.Online
-        val scope = rememberCoroutineScope()
-        var snapshot by remember { mutableStateOf<JsonElement?>(null) }
-        var loading by remember { mutableStateOf(false) }
-        var error by remember { mutableStateOf<String?>(null) }
-        suspend fun refresh() {
-            if (!online || loading || "plugins.inventory" !in ops) return
-            loading = true
-            error = null
-            try {
-                snapshot = checkNotNull(Pocket.clientOrNull()).pluginsInventory()
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Exception) {
-                error = e.message ?: inventoryText("读取插件列表失败", "Could not load plugin inventory")
-            } finally {
-                loading = false
-            }
-        }
-        LaunchedEffect(online, ops, revision) { refresh() }
+        val supported = "plugins.inventory" in ops
+        val connection = Pocket.clientOrNull()
+        var refresh by remember { mutableIntStateOf(0) }
+        val state = rememberPluginInventory(profile, online, supported, connection, revision, refresh)
         SettingsScaffold(inventoryText("内置插件", "Built-in plugins"), onBack, actions = {
-            IconButton({ scope.launch { refresh() } }, enabled = online && !loading && "plugins.inventory" in ops) {
+            IconButton({ refresh++ }, enabled = online && !state.loading && supported) {
                 Icon(D.refresh, inventoryText("刷新", "Refresh"))
             }
         }) {
             InventoryNote(inventoryText("查看内置部署的插件列表", "View plugins in the built-in deployment"))
             if (!online) InventoryNote(inventoryText("主机已断开连接", "Host disconnected"), true)
-            error?.let { InventoryNote(it, true) }
-            if (loading) LinearProgressIndicator(Modifier.fillMaxWidth().padding(horizontal = 18.dp))
-            snapshot?.let { PluginInventoryContent(it) }
+            else if (!supported) InventoryNote(inventoryText("主机未提供内置插件目录，请检查主机插件是否已加载。", "The host does not provide a built-in plugin inventory. Check that its plugin is loaded."), true)
+            state.error?.let { InventoryNote(it.message ?: inventoryText("读取插件列表失败", "Could not load plugin inventory"), true) }
+            if (state.loading) LinearProgressIndicator(Modifier.fillMaxWidth().padding(horizontal = 18.dp))
+            state.snapshot?.let { PluginInventoryContent(it) }
             Spacer(Modifier.height(24.dp))
         }
     }

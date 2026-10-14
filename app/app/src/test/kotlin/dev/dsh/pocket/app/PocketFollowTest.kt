@@ -51,6 +51,8 @@ class PocketFollowTest {
         val permission = Pocket.permission.value
         val feedback = Pocket.feedback.value
         val ops = Pocket.ops.value
+        val active = Pocket.active.value
+        val status = Pocket.status.value
         restore = {
             fields.forEach { (name, value) -> put(name, value) }
             modelEpochs.forEach { (name, value) -> (get(name) as AtomicLong).set(value) }
@@ -62,6 +64,8 @@ class PocketFollowTest {
             Pocket.permission.value = permission
             Pocket.feedback.value = feedback
             Pocket.ops.value = ops
+            Pocket.active.value = active
+            Pocket.status.value = status
         }
         client = PocketClient()
         val transport = object : FrameTransport {
@@ -117,8 +121,8 @@ class PocketFollowTest {
         Pocket.javaClass.getDeclaredMethod("invalidateModelCatalog").apply { isAccessible = true }.invoke(Pocket)
     }
 
-    private fun reject(request: JsonObject, message: String = "writer held") {
-        val text = """{"id":${request["id"]},"ok":false,"error":{"code":"session/writer-held","message":"$message"}}"""
+    private fun reject(request: JsonObject, message: String = "writer held", code: String = "session/writer-held") {
+        val text = """{"id":${request["id"]},"ok":false,"error":{"code":"$code","message":"$message"}}"""
         client.javaClass.getDeclaredMethod("onFrame", String::class.java).apply { isAccessible = true }.invoke(client, text)
     }
 
@@ -127,6 +131,167 @@ class PocketFollowTest {
 
     private fun modelCatalog(defaultModel: String = "default") = ModelCatalog.parse(PocketJson.parseToJsonElement(
         """{"groups":[{"id":"p","models":[{"id":"default","name":"Default"},{"id":"next","name":"Next"},{"id":"desktop","name":"Desktop"}]}],"default":{"provider":"p","model":"$defaultModel","reasoningEffort":"high"}}"""))
+
+    private fun enableQueueActions() {
+        Pocket.active.value = "queue-host"
+        Pocket.status.value = mapOf("queue-host" to Dot.Online)
+        Pocket.ops.value = setOf("queue.update")
+    }
+
+    private fun queueRow(text: String = "original", extra: String = "") =
+        """{"id":"queued","role":"user","source":{"kind":"user","rpcId":"request"},"content":[{"type":"text","text":"$text"}$extra]}"""
+
+    private fun queueProjection(seq: Int, row: String = queueRow(), sub: String = "sub-A", session: String = "A", steer: String = "") =
+        push(sub, """{"type":"projection","sessionId":"$session","key":"inbox","seq":$seq,"value":{"next-turn":[$row],"next-step":[$steer]}}""")
+
+    @Test fun queuedEditAndRemoveWaitForHostProjectionRatherThanMutationReply() = runBlocking {
+        enableQueueActions()
+        queueProjection(1)
+        var completed: Boolean? = null
+        val editing = Pocket.updateQueuedPrompt("A", "queued", QueueAction.Edit("revised")) { completed = it }.also { jobs += it }
+        val edit = request("queue.update")
+        assertEquals("A", edit["args"]["sessionId"].str())
+        assertEquals("queued", edit["args"]["itemId"].str())
+        assertEquals("edit", edit["args"]["action"]["kind"].str())
+        assertEquals("revised", edit["args"]["action"]["content"].arr()!!.single()["text"].str())
+        reply(edit, "{}")
+        finish(editing)
+        assertEquals(true, completed)
+        assertEquals("original", Pocket.chat.value!!.queuedPrompts.single().text)
+        queueProjection(2, queueRow("revised"))
+        assertEquals("revised", Pocket.chat.value!!.queuedPrompts.single().text)
+        val removing = Pocket.updateQueuedPrompt("A", "queued", QueueAction.Remove).also { jobs += it }
+        val remove = request("queue.update")
+        assertEquals("remove", remove["args"]["action"]["kind"].str())
+        reply(remove, "{}")
+        finish(removing)
+        assertEquals("revised", Pocket.chat.value!!.queuedPrompts.single().text)
+        queueProjection(3, "")
+        assertTrue(Pocket.chat.value!!.queuedPrompts.isEmpty())
+    }
+
+    @Test fun queuedEditCannotEraseAttachmentsOrUnknownContent() = runBlocking {
+        enableQueueActions()
+        listOf("image", "file", "future-content").forEachIndexed { index, type ->
+            queueProjection(index + 1, queueRow(extra = """,{"type":"$type"}"""))
+            val before = Pocket.chat.value
+            val failure = async(start = CoroutineStart.UNDISPATCHED) { Pocket.errors.first() }
+            var completed: Boolean? = null
+            finish(Pocket.updateQueuedPrompt("A", "queued", QueueAction.Edit("replacement")) { completed = it }.also { jobs += it })
+            assertEquals(false, completed)
+            assertEquals("含附件的排队消息不能编辑", withTimeout(5000) { failure.await() })
+            assertTrue(requests.tryReceive().isFailure)
+            assertEquals(before, Pocket.chat.value)
+        }
+    }
+
+    @Test fun unconfirmedQueuedPromptDisablesAllActionsEvenAfterRpcAcknowledgement() = runBlocking {
+        installHostSettingsFixture()
+        enableQueueActions()
+        push("sub-A", """{"type":"event","event":{"seq":1,"time":1,"type":"turn/start","data":{"turn":1}}}""")
+        val sending = Pocket.send("waiting").also { jobs += it }
+        val prompt = request("prompt")
+        reply(prompt, "{}")
+        finish(sending)
+        val row = Pocket.chat.value!!.queuedPrompts.single()
+        assertTrue(row.sending)
+        listOf(QueueAction.Edit("new"), QueueAction.Remove, QueueAction.Steer).forEach { action ->
+            var completed: Boolean? = null
+            finish(Pocket.updateQueuedPrompt("A", row.id, action) { completed = it }.also { jobs += it })
+            assertEquals(false, completed)
+            assertTrue(requests.tryReceive().isFailure)
+            assertEquals(row, Pocket.chat.value!!.queuedPrompts.single())
+        }
+    }
+
+    @Test fun queuedActionsRequireOnlineCapabilityExistingRowAndRunningSteer() = runBlocking {
+        enableQueueActions()
+        queueProjection(1)
+        suspend fun refused(action: QueueAction, id: String = "queued") {
+            var completed: Boolean? = null
+            finish(Pocket.updateQueuedPrompt("A", id, action) { completed = it }.also { jobs += it })
+            assertEquals(false, completed)
+            assertTrue(requests.tryReceive().isFailure)
+            assertEquals("original", Pocket.chat.value!!.queuedPrompts.single().text)
+        }
+        refused(QueueAction.Steer)
+        refused(QueueAction.Edit(" "))
+        refused(QueueAction.Remove, "missing")
+        Pocket.ops.value = emptySet()
+        refused(QueueAction.Remove)
+        Pocket.ops.value = setOf("queue.update")
+        Pocket.status.value = mapOf("queue-host" to Dot.Offline)
+        refused(QueueAction.Remove)
+    }
+
+    @Test fun queuedMutationErrorsKeepRowsAndExposeFailuresExceptConvergedSteer() = runBlocking {
+        enableQueueActions()
+        push("sub-A", """{"type":"event","event":{"seq":1,"time":1,"type":"turn/start","data":{"turn":1}}}""")
+        queueProjection(2)
+        val before = Pocket.chat.value
+        for (action in listOf(QueueAction.Edit("draft"), QueueAction.Remove, QueueAction.Steer)) {
+            val codes = listOf("session/writer-held", "session/queue-item-not-found", "session/steer-unavailable")
+            for (code in codes) {
+                val failure = async(start = CoroutineStart.UNDISPATCHED) { Pocket.errors.first() }
+                var completed: Boolean? = null
+                val updating = Pocket.updateQueuedPrompt("A", "queued", action) { completed = it }.also { jobs += it }
+                reject(request("queue.update"), "queue rejected", code)
+                finish(updating)
+                val converged = action == QueueAction.Steer && code != "session/writer-held"
+                assertEquals(converged, completed)
+                if (converged) {
+                    assertFalse(failure.isCompleted)
+                    failure.cancelAndJoin()
+                } else {
+                    withTimeout(5000) { failure.await() }
+                }
+                assertEquals(before, Pocket.chat.value)
+            }
+        }
+    }
+
+    @Test fun queuedSteerMovesToTranscriptOnlyWhenHostProjectsIt() = runBlocking {
+        enableQueueActions()
+        push("sub-A", """{"type":"event","event":{"seq":1,"time":1,"type":"turn/start","data":{"turn":1}}}""")
+        queueProjection(2)
+        val steering = Pocket.updateQueuedPrompt("A", "queued", QueueAction.Steer).also { jobs += it }
+        val steer = request("queue.update")
+        assertEquals("steer", steer["args"]["action"]["kind"].str())
+        reply(steer, "{}")
+        finish(steering)
+        assertEquals(1, Pocket.chat.value!!.queuedPrompts.size)
+        assertTrue(Pocket.chat.value!!.items.none { it is Item.User })
+        queueProjection(3, row = "", steer = queueRow())
+        assertTrue(Pocket.chat.value!!.queuedPrompts.isEmpty())
+        assertEquals("original", Pocket.chat.value!!.items.filterIsInstance<Item.User>().single().text)
+    }
+
+    @Test fun lateQueueMutationSuccessAndFailureCannotAffectNewSession() = runBlocking {
+        enableQueueActions()
+        queueProjection(1)
+        val completions = mutableListOf<Boolean>()
+        val editing = Pocket.updateQueuedPrompt("A", "queued", QueueAction.Edit("old draft")) { completions += it }.also { jobs += it }
+        val edit = request("queue.update")
+        val removing = Pocket.updateQueuedPrompt("A", "queued", QueueAction.Remove) { completions += it }.also { jobs += it }
+        val remove = request("queue.update")
+        val opening = open("B")
+        reply(request("unfollow"), """{"stopped":true}""")
+        val follow = request("follow")
+        snapshot("sub-B", 10)
+        reply(follow, """{"subId":"sub-B"}""")
+        finish(opening)
+        queueProjection(11, queueRow("new session"), sub = "sub-B", session = "B")
+        val before = Pocket.chat.value
+        val failure = async(start = CoroutineStart.UNDISPATCHED) { Pocket.errors.first() }
+        reply(edit, "{}")
+        reject(remove)
+        finish(editing)
+        finish(removing)
+        assertEquals(before, Pocket.chat.value)
+        assertTrue(completions.isEmpty())
+        assertFalse(failure.isCompleted)
+        failure.cancelAndJoin()
+    }
 
     @Test fun busyQueueTextImagesAndFilesShareRequestIdentityAndFailureCleanup() = runBlocking {
         installHostSettingsFixture()

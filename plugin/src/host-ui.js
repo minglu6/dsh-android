@@ -2,6 +2,7 @@ import { randomBytes } from 'node:crypto'
 import { request as httpRequest } from 'node:http'
 import { request as httpsRequest } from 'node:https'
 import { networkInterfaces } from 'node:os'
+import { createGzip } from 'node:zlib'
 import { WebSocket, WebSocketServer } from 'ws'
 
 export const UI_COOKIE = 'dsh-pocket-web'
@@ -12,6 +13,26 @@ const MAX_HTML_BYTES = 8 * 1024 * 1024
 const SAFE_RESPONSE_HEADERS = ['content-type', 'content-disposition', 'content-range', 'accept-ranges']
 const SAFE_REQUEST_HEADERS = ['accept', 'accept-language', 'content-type', 'content-length', 'range', 'last-event-id']
 const RECOVERY_KEYS = ['backoffBaseMs', 'backoffFactor', 'backoffMaxMs', 'generationReadyWarnMs', 'generationReadyTimeoutMs']
+
+/** Compress document/module bytes without buffering streams or changing byte ranges. */
+function responseStream(req, res, response) {
+  const type = String(response.headers['content-type'] ?? '').split(';')[0].trim().toLowerCase()
+  if (req.method === 'HEAD' || response.statusCode !== 200 || response.headers['content-encoding']
+    || !/^(?:text\/(?:html|css|javascript)|application\/(?:javascript|json|xhtml\+xml))$/u.test(type)) return res
+  res.setHeader('vary', 'Accept-Encoding')
+  const acceptsGzip = String(req.headers['accept-encoding'] ?? '').split(',').some((entry) => {
+    const [name, ...parameters] = entry.trim().toLowerCase().split(';').map((part) => part.trim())
+    const quality = parameters.find((part) => part.startsWith('q='))
+    return name === 'gzip' && (quality === undefined || Number(quality.slice(2)) > 0)
+  })
+  if (!acceptsGzip) return res
+  res.setHeader('content-encoding', 'gzip')
+  const stream = createGzip()
+  stream.on('error', () => res.destroy())
+  res.once('close', () => stream.destroy())
+  stream.pipe(res)
+  return stream
+}
 
 function unavailable(message = 'Host UI unavailable') {
   return Object.assign(new Error(message), { code: 'ui/unavailable' })
@@ -86,7 +107,7 @@ function rejectUpgrade(socket, status = 403) {
   socket.end(`HTTP/1.1 ${status} Denied\r\nConnection: close\r\nCache-Control: no-store\r\nContent-Length: 0\r\n\r\n`)
 }
 
-/** Keep the official module graph, but never publish desktop transport/recovery ownership. */
+/** Keep the official module graph; upstream credentials and transport endpoints stay server-side. */
 function browserDocument(html, secrets) {
   const sanitized = html.replace(/<script\b([^>]*)>([\s\S]*?)<\/script\s*>/giu, (tag, attributes, source) => {
     if (/\bsrc\s*=/iu.test(attributes)) return tag
@@ -107,7 +128,13 @@ function browserDocument(html, secrets) {
   for (const secret of secrets) {
     if (secret && [secret, encodeURIComponent(secret), JSON.stringify(secret).slice(1, -1)].some((value) => sanitized.includes(value))) throw unavailable()
   }
-  return sanitized
+  // Only authenticated, device-bound proxy responses reach this function. This
+  // shell already grants Host settings RPCs; use the official desktop transport
+  // capability instead of letting a LAN/Tailscale hostname disable those forms.
+  // Never inherit upstream hooks, URLs, cookies, or recovery ownership.
+  const head = /<head\b[^>]*>/iu
+  if (!head.test(sanitized)) throw unavailable()
+  return sanitized.replace(head, '$&<script>globalThis.__DSH_TRANSPORT__={ownsHost:true}</script>')
 }
 
 /** One live service scope. Grants belong to the authenticated client object, not its token. */
@@ -249,12 +276,15 @@ export function createHostUi({ webServer, connection, devices, isClientLive, now
             chunks.push(chunk)
           }
           const body = browserDocument(Buffer.concat(chunks).toString('utf8'), secrets)
-          res.writeHead(response.statusCode ?? 502).end(body)
+          const output = responseStream(req, res, response)
+          res.writeHead(response.statusCode ?? 502)
+          output.end(body)
         } else {
           if (response.headers['content-encoding']) res.setHeader('content-encoding', response.headers['content-encoding'])
+          const output = responseStream(req, res, response)
           res.writeHead(response.statusCode ?? 502)
           response.on('error', () => res.destroy())
-          response.pipe(res)
+          response.pipe(output)
         }
       })().catch(() => { response.destroy(); reject(res, 502) })
     })

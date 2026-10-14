@@ -58,7 +58,7 @@ class PreferencesUiTest {
         rule.runOnIdle { assertTrue(renderedBackground.luminance() > 0.8f, "Selecting Light must repaint without navigation") }
     }
 
-    @Test fun desktopChangeUpdatesThemeTokensAndOpenSettingsWithoutRemounting() {
+    @Test fun desktopChangeUpdatesThemeTokensWithoutRemounting() {
         var renderedToken = Color.Unspecified
         rule.setContent {
             PocketTheme {
@@ -69,9 +69,7 @@ class PreferencesUiTest {
         }
         rule.runOnIdle {
             host.desktopSet(SharedSetting.Appearance, kotlinx.serialization.json.JsonPrimitive("dark"))
-            host.desktopSet(SharedSetting.Language, kotlinx.serialization.json.JsonPrimitive("en"))
         }
-        rule.onNodeWithText("General settings").assertExists()
         rule.runOnIdle { assertTrue(renderedToken.luminance() < 0.1f) }
     }
 

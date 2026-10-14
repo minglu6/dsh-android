@@ -131,6 +131,8 @@ Android 页面直接使用官方 Host 服务，不另建定时任务数据库或
 - Host 同时提供 `webServer` 与 `connection` 时，桥接公布 `ui.open({section?})` 和 `ui.close({ticket?})`。`ui.open` 返回 `{ticket,path:"/pocket-ui/open"}`；原生以表单 POST 单次票据，兑换 `dsh-pocket-web` HttpOnly/SameSite=Strict cookie 和无票据的 303 页面地址。票据 60 秒、网页会话 15 分钟，绑定已配对设备、当前 WS 连接及 authority；普通连接关闭、设备撤销、服务卸载会结束 HTTP/SSE/WS。
 - `/`、官方 assets/plugins/API 和 `/api/remote.mux` 由同一手机端口代理到固定的本机 Host listener。Host 启动 URL 只在服务端兑换内部 cookie，不回传启动令牌、Host cookie 或敏感重定向。`/pocket/*`、`/open-in-app/*`、任意上游 URL、路径绕过和跨站请求均拒绝。
 - `/?pocket-ui=1&section=models` 使用官方模型设置与第三方卡片；无 section 时保留完整官方客户端。设置深链等待 session baseline，避免官方初始 onboarding 关闭刚打开的设置；不替换根组件，也不更改正常桌面窗口。窄屏设置导航横向滚动。
+- 已鉴权的手机页面在官方客户端启动前注入独立的 `__DSH_TRANSPORT__={ownsHost:true}`，声明与原生已配对连接相同的 Host 管理能力。否则官方 settings mirror 会把 LAN/Tailscale 地址判为普通远程网页并拒绝模型设置。上游原有 transport/native/recovery 声明仍被剥离，不继承 `streamBaseUrl`、函数、进程令牌或 Host cookie；未鉴权请求无法取得该页面。验收必须覆盖非回环地址，不能只测 USB `127.0.0.1`。
+- 桥接按 `Accept-Encoding` 协商 gzip 压缩 HTML、JavaScript、CSS 和 JSON，减少蜂窝/Tailscale 中转链路上的首屏资源传输；HTML 先脱敏再压缩。SSE、Range/206、HEAD 和上游已压缩的响应不重新编码。
 - 自定义页面的请求/WS 由 CSP 限定为当前手机端口 origin。既有 LAN HTTP 不增加传输加密；跨网络使用 Tailscale 或已有安全链路。没有第三方脚本到 Android 的 JavaScript bridge，也不提供 Electron 专属 API、设备文件选择或下载。
 
 ## 遗留 iroh sidecar

@@ -19,10 +19,13 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.rotate
+import androidx.compose.ui.draw.drawWithCache
 import androidx.compose.foundation.layout.offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalInspectionMode
@@ -49,8 +52,10 @@ import dev.dsh.pocket.protocol.Item
 import dev.dsh.pocket.protocol.PromptFile
 import dev.dsh.pocket.protocol.PromptImage
 import dev.dsh.pocket.protocol.QueuedPrompt
+import dev.dsh.pocket.protocol.QueueAction
 import dev.dsh.pocket.protocol.ToolStatus
 import dev.dsh.pocket.protocol.UserQuestion
+import dev.dsh.pocket.protocol.bool
 import dev.dsh.pocket.protocol.get
 import dev.dsh.pocket.protocol.str
 import kotlinx.coroutines.delay
@@ -138,8 +143,8 @@ fun ChatRoot(
         }
     }
     val presetRoster by Pocket.presetRoster.collectAsState()
-    LaunchedEffect(presetRoster, active) {
-        if (draftPreset.isEmpty()) draftPreset = presetRoster.firstOrNull { it["isDefault"].toString() == "true" }?.get("id").str().orEmpty()
+    val effectivePreset = draftPreset.ifBlank {
+        (presetRoster.firstOrNull { it["isDefault"].bool() == true } ?: presetRoster.firstOrNull())?.get("id").str().orEmpty()
     }
     var draftPermissionOverride by remember(active, chat?.sessionId) { mutableStateOf<String?>(null) }
     val draftPerm = draftPermissionOverride ?: Pocket.prefs.defaultPermission
@@ -239,7 +244,7 @@ fun ChatRoot(
             try {
                 Pocket.prepareSidebarSession(
                     cwd = draftCwd ?: sessions.firstNotNullOfOrNull { it.cwd } ?: Pocket.workspaces.value.firstOrNull()?.path,
-                    preset = draftPreset.takeIf { it.isNotBlank() },
+                    preset = effectivePreset.takeIf { it.isNotBlank() },
                     pendingPermission = draftPerm.takeIf { "permissions.set" in ops && permissionDirectory?.find(it) != null },
                     pendingModel = draftModel,
                 )
@@ -322,14 +327,16 @@ fun ChatRoot(
             onMenu = if (showMenuButton) onMenu else null,
             onMore = { sheet = Sheet.More },
             onPanel = { sheet = Sheet.Panel },
-            onTeam = { sheet = Sheet.Team }, onPreset = { sheet = Sheet.Preset }, preset = chat?.agentPreset.orEmpty(), onNew = { Pocket.closeChat() },
+            onTeam = { sheet = Sheet.Team }, onPreset = { sheet = Sheet.Preset }, preset = presetLabel(chat?.agentPreset, presetRoster), onNew = { Pocket.closeChat() },
         )
         CompatibilityBanner(compatibility)
         if (chat == null) {
             Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) { Hero() }
             Row(Modifier.padding(horizontal = 16.dp, vertical = 6.dp), horizontalArrangement = Arrangement.spacedBy(14.dp)) {
                 Chip(D.folderOpen, (draftCwd ?: workspaces.firstOrNull())?.substringAfterLast('/') ?: "选择工作区") { sheet = Sheet.Workspace }
-                Chip(D.agentPreset, presetLabel(draftPreset)) { sheet = Sheet.Preset }
+                if (presetRoster.isNotEmpty()) presetLabel(effectivePreset, presetRoster)?.let { label ->
+                    Chip(D.agentPreset, label) { sheet = Sheet.Preset }
+                }
             }
             Composer(
                 "描述你想要构建的内容, / 调用指令, @ 文件或对话", false, curPerm, curModel,
@@ -358,7 +365,7 @@ fun ChatRoot(
                 onSlash = { sheet = Sheet.Commands },
                 onMention = { sheet = Sheet.Mentions },
                 onSend = { text ->
-                    Pocket.newSession(text, draftPreset.takeIf { it.isNotBlank() }, curPerm.takeIf { it.isNotEmpty() }, draftModel, draftCwd ?: workspaces.firstOrNull())
+                    Pocket.newSession(text, effectivePreset.takeIf { it.isNotBlank() }, curPerm.takeIf { it.isNotEmpty() }, draftModel, draftCwd ?: workspaces.firstOrNull())
                     pendingImages = emptyList(); pendingFiles = emptyList()
                 },
                 onStop = {},
@@ -413,12 +420,17 @@ fun ChatRoot(
                 }
             }
             GoalBar(st) { sheet = Sheet.Goal }
-            PromptQueue(st.queuedPrompts)
+            PromptQueue(
+                sessionId = st.sessionId, prompts = st.queuedPrompts, running = st.running,
+                enabled = dot == Dot.Online && st.loaded && "queue.update" in ops && !inspectorPicking,
+                onAction = { id, action, complete -> Pocket.updateQueuedPrompt(st.sessionId, id, action, complete) },
+            )
             if (!questionVisible && approval == null) {
             Composer(
                 "发消息或创建任务, / 调用指令, @ 文件或对话", st.running, curPerm, curModel, enabled = dot == Dot.Online && !inspectorPicking,
                 draft = composerDraft, onDraftChange = { composerDraft = it },
                 planMode = st.planMode,
+                queueAttached = st.queuedPrompts.isNotEmpty(),
                 pendingImages = pendingImages, pendingFiles = pendingFiles,
                 permissionName = currentPermissionLabel,
                 onPlus = { sheet = Sheet.Plus }, onPerm = { sheet = Sheet.Permission }, onModel = { modelDirect = false; sheet = Sheet.Model },
@@ -494,7 +506,7 @@ fun ChatRoot(
                     permissionDirectory?.find(value) != null,
             )
         }
-        Sheet.Preset -> PresetSheet(if (sid == null) draftPreset else chat?.agentPreset.orEmpty(), editable = sid == null, onDismiss = { sheet = Sheet.None }) { draftPreset = it }
+        Sheet.Preset -> PresetSheet(if (sid == null) effectivePreset else chat?.agentPreset.orEmpty(), editable = sid == null, onDismiss = { sheet = Sheet.None }) { draftPreset = it }
         Sheet.Plus -> PlusSheet(
             onDismiss = { sheet = Sheet.None },
             onPerm = { sheet = Sheet.Permission },
@@ -563,7 +575,7 @@ fun ChatRoot(
 }
 
 @Composable
-private fun TopBar(title: String?, inChat: Boolean, onMenu: (() -> Unit)?, onMore: () -> Unit, onPanel: (() -> Unit)?, onTeam: () -> Unit, onPreset: () -> Unit, preset: String, onNew: () -> Unit = {}) {
+private fun TopBar(title: String?, inChat: Boolean, onMenu: (() -> Unit)?, onMore: () -> Unit, onPanel: (() -> Unit)?, onTeam: () -> Unit, onPreset: () -> Unit, preset: String?, onNew: () -> Unit = {}) {
     Row(Modifier.fillMaxWidth().height(56.dp).padding(horizontal = 6.dp), verticalAlignment = Alignment.CenterVertically) {
         if (onMenu != null) IconButton(onMenu) { Icon(D.panelLeft, L.menu(), tint = T.Ink, modifier = Modifier.size(20.dp)) }
         else Spacer(Modifier.width(12.dp))
@@ -574,7 +586,7 @@ private fun TopBar(title: String?, inChat: Boolean, onMenu: (() -> Unit)?, onMor
                 Spacer(Modifier.width(10.dp))
                 // Icon-only on phones: the session title must never be squeezed to "…".
                 GrayLink(D.users, "智能体团队", onTeam)
-                GrayLink(D.agentPreset, presetLabel(preset), onPreset)
+                preset?.let { GrayLink(D.agentPreset, it, onPreset) }
             }
         }
         IconButton(onMore, Modifier.size(48.dp)) { Icon(D.ellipsis, "更多", tint = T.Ink) }
@@ -1445,43 +1457,166 @@ internal fun UserQuestionCard(
 }
 
 @Composable
-internal fun PromptQueue(prompts: List<QueuedPrompt>) {
+internal fun PromptQueue(
+    sessionId: String,
+    prompts: List<QueuedPrompt>,
+    running: Boolean,
+    enabled: Boolean,
+    onAction: (String, QueueAction, (Boolean) -> Unit) -> Unit,
+) {
+    var collapsed by remember(sessionId) { mutableStateOf(true) }
+    var editingId by remember(sessionId) { mutableStateOf<String?>(null) }
+    var draft by remember(sessionId) { mutableStateOf("") }
+    var busyId by remember(sessionId) { mutableStateOf<String?>(null) }
+    LaunchedEffect(prompts) {
+        if (prompts.isEmpty()) collapsed = true
+        if (editingId != null && prompts.none { it.id == editingId && it.editable && !it.sending }) {
+            editingId = null
+            draft = ""
+        }
+    }
     if (prompts.isEmpty()) return
     val en = Pocket.prefs.language == AppLanguage.En
+    val interacting = editingId != null || busyId != null
+    val expanded = !collapsed || interacting
+    val single = prompts.size == 1
+    val sendingLabel = if (en) "Sending…" else "发送中…"
+    val shape = RoundedCornerShape(topStart = 12.dp, topEnd = 12.dp)
+    val borderColor = T.Border
+    fun apply(id: String, action: QueueAction) {
+        busyId = id
+        onAction(id, action) { success ->
+            if (busyId == id) busyId = null
+            if (success && action is QueueAction.Edit && editingId == id) {
+                editingId = null
+                draft = ""
+            }
+        }
+    }
     Column(
-        Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 4.dp)
-            .clip(T.R20).background(T.Fill2).testTag("promptQueue").padding(12.dp),
+        Modifier.fillMaxWidth().padding(horizontal = 30.dp).clip(shape)
+            .background(T.Fill2).drawWithCache {
+                val radius = 12.dp.toPx()
+                val edge = 0.25.dp.toPx()
+                val border = Path().apply {
+                    moveTo(edge, size.height)
+                    lineTo(edge, radius)
+                    quadraticTo(edge, edge, radius, edge)
+                    lineTo(size.width - radius, edge)
+                    quadraticTo(size.width - edge, edge, size.width - edge, radius)
+                    lineTo(size.width - edge, size.height)
+                }
+                onDrawBehind { drawPath(border, borderColor, style = Stroke(0.5.dp.toPx())) }
+            }
+            .testTag("promptQueue").padding(vertical = 2.dp),
     ) {
-        Text(
-            if (en) "Queued messages (${prompts.size})" else "排队消息（${prompts.size}）",
-            color = T.Text2, fontSize = 12.sp, fontWeight = FontWeight.Medium,
-            modifier = Modifier.testTag("promptQueueCount"),
-        )
-        Column(Modifier.heightIn(max = 156.dp).verticalScroll(rememberScrollState())) {
-            prompts.forEach { prompt ->
+        if (!single) Row(
+            Modifier.fillMaxWidth().height(36.dp)
+                .clickable(enabled = !interacting, role = Role.Button) { collapsed = !collapsed }
+                .testTag("promptQueueToggle").semantics {
+                    stateDescription = if (expanded) {
+                        if (en) "Expanded" else "已展开"
+                    } else {
+                        if (en) "Collapsed" else "已折叠"
+                    }
+                }.padding(horizontal = 12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            Icon(D.queue, null, tint = T.Text3, modifier = Modifier.size(14.dp))
+            Text(
+                if (en) "${prompts.size} queued messages" else "${prompts.size} 条排队消息",
+                color = T.Text2, fontSize = 13.sp, fontWeight = FontWeight.Medium,
+                modifier = Modifier.weight(1f).testTag("promptQueueCount"),
+            )
+            if (!expanded && prompts.any { it.sending }) Text(sendingLabel, color = T.Text3, fontSize = 13.sp)
+            Icon(D.chevronDown, null, tint = T.Text3, modifier = Modifier.size(14.dp).rotate(if (expanded) 0f else 180f))
+        }
+        if (single || expanded) Column(
+            Modifier.heightIn(max = 180.dp).verticalScroll(rememberScrollState()).testTag("promptQueueList"),
+        ) {
+            prompts.forEachIndexed { index, prompt ->
                 key(prompt.id) {
-                    Column(Modifier.fillMaxWidth().padding(top = 8.dp).testTag("queuedPrompt:${prompt.id}")) {
-                        Text(
-                            prompt.text.ifBlank { if (en) "Attachments" else "附件消息" },
-                            color = T.Ink, fontSize = 13.sp, maxLines = 2, overflow = TextOverflow.Ellipsis,
-                        )
-                        val attachments = buildList {
-                            if (prompt.images > 0) add(if (en) "${prompt.images} image${if (prompt.images == 1) "" else "s"}" else "${prompt.images} 张图片")
-                            if (prompt.files > 0) add(if (en) "${prompt.files} file${if (prompt.files == 1) "" else "s"}" else "${prompt.files} 个文件")
+                    if (index > 0) HorizontalDivider(thickness = 0.5.dp, color = T.Border)
+                    Row(
+                        Modifier.fillMaxWidth().heightIn(min = 36.dp)
+                            .testTag("queuedPrompt:${prompt.id}").padding(start = 12.dp, end = 5.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        if (single) {
+                            Icon(D.queue, null, tint = T.Text3, modifier = Modifier.size(14.dp))
+                            Spacer(Modifier.width(10.dp))
                         }
-                        val status = if (prompt.sending) {
-                            if (en) "Sending…" else "发送中…"
-                        } else {
-                            if (en) "Waiting for this turn to finish" else "等待本轮结束"
+                        val editing = editingId == prompt.id
+                        val actionable = enabled && !prompt.sending && busyId == null
+                        if (editing) BasicTextField(
+                            value = draft, onValueChange = { draft = it },
+                            enabled = enabled && busyId == null,
+                            textStyle = MaterialTheme.typography.bodySmall.copy(color = T.Ink, fontSize = 13.sp),
+                            cursorBrush = SolidColor(T.Accent),
+                            modifier = Modifier.weight(1f).heightIn(min = 28.dp, max = 108.dp)
+                                .padding(vertical = 5.dp).testTag("queueDraft:${prompt.id}")
+                                .semantics { contentDescription = if (en) "Edit queued message" else "编辑排队消息" },
+                        ) else {
+                            val preview = remember(prompt.text, prompt.images, prompt.files, en) {
+                                buildList {
+                                    if (prompt.images > 0) add(if (en) "${prompt.images} image${if (prompt.images == 1) "" else "s"}" else "${prompt.images} 张图片")
+                                    if (prompt.files > 0) add(if (en) "${prompt.files} file${if (prompt.files == 1) "" else "s"}" else "${prompt.files} 个文件")
+                                    val text = prompt.text.replace(Regex("\\s+"), " ").trim()
+                                    if (text.isNotEmpty()) add(text)
+                                }.joinToString(" · ")
+                            }
+                            Text(
+                                preview, color = T.Text2, fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.weight(1f),
+                            )
                         }
-                        Text(
-                            (listOf(status) + attachments).joinToString(" · "),
-                            color = T.Text3, fontSize = 11.sp, maxLines = 2, overflow = TextOverflow.Ellipsis,
+                        if (prompt.sending) Text(
+                            sendingLabel, color = T.Text3, fontSize = 13.sp,
+                            modifier = Modifier.padding(start = 6.dp),
                         )
+                        Row(Modifier.padding(start = 4.dp), horizontalArrangement = Arrangement.spacedBy(2.dp)) {
+                            if (editing) {
+                                QueueButton(D.check, if (en) "Save queued message" else "保存排队消息",
+                                    "queueSave:${prompt.id}", actionable && draft.isNotBlank()) {
+                                    apply(prompt.id, QueueAction.Edit(draft))
+                                }
+                                QueueButton(D.close, if (en) "Cancel editing" else "取消编辑",
+                                    "queueCancel:${prompt.id}", busyId == null) { editingId = null; draft = "" }
+                            } else {
+                                QueueButton(D.edit, if (en) "Edit queued message" else "编辑排队消息",
+                                    "queueEdit:${prompt.id}", actionable && prompt.editable) {
+                                    editingId = prompt.id
+                                    draft = prompt.text
+                                }
+                                QueueButton(D.trash, if (en) "Remove queued message" else "删除排队消息",
+                                    "queueRemove:${prompt.id}", actionable) { apply(prompt.id, QueueAction.Remove) }
+                                QueueButton(D.send, if (en) "Steer queued message" else "插话发送",
+                                    "queueSteer:${prompt.id}", actionable && running) { apply(prompt.id, QueueAction.Steer) }
+                            }
+                        }
                     }
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun QueueButton(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    label: String,
+    tag: String,
+    enabled: Boolean,
+    onClick: () -> Unit,
+) {
+    Box(
+        Modifier.size(32.dp).clip(CircleShape).testTag(tag)
+            .clickable(enabled = enabled, role = Role.Button, onClickLabel = label, onClick = onClick)
+            .semantics { contentDescription = label },
+        contentAlignment = Alignment.Center,
+    ) {
+        Icon(icon, null, tint = T.Text3.copy(alpha = if (enabled) 1f else 0.45f), modifier = Modifier.size(14.dp))
     }
 }
 
@@ -1495,6 +1630,7 @@ private fun Composer(
     draft: TextFieldValue,
     onDraftChange: (TextFieldValue) -> Unit,
     planMode: Boolean = false,
+    queueAttached: Boolean = false,
     permissionName: String = permissionLabel(perm),
     pendingImages: List<PromptImage> = emptyList(),
     pendingFiles: List<PendingAttach> = emptyList(),
@@ -1528,7 +1664,7 @@ private fun Composer(
     val hasPending = pendingImages.isNotEmpty() || pendingFiles.isNotEmpty()
     val filesReady = pendingFiles.none { it.status == AttachStatus.Uploading || it.status == AttachStatus.Failed || it.status == AttachStatus.Pending }
     val sendLabel = composerSendLabel(running)
-    Column(Modifier.padding(horizontal = 14.dp, vertical = 4.dp).fillMaxWidth().clip(T.R20).border(1.dp, T.Border, T.R20).padding(start = 16.dp, end = 10.dp, top = 14.dp, bottom = 10.dp)) {
+    Column(Modifier.padding(start = 14.dp, end = 14.dp, top = if (queueAttached) 0.dp else 4.dp, bottom = 4.dp).fillMaxWidth().clip(T.R20).border(1.dp, T.Border, T.R20).padding(start = 16.dp, end = 10.dp, top = 14.dp, bottom = 10.dp)) {
         if (hasPending) {
             Text(L.pendingFiles(), fontSize = 12.sp, color = T.Text3)
             Spacer(Modifier.height(6.dp))

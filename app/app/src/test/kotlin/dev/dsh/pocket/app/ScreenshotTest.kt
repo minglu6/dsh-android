@@ -202,9 +202,12 @@ class ScreenshotTest {
         assertTrue(modelsOpened)
     }
     @Test fun s09_general() = show("09-general-settings") { GeneralSettingsScreen {} }
-    @Test fun s22_modelsSettings() = show("22-models-settings") {
+    @Test fun s22_modelsSettings() {
         Pocket.ops.value = setOf("models.providers")
-        ModelsSettingsScreen {}
+        show("22-models-settings") { ModelsSettingsScreen {} }
+        rule.onNodeWithText(L.modelsIntro()).assertExists()
+        rule.onNodeWithText("插件自定义界面").assertDoesNotExist()
+        rule.onNodeWithText("添加模型提供商").assertExists()
     }
     @Test fun s23_pluginsSettings() = show("23-plugins-settings") {
         Pocket.ops.value = setOf("plugins.list")

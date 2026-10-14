@@ -253,8 +253,8 @@ internal fun transcriptText(value: TranscriptView): String = when (value) {
 }
 
 internal fun collapseText(value: CollapseTiming): String = when (value) {
-    CollapseTiming.Completion -> st("回答结束后", "After completion")
-    CollapseTiming.NextInput -> st("下次有新消息时", "On the next input")
+    CollapseTiming.Completion -> st("回答结束后", "On completion")
+    CollapseTiming.NextInput -> st("下次有新消息时", "On next message")
 }
 
 @Composable
@@ -423,9 +423,4 @@ internal fun GeneralPreferenceRow(
         else if (onClick != null) Icon(D.chevronDown, null, tint = T.Text2, modifier = Modifier.size(18.dp))
     }
     if (divider) HorizontalDivider(Modifier.padding(horizontal = 16.dp), color = T.Border)
-}
-
-@Composable
-internal fun GeneralSectionLabel(title: String) {
-    Text(title, fontSize = 13.sp, color = T.Text3, modifier = Modifier.padding(start = 22.dp, top = 12.dp, bottom = 2.dp))
 }

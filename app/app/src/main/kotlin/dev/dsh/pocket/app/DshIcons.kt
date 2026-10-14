@@ -63,6 +63,8 @@ object D {
     val goal @Composable get() = v(R.drawable.dsh_goal)
     val plan @Composable get() = v(R.drawable.dsh_plan)
     val send @Composable get() = v(R.drawable.dsh_send)
+    /** QueueDock uses the same ChatLinesOutlineArtwork as session references. */
+    val queue @Composable get() = v(R.drawable.dsh_chat_lines)
     val compact @Composable get() = v(R.drawable.dsh_compact)
     val download @Composable get() = v(R.drawable.dsh_download)
     val edit @Composable get() = v(R.drawable.dsh_edit)

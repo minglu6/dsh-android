@@ -938,6 +938,49 @@ object Pocket {
         }
     }
 
+    /** Queue state is owned by Host inbox projections, never by mutation acknowledgements. */
+    fun updateQueuedPrompt(
+        sessionId: String,
+        itemId: String,
+        action: QueueAction,
+        onComplete: (Boolean) -> Unit = {},
+    ) = main.launch {
+        val c = client
+        val target = reducer
+        val epoch = followEpoch.get()
+        fun current() = client === c && reducer === target &&
+            chat.value?.sessionId == sessionId && followEpoch.get() == epoch
+        if (!current()) return@launch
+        try {
+            check(c != null && status.value[active.value] == Dot.Online) { "未连接到主机" }
+            check("queue.update" in ops.value) { "主机不支持修改排队消息" }
+            val row = target.queueMessages().firstOrNull { it.id == itemId }
+                ?: error("排队消息已变化")
+            check(!row.sending) { "消息仍在发送中" }
+            when (action) {
+                is QueueAction.Edit -> {
+                    check(row.editable) { "含附件的排队消息不能编辑" }
+                    check(action.text.isNotBlank()) { "消息不能为空" }
+                }
+                QueueAction.Steer -> check(chat.value?.running == true) { "当前没有运行中的轮次" }
+                QueueAction.Remove -> Unit
+            }
+            c.updateQueuedPrompt(sessionId, itemId, action)
+            if (current()) onComplete(true)
+        } catch (e: CancellationException) {
+            if (current()) onComplete(false)
+            throw e
+        } catch (e: Exception) {
+            if (current()) {
+                // Desktop treats a turn/item claimed during steer as already converged.
+                val converged = action == QueueAction.Steer && e is PocketError &&
+                    (e.code == "session/steer-unavailable" || e.code == "session/queue-item-not-found")
+                if (!converged) errors.tryEmit(e.message ?: "修改排队消息失败")
+                onComplete(converged)
+            }
+        }
+    }
+
     /** dsh titles a session asynchronously after the first turn; the list is the source of truth. */
     private suspend fun refreshTitles(c: PocketClient) = runCatching {
         sessions.value = c.listSessions().sortedByDescending { it.updatedAt }

@@ -88,8 +88,7 @@ private fun Root(deepLink: MutableStateFlow<PairingLink?>) {
     val scope = rememberCoroutineScope()
     val snack = remember { SnackbarHostState() }
     val widthDp = LocalConfiguration.current.screenWidthDp
-    val layoutMode = Pocket.prefs.layoutMode
-    val twoPane = useTwoPaneLayout(widthDp, layoutMode)
+    val twoPane = useTwoPaneLayout(widthDp)
     var sidebarCollapsed by rememberSaveable { mutableStateOf(Pocket.prefs.sidebarCollapsed) }
     fun toggleSidebar() {
         sidebarCollapsed = !sidebarCollapsed

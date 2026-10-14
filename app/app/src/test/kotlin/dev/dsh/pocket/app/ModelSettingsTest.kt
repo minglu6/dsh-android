@@ -40,6 +40,69 @@ class ModelSettingsTest {
         rule.setContent { PocketTheme { Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) { content() } } }
     }
 
+    @Test fun modelsScreenLoadsAndEditsNativelyWithoutHostUiCapability() {
+        val client = PocketClient()
+        val onFrame = client.javaClass.getDeclaredMethod("onFrame", String::class.java).apply { isAccessible = true }
+        val requests = mutableListOf<String>()
+        var name = "Gateway"
+        val provider = json("""{"provider":"gateway","configured":true,"active":true,"declared":true,"settingsNs":"llm-pi-ai","settingsPath":["providers","gateway"],"credential":{"configured":true,"writable":true}}""")
+        val transport = object : FrameTransport {
+            override val route = Route.WsLocal
+            override val incoming = kotlinx.coroutines.flow.emptyFlow<String>()
+            override val closeReason: String? = null
+            override suspend fun send(text: String) {
+                val request = json(text)
+                val op = checkNotNull(request["op"].str())
+                requests += op
+                val result = when (op) {
+                    "models.providers" -> buildJsonObject {
+                        put("rows", JsonArray(listOf(JsonObject(provider.jsonObject + ("displayName" to JsonPrimitive(name))))))
+                        put("namespaces", JsonArray(listOf(namespace)))
+                        put("protocols", JsonArray(protocols.map(::JsonPrimitive)))
+                        put("writable", true)
+                    }
+                    "models.providerGet" -> buildJsonObject {
+                        put("provider", provider)
+                        put("namespace", namespace)
+                    }
+                    else -> error("Unexpected operation $op")
+                }
+                onFrame.invoke(client, buildJsonObject {
+                    put("id", checkNotNull(request["id"]))
+                    put("ok", true)
+                    put("result", result)
+                }.toString())
+            }
+            override fun close() {}
+        }
+        client.javaClass.getDeclaredField("transport").apply { isAccessible = true }.set(client, transport)
+        val field = Pocket.javaClass.getDeclaredField("client").apply { isAccessible = true }
+        val previous = field.get(Pocket)
+        val previousRevision = Pocket.modelSettingsRevision.value
+        field.set(Pocket, client)
+        Pocket.ops.value += "models.providers"
+        try {
+            rule.setContent { PocketTheme { ModelsSettingsScreen {} } }
+            rule.onNodeWithText("Gateway").assertExists()
+            rule.onNodeWithText("插件自定义界面").assertDoesNotExist()
+            rule.runOnIdle {
+                name = "Updated Gateway"
+                Pocket.modelSettingsRevision.value++
+            }
+            rule.onNodeWithText("Updated Gateway").assertExists()
+            rule.onNodeWithText("编辑").performClick()
+            rule.onNodeWithContentDescription("API 密钥").assertExists()
+            rule.onNodeWithText("保存").assertExists()
+            assertTrue("models.providers" in requests)
+            assertTrue("models.providerGet" in requests)
+            assertFalse("ui.open" in requests)
+        } finally {
+            field.set(Pocket, previous)
+            Pocket.modelSettingsRevision.value = previousRevision
+            client.close()
+        }
+    }
+
     @Test fun apiKeysMatchDesktopPasteRulesWithoutRejectingBase64Padding() {
         assertNull(providerKeyFailure(""))
         assertNull(providerKeyFailure("  sk-valid  "))
@@ -86,8 +149,6 @@ class ModelSettingsTest {
         mount { NativeModelList(models, true, false, true, emptyList(), null, { models = it }, null) }
         rule.onNodeWithText("模型目录").assertExists()
         rule.onNodeWithText("正在使用适配器默认模型").assertExists()
-        rule.onNodeWithText("模型 1").assertDoesNotExist()
-        rule.onNodeWithText("自定义模型").assertDoesNotExist()
         rule.onNodeWithContentDescription("上下文窗口 1").assertDoesNotExist()
         rule.onNodeWithContentDescription("模型选项 1").performClick()
         rule.onNodeWithContentDescription("上下文窗口 1").assertExists()
@@ -95,18 +156,6 @@ class ModelSettingsTest {
         rule.onNodeWithContentDescription("删除模型 1").performClick()
         rule.runOnIdle { assertEquals(listOf("deepseek-v4-pro"), models.map { it["id"].str() }) }
         rule.onNodeWithContentDescription("上下文窗口 1").assertDoesNotExist()
-    }
-
-    @Test fun customCreationUsesDesktopFieldOrderAndCreateAction() {
-        mount { ProviderSettingsEditor(null, namespace, protocols, emptyList(), true, onBusy = {}, onClose = {}) }
-        val fields = rule.onAllNodes(hasSetTextAction()).fetchSemanticsNodes()
-        assertEquals(listOf("Provider ID", "显示名称", "API 地址", "API 密钥"),
-            fields.map { it.config[androidx.compose.ui.semantics.SemanticsProperties.ContentDescription].single() })
-        rule.onNodeWithText("创建提供商").performScrollTo().assertIsNotEnabled()
-        rule.onNodeWithText("自定义设置").assertDoesNotExist()
-        rule.onNodeWithText("自定义模型").assertDoesNotExist()
-        rule.onNodeWithText("获取可用模型").assertExists()
-        rule.onNodeWithText("应用").assertDoesNotExist()
     }
 
     @Test fun modelFormEditsNativeFieldsWithoutLosingUnknownMetadataAndResets() {
@@ -128,13 +177,12 @@ class ModelSettingsTest {
         assertTrue(reset)
     }
 
-    @Test fun existingProviderStartsCollapsedAndAccountDoesNotOfferKeyOrEndpoint() {
+    @Test fun existingProviderExpandsAndCollapsesAdvancedConfiguration() {
         Pocket.ops.value += "credentials.unset"
         val snapshot = json("""{"provider":{"provider":"gateway","settingsNs":"llm-pi-ai","settingsPath":["providers","gateway"],"declared":true,"credential":{"configured":true,"writable":true}},"namespace":{"ns":"llm-pi-ai","revision":7,"user":{"providers":{"gateway":{"api":"openai-responses"}}},"value":{"providers":{"gateway":{}}}},"inheritedModels":[]}""")
         mount { ProviderSettingsEditor(snapshot, null, protocols, emptyList(), true, onBusy = {}, onClose = {}) }
         rule.onNodeWithText("API 密钥").assertExists()
         rule.onNodeWithText("API 地址").assertDoesNotExist()
-        rule.onNodeWithText("清除已保存的密钥").assertDoesNotExist()
         rule.onNodeWithText("自定义设置").performClick()
         rule.onNodeWithText("API 地址").assertExists()
         rule.onNodeWithText("OpenAI Responses").assertExists()

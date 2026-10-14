@@ -6,23 +6,22 @@ import dev.dsh.pocket.protocol.get
 import dev.dsh.pocket.protocol.str
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonObject
 
-fun presetLabel(id: String?): String {
-    val roster = Pocket.presetRoster.value
-    val row = roster.firstOrNull { it["id"].str() == id }
-        ?: if (id.isNullOrBlank()) roster.firstOrNull { it["isDefault"].toString() == "true" } else null
-    return presetName(row, id)
+fun presetLabel(id: String?, roster: List<JsonObject>): String? {
+    if (id.isNullOrBlank()) return null
+    return roster.firstOrNull { it["id"].str() == id }?.let { presetName(it) } ?: id
 }
 
 /** Official registry/display fold: an explicit name owns its copy, even for a shipped id. */
-internal fun presetName(row: JsonElement?, fallbackId: String? = null): String {
+internal fun presetName(row: JsonElement?): String {
     row["name"].str()?.let { return it }
-    return when (val id = row["id"].str() ?: fallbackId) {
+    return when (val id = row["id"].str()) {
         "standard" -> st("标准模式", "Standard mode")
         "ptc" -> st("PTC 模式", "PTC mode")
         "minimal" -> st("极简模式", "Minimal mode")
         "cordis" -> st("创造模式", "Creator mode")
-        else -> id?.takeIf { it.isNotBlank() } ?: st("主机默认", "Host default")
+        else -> id.orEmpty()
     }
 }
 

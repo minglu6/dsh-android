@@ -189,6 +189,23 @@ class PocketClient(
                 files.forEach { f -> add(buildJsonObject { put("receiptId", f.receiptId) }) }
             }
         })
+    suspend fun updateQueuedPrompt(sessionId: String, itemId: String, action: QueueAction): JsonElement =
+        call("queue.update", buildJsonObject {
+            put("sessionId", sessionId)
+            put("itemId", itemId)
+            put("action", buildJsonObject {
+                when (action) {
+                    is QueueAction.Edit -> {
+                        put("kind", "edit")
+                        putJsonArray("content") {
+                            add(buildJsonObject { put("type", "text"); put("text", action.text) })
+                        }
+                    }
+                    QueueAction.Remove -> put("kind", "remove")
+                    QueueAction.Steer -> put("kind", "steer")
+                }
+            })
+        })
     suspend fun cancel(sessionId: String) = call("cancel", jsonOf("sessionId" to sessionId))
     suspend fun executeCommand(sessionId: String, line: String): JsonElement =
         call("commands.execute", jsonOf("sessionId" to sessionId, "line" to line))

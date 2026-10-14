@@ -44,11 +44,6 @@ fun ModelsSettingsScreen(onBack: () -> Unit) {
     var adding by remember(host) { mutableStateOf(false) }
     var busy by remember(host) { mutableStateOf(false) }
     var setupConsidered by remember(host) { mutableStateOf(false) }
-    var hostUi by remember(host) { mutableStateOf(false) }
-    if (hostUi) {
-        HostUiScreen(st("模型插件界面", "Model plugin interfaces"), section = "models") { hostUi = false }
-        return
-    }
     suspend fun load() {
         val result = checkNotNull(Pocket.clientOrNull()) { L.unavailable() }.modelsProviders()
         rows = result["rows"].arr().orEmpty()
@@ -173,11 +168,6 @@ fun ModelsSettingsScreen(onBack: () -> Unit) {
                     adding = false
                     if (changed) { message = st("已保存；以提供商状态确认是否生效", "Saved; check provider status for activation"); reload() }
                 })
-        }
-        if ("ui.open" in ops) SettingsCard {
-            SettingsNavRow(st("插件自定义界面", "Plugin interfaces"), D.pluginPinwheel,
-                value = st("与桌面共用", "Shared with desktop"), divider = false,
-                onClick = { if (!busy) hostUi = true })
         }
         Spacer(Modifier.height(20.dp))
     }
