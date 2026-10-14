@@ -6,7 +6,6 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.style.TextOverflow
@@ -20,6 +19,7 @@ import kotlinx.coroutines.CancellationException
 internal fun WorkspaceNavigationGroups(
     workspaces: List<WorkspaceView>, sessions: List<SessionSummary>, tree: Boolean,
     collapsed: Set<String>, onToggle: (String) -> Unit, onPick: (String) -> Unit,
+    activities: Map<String, SidebarActivity>,
     renderSessions: @Composable (List<SessionSummary>) -> Unit,
 ) {
     val chat by Pocket.chat.collectAsState()
@@ -34,14 +34,38 @@ internal fun WorkspaceNavigationGroups(
     val assigned = workspaces.flatMap { it.sessionIds }.toSet()
     val orphanGroups = sessions.filter { it.sessionId !in assigned }.groupBy { "" }
     val paths = (workspaces.map { workspacePathKey(it.path) } + orphanGroups.keys).distinct()
+    val workspaceActivities = remember(workspaces, activities) {
+        workspaces.associate { workspace ->
+            workspace.workspaceId to workspace.sessionIds.fold(SidebarActivity.Idle) { activity, id ->
+                mergeSidebarActivity(activity, activities[id] ?: SidebarActivity.Idle)
+            }
+        }
+    }
+    fun branchActivity(branch: WorkspaceBranch): SidebarActivity {
+        var activity = SidebarActivity.Idle
+        workspaces.forEach { workspace ->
+            if (workspacePathKey(workspace.path) == branch.path) {
+                activity = mergeSidebarActivity(activity, workspaceActivities.getValue(workspace.workspaceId))
+            }
+        }
+        branch.children.forEach { activity = mergeSidebarActivity(activity, branchActivity(it)) }
+        return activity
+    }
     @Composable fun group(path: String, children: List<WorkspaceBranch>, depth: Int) {
         val registered = workspaces.filter { workspacePathKey(it.path) == path }
         val fallback = orphanGroups[path].orEmpty()
+        val childActivity = children.fold(SidebarActivity.Idle) { activity, child ->
+            mergeSidebarActivity(activity, branchActivity(child))
+        }
+        val fallbackActivity = fallback.fold(SidebarActivity.Idle) { activity, session ->
+            mergeSidebarActivity(activity, activities[session.sessionId] ?: SidebarActivity.Idle)
+        }
         Column(Modifier.fillMaxWidth()) {
             if (registered.isEmpty()) {
                 val key = "path:$path"
                 WorkspaceGroupHeader(path.ifEmpty { L.ungrouped() }, path, key in collapsed, { onToggle(key) }, depth = depth,
-                    active = fallback.any { it.sessionId == currentId } || children.any(::containsCurrent))
+                    active = fallback.any { it.sessionId == currentId } || children.any(::containsCurrent),
+                    activity = mergeSidebarActivity(fallbackActivity, childActivity))
                 if (key !in collapsed) {
                     renderSessions(fallback)
                     children.forEach { group(it.path, it.children, depth + 1) }
@@ -51,7 +75,9 @@ internal fun WorkspaceNavigationGroups(
                     val key = "workspace:${workspace.workspaceId}"
                     WorkspaceGroupHeader(workspace.title?.takeIf { it.isNotBlank() } ?: workspace.path.substringAfterLast('/').ifEmpty { workspace.path }, workspace.path,
                         key in collapsed, { onToggle(key) }, workspace, onPick, depth,
-                        active = workspace.workspaceId == currentWorkspace?.workspaceId || (index == 0 && children.any(::containsCurrent)))
+                        active = workspace.workspaceId == currentWorkspace?.workspaceId || (index == 0 && children.any(::containsCurrent)),
+                        activity = mergeSidebarActivity(workspaceActivities.getValue(workspace.workspaceId),
+                            if (index == 0) mergeSidebarActivity(fallbackActivity, childActivity) else SidebarActivity.Idle))
                     if (key !in collapsed) {
                         if (index == 0) children.forEach { group(it.path, it.children, depth + 1) }
                         renderSessions(sessions.filter { it.sessionId in workspace.sessionIds } + if (index == 0) fallback else emptyList())
@@ -72,6 +98,7 @@ private fun WorkspaceGroupHeader(
     workspace: WorkspaceView? = null, onPick: (String) -> Unit = {},
     depth: Int = 0,
     active: Boolean = false,
+    activity: SidebarActivity,
 ) {
     val ops by Pocket.ops.collectAsState()
     val scope = rememberCoroutineScope()
@@ -90,15 +117,17 @@ private fun WorkspaceGroupHeader(
     }
     Row(Modifier.fillMaxWidth().heightIn(min = 48.dp).testTag("workspaceCollapse:${workspace?.workspaceId ?: path}"), verticalAlignment = Alignment.CenterVertically) {
         Row(Modifier.weight(1f).heightIn(min = 48.dp)
-            .clickable(onClick = onToggle)
+            .clickable(onClickLabel = if (collapsed) L.expand() else L.collapse(), onClick = onToggle)
             .padding(start = (12 + minOf(depth, 4) * 12).dp, end = 12.dp, top = 8.dp, bottom = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-            Icon(painterResource(R.drawable.dsh_triangle_right), if (collapsed) L.expand() else L.collapse(),
-                Modifier.size(14.dp).rotate(if (collapsed) 0f else 90f)
-                    .testTag("workspaceToggle:${workspace?.workspaceId ?: path}"), tint = T.Caption)
-            Spacer(Modifier.width(4.dp))
-            Icon(painterResource(if (collapsed) R.drawable.dsh_folder_close else R.drawable.dsh_folder_selected), null,
-                Modifier.size(16.dp).testTag("workspaceIcon:${workspace?.workspaceId ?: path}"),
-                tint = if (active) T.Accent else T.Text3)
+            Box(Modifier.size(16.dp), contentAlignment = Alignment.Center) {
+                if (activity != SidebarActivity.Idle) {
+                    SidebarActivityIndicator(activity, Modifier.size(14.dp).testTag("workspaceActivity:${workspace?.workspaceId ?: path}"), workspace = true)
+                } else {
+                    Icon(painterResource(if (collapsed) R.drawable.dsh_folder_close else R.drawable.dsh_folder_selected), null,
+                        Modifier.size(16.dp).testTag("workspaceIcon:${workspace?.workspaceId ?: path}"),
+                        tint = if (active) T.Accent else T.Text3)
+                }
+            }
             Spacer(Modifier.width(8.dp))
             Column(Modifier.weight(1f)) {
                 Text(title, fontSize = 14.sp, color = T.Ink, maxLines = 1, overflow = TextOverflow.Ellipsis)

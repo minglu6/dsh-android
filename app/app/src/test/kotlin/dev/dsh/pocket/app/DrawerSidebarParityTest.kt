@@ -10,12 +10,16 @@ import android.graphics.BitmapFactory
 import androidx.compose.ui.test.assertWidthIsEqualTo
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertContentDescriptionEquals
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performClick
 import dev.dsh.pocket.protocol.SessionSummary
 import dev.dsh.pocket.protocol.WorkspaceView
+import dev.dsh.pocket.protocol.Approval
+import dev.dsh.pocket.protocol.UserQuestion
+import dev.dsh.pocket.protocol.UserQuestionItem
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Before
@@ -56,6 +60,97 @@ class DrawerSidebarParityTest {
         Pocket.pinnedIds.value = emptySet()
         Pocket.chat.value = null
         Pocket.draftWorkspacePath.value = null
+        Pocket.approvals.value = emptyList()
+        Pocket.userQuestions.value = emptyList()
+    }
+
+    @Test
+    @OptIn(com.github.takahirom.roborazzi.ExperimentalRoborazziApi::class)
+    fun sessionActivityMovesToLeadingSlotAndClearsWhenRunEnds() {
+        Pocket.workspaces.value = listOf(WorkspaceView("one", "/repo", "Project", listOf("s1", "s2"), null, null))
+        Pocket.sessions.value = listOf(
+            SessionSummary("s1", "Running session", "/repo", true, false, 2, null),
+            SessionSummary("s2", "Idle session", "/repo", false, false, 1, null),
+        )
+        rule.setContent { PocketTheme { SessionDrawer({}, {}, {}, {}) } }
+        fun sessionStatus() = rule.onNodeWithTag("sessionActivity:s1", useUnmergedTree = true)
+        fun workspaceStatus() = rule.onNodeWithTag("workspaceActivity:one", useUnmergedTree = true)
+        sessionStatus().assertIsDisplayed().assertContentDescriptionEquals("运行中")
+        val indicator = sessionStatus().fetchSemanticsNode().boundsInRoot
+        val title = rule.onNodeWithText("Running session", useUnmergedTree = true).fetchSemanticsNode().boundsInRoot
+        assertTrue(indicator.right <= title.left)
+        assertTrue(kotlin.math.abs(indicator.center.y - title.center.y) < 1f)
+        rule.onNodeWithTag("sessionActivity:s2", useUnmergedTree = true).assertDoesNotExist()
+        workspaceStatus().assertIsDisplayed().assertContentDescriptionEquals("工作区内有会话：运行中")
+        rule.onNodeWithTag("workspaceIcon:one", useUnmergedTree = true).assertDoesNotExist()
+        val workspaceIndicator = workspaceStatus().fetchSemanticsNode().boundsInRoot
+        val workspaceTitle = rule.onNodeWithText("Project", useUnmergedTree = true).fetchSemanticsNode().boundsInRoot
+        assertTrue(workspaceIndicator.right < workspaceTitle.left)
+        for (appearance in listOf(Appearance.Light, Appearance.Dark)) {
+            rule.runOnIdle { Pocket.prefs.appearance = appearance }
+            rule.onRoot().captureRoboImage("build/screenshots/sidebar-running-${appearance.name}.png",
+                roborazziOptions = RoborazziOptions(taskType = RoborazziTaskType.Record))
+        }
+        rule.runOnIdle { Pocket.prefs.appearance = Appearance.Light }
+        rule.onNodeWithText("Project").performClick()
+        sessionStatus().assertDoesNotExist()
+        workspaceStatus().assertContentDescriptionEquals("工作区内有会话：运行中")
+        rule.onNodeWithTag("workspaceIcon:one", useUnmergedTree = true).assertDoesNotExist()
+        assertEquals(workspaceIndicator.center, workspaceStatus().fetchSemanticsNode().boundsInRoot.center)
+        rule.onRoot().captureRoboImage("build/screenshots/sidebar-running-collapsed.png",
+            roborazziOptions = RoborazziOptions(taskType = RoborazziTaskType.Record))
+        rule.runOnIdle { Pocket.approvals.value = listOf(Approval("a", "s1", "bash", null, null)) }
+        workspaceStatus().assertContentDescriptionEquals("工作区内有会话：等待审批")
+        rule.onNodeWithText("Project").performClick()
+        sessionStatus().assertContentDescriptionEquals("等待审批")
+        rule.runOnIdle {
+            Pocket.userQuestions.value = listOf(UserQuestion("q", "s1", null, listOf(UserQuestionItem("q1", "Choose"))))
+        }
+        sessionStatus().assertContentDescriptionEquals("等待审批")
+        rule.runOnIdle { Pocket.approvals.value = emptyList() }
+        sessionStatus().assertContentDescriptionEquals("等待回答")
+        rule.runOnIdle { Pocket.userQuestions.value = emptyList() }
+        sessionStatus().assertContentDescriptionEquals("运行中")
+        rule.runOnIdle { Pocket.sessions.value = Pocket.sessions.value.map { it.copy(running = false) } }
+        sessionStatus().assertDoesNotExist()
+        workspaceStatus().assertDoesNotExist()
+        val restoredFolder = rule.onNodeWithTag("workspaceIcon:one", useUnmergedTree = true).assertIsDisplayed().fetchSemanticsNode().boundsInRoot
+        assertEquals(workspaceIndicator.center, restoredFolder.center)
+        rule.onNodeWithText("Project").performClick()
+        workspaceStatus().assertDoesNotExist()
+        rule.onNodeWithTag("workspaceIcon:one", useUnmergedTree = true).assertIsDisplayed()
+        rule.runOnIdle { Pocket.sessions.value = Pocket.sessions.value.map { if (it.sessionId == "s1") it.copy(running = true) else it } }
+        workspaceStatus().assertContentDescriptionEquals("工作区内有会话：运行中")
+        rule.runOnIdle { Pocket.sessions.value = Pocket.sessions.value.filterNot { it.sessionId == "s1" } }
+        workspaceStatus().assertDoesNotExist()
+    }
+
+    @Test
+    fun collapsedTreeIncludesPinnedDescendantsWithoutMixingSamePathWorkspaces() {
+        Pocket.prefs.sessionGroupBy = SessionGroupBy.WorkspaceTree
+        Pocket.prefs.setCollapsedWorkspaces("p1", setOf("workspace:parent", "workspace:one", "workspace:two"))
+        Pocket.workspaces.value = listOf(
+            WorkspaceView("parent", "/repo", "Parent", emptyList(), null, null),
+            WorkspaceView("one", "/repo/app", "First workspace", listOf("s1"), null, null),
+            WorkspaceView("two", "/repo/app", "Second workspace", listOf("s2"), null, null),
+        )
+        Pocket.sessions.value = listOf(
+            SessionSummary("s1", "Pinned running", "/repo/app", true, false, 2, null),
+            SessionSummary("s2", "Other idle", "/repo/app", false, false, 1, null),
+        )
+        Pocket.pinnedIds.value = setOf("s1")
+        rule.setContent { PocketTheme { SessionDrawer({}, {}, {}, {}) } }
+        rule.onNodeWithTag("sessionActivity:s1", useUnmergedTree = true).assertContentDescriptionEquals("运行中")
+        rule.onNodeWithTag("workspaceActivity:parent", useUnmergedTree = true).assertContentDescriptionEquals("工作区内有会话：运行中")
+        rule.onNodeWithText("Parent").performClick()
+        rule.onNodeWithTag("workspaceActivity:parent", useUnmergedTree = true).assertContentDescriptionEquals("工作区内有会话：运行中")
+        rule.onNodeWithTag("workspaceActivity:one", useUnmergedTree = true).assertContentDescriptionEquals("工作区内有会话：运行中")
+        rule.onNodeWithTag("workspaceActivity:two", useUnmergedTree = true).assertDoesNotExist()
+        rule.runOnIdle { Pocket.sessions.value = Pocket.sessions.value.map { it.copy(running = false) } }
+        rule.onNodeWithTag("workspaceActivity:one", useUnmergedTree = true).assertDoesNotExist()
+        rule.onNodeWithTag("workspaceActivity:parent", useUnmergedTree = true).assertDoesNotExist()
+        rule.onNodeWithTag("workspaceIcon:parent", useUnmergedTree = true).assertIsDisplayed()
+        rule.onNodeWithTag("workspaceIcon:one", useUnmergedTree = true).assertIsDisplayed()
     }
 
     @Test
@@ -155,19 +250,17 @@ class DrawerSidebarParityTest {
         Pocket.chat.value = ChatState("s1")
         var accent = Color.Unspecified
         var grey = Color.Unspecified
-        var caption = Color.Unspecified
         rule.setContent {
             PocketTheme {
                 accent = T.Accent
                 grey = T.Text3
-                caption = T.Caption
                 SessionDrawer({}, {}, {}, {})
             }
         }
-        fun iconPixels(id: String, color: Color, tag: String = "workspaceIcon"): List<Pair<Int, Int>> {
+        fun iconPixels(id: String, color: Color): List<Pair<Int, Int>> {
             val file = Files.createTempFile("workspace-icon-", ".png").toFile()
             try {
-                rule.onNodeWithTag("$tag:$id", useUnmergedTree = true).captureRoboImage(file.absolutePath,
+                rule.onNodeWithTag("workspaceIcon:$id", useUnmergedTree = true).captureRoboImage(file.absolutePath,
                     roborazziOptions = RoborazziOptions(taskType = RoborazziTaskType.Record))
                 val bitmap = requireNotNull(BitmapFactory.decodeFile(file.absolutePath))
                 try {
@@ -197,15 +290,8 @@ class DrawerSidebarParityTest {
                 roborazziOptions = RoborazziOptions(taskType = RoborazziTaskType.Record))
 
             val row = rule.onNodeWithText("Current project")
-            val down = iconPixels("one", caption, "workspaceToggle")
-            assertTrue("Expanded triangle is visible without hover and points down",
-                down.maxOf { it.first } - down.minOf { it.first } >
-                    down.maxOf { it.second } - down.minOf { it.second })
             row.performClick()
             rule.onNodeWithText("Current session").assertDoesNotExist()
-            val right = iconPixels("one", caption, "workspaceToggle")
-            assertTrue("Collapsed triangle points right", right.maxOf { it.second } - right.minOf { it.second } >
-                right.maxOf { it.first } - right.minOf { it.first })
             rule.onRoot().captureRoboImage("build/screenshots/workspace-collapsed-${appearance.name}.png",
                 roborazziOptions = RoborazziOptions(taskType = RoborazziTaskType.Record))
             assertTint("one", accent, grey)

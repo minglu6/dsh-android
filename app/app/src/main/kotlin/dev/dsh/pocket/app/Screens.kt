@@ -172,6 +172,7 @@ private fun SessionDrawerBody(
     val archived by Pocket.archivedIds.collectAsState()
     val pinned by Pocket.pinnedIds.collectAsState()
     val ops by Pocket.ops.collectAsState()
+    val activities = rememberSidebarActivities()
     val profile = Pocket.profiles.collectAsState().value.firstOrNull { it.id == active }
     val workspaces by Pocket.workspaces.collectAsState()
     val host = active.orEmpty()
@@ -216,6 +217,7 @@ private fun SessionDrawerBody(
             key(s.sessionId) {
                 SessionRow(s, s.sessionId == chat?.sessionId, s.sessionId in archived || s.archived == true,
                     s.sessionId in pinned && s.sessionId !in archived, menuSessionId == s.sessionId,
+                    activity = activities[s.sessionId] ?: if (s.running) SidebarActivity.Running else SidebarActivity.Idle,
                     onPick = {
                         search = ""; searchExpanded = false
                         val workspace = workspaces.firstOrNull { s.sessionId in it.sessionIds }
@@ -363,6 +365,7 @@ private fun SessionDrawerBody(
                     WorkspaceNavigationGroups(
                         workspaces, rest, groupBy == SessionGroupBy.WorkspaceTree,
                         collapsedWorkspaces, ::toggleGroup, onPick,
+                        activities = activities,
                         renderSessions = { sessionRows(it) },
                     )
                 }
@@ -468,12 +471,12 @@ private fun SessionRow(
     archived: Boolean,
     pinned: Boolean,
     menuOpen: Boolean,
+    activity: SidebarActivity,
     onPick: () -> Unit,
     onMenuOpenChange: (Boolean) -> Unit,
     onMoveUp: (() -> Unit)? = null,
     onMoveDown: (() -> Unit)? = null,
 ) {
-    val pending = Pocket.approvals.collectAsState().value.any { it.sessionId == s.sessionId }
     val ops by Pocket.ops.collectAsState()
     val archivedIds by Pocket.archivedIds.collectAsState()
     val pinnedIds by Pocket.pinnedIds.collectAsState()
@@ -493,22 +496,25 @@ private fun SessionRow(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Column(Modifier.weight(1f)) {
-                Text(s.title ?: navText("新会话", "New session"), fontSize = 15.sp, color = if (isArchived) T.Caption else T.Ink, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                s.searchSnippet?.let { Text(it, color = T.Text2, fontSize = 12.sp, maxLines = 2, overflow = TextOverflow.Ellipsis) }
-                s.cwd?.let { Text(it, color = T.Caption, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis) }
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Box(Modifier.width(16.dp).height(14.dp), contentAlignment = Alignment.Center) {
+                        SidebarActivityIndicator(activity, Modifier.size(14.dp).testTag("sessionActivity:${s.sessionId}"))
+                    }
+                    Spacer(Modifier.width(6.dp))
+                    Text(s.title ?: navText("新会话", "New session"), fontSize = 15.sp, color = if (isArchived) T.Caption else T.Ink, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                }
+                s.searchSnippet?.let { Text(it, color = T.Text2, fontSize = 12.sp, maxLines = 2, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(start = 22.dp)) }
+                s.cwd?.let { Text(it, color = T.Caption, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(start = 22.dp)) }
                 if (archived || pinned) {
                     Text(
                         listOfNotNull(if (pinned) L.pinned() else null, if (archived) L.archived() else null).joinToString(" · "),
-                        fontSize = 11.sp, color = T.Caption,
+                        fontSize = 11.sp, color = T.Caption, modifier = Modifier.padding(start = 22.dp),
                     )
                 }
             }
             IconButton({ onMenuOpenChange(true) }, Modifier.size(48.dp).testTag("sessionMenu:${s.sessionId}")) {
                 Icon(D.ellipsis, L.moreActions(), Modifier.size(18.dp), tint = T.Caption)
             }
-            Spacer(Modifier.width(6.dp))
-            if (pending) Box(Modifier.size(7.dp).clip(CircleShape).background(T.WarnBorder))
-            else if (s.running) Box(Modifier.size(7.dp).clip(CircleShape).background(T.Accent))
         }
         // DropdownMenu (not a bottom sheet): first tap reaches items; drawer gestures stay uninvolved.
         DropdownMenu(
