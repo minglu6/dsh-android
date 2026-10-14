@@ -34,7 +34,7 @@ class WorkspaceDisplayInstrumentedTest {
         Pocket.draftWorkspacePath.value = workspace.path
         Pocket.ops.value = setOf("workspace.rename")
         rule.setContent { PocketTheme { Column(Modifier.fillMaxSize()) {
-            WorkspaceNavigationGroups(listOf(workspace), emptyList(), false, emptySet(), {}, {}, emptyMap()) {}
+            WorkspaceNavigationGroups(listOf(workspace), emptyList(), false, emptySet(), {}, {}) {}
         } } }
         rule.onNodeWithText("默认工作区").assertIsDisplayed()
         rule.onNodeWithContentDescription(L.moreActions()).performClick()

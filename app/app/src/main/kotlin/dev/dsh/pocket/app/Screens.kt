@@ -365,7 +365,6 @@ private fun SessionDrawerBody(
                     WorkspaceNavigationGroups(
                         workspaces, rest, groupBy == SessionGroupBy.WorkspaceTree,
                         collapsedWorkspaces, ::toggleGroup, onPick,
-                        activities = activities,
                         renderSessions = { sessionRows(it) },
                     )
                 }

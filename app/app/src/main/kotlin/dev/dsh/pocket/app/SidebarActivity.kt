@@ -21,12 +21,9 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import kotlin.math.PI
 
-internal enum class SidebarActivity(val priority: Int) {
-    Idle(0), Running(1), AwaitingAnswer(2), AwaitingApproval(3);
+internal enum class SidebarActivity {
+    Idle, Running, AwaitingAnswer, AwaitingApproval;
 }
-
-internal fun mergeSidebarActivity(a: SidebarActivity, b: SidebarActivity): SidebarActivity =
-    if (a.priority >= b.priority) a else b
 
 /** Keep activity independent of selection, pinning, filtering and expansion. */
 @Composable
@@ -47,7 +44,7 @@ private val activityBreathing = CubicBezierEasing(0.42f, 0f, 0.58f, 1f)
 
 /** Desktop StateDot: 14dp neutral track + breathing arc, one 1.5s rotation. */
 @Composable
-internal fun SidebarActivityIndicator(activity: SidebarActivity, modifier: Modifier = Modifier, workspace: Boolean = false) {
+internal fun SidebarActivityIndicator(activity: SidebarActivity, modifier: Modifier = Modifier) {
     if (activity == SidebarActivity.Idle) return
     val label = when (activity) {
         SidebarActivity.Running -> navText("运行中", "Running")
@@ -62,7 +59,7 @@ internal fun SidebarActivityIndicator(activity: SidebarActivity, modifier: Modif
         )
     } else null
     Canvas(modifier.semantics {
-        contentDescription = if (workspace) navText("工作区内有会话：", "Workspace session: ") + label else label
+        contentDescription = label
     }) {
         val unit = size.minDimension / 24f
         if (activity == SidebarActivity.Running) {
