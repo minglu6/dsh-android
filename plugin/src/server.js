@@ -4,6 +4,7 @@ import { createDeviceStore } from './devices.js'
 import { createServer } from 'node:http'
 import { WebSocketServer } from 'ws'
 import { createHostUi, uiRequestOrigin } from './host-ui.js'
+import { CompletionTracker } from './completion-tracker.js'
 
 export const PROTO = 1
 const PRE_AUTH_MAX = 64 * 1024
@@ -268,6 +269,8 @@ export function createPocketServer(opts) {
   const idleMs = opts.idleMs ?? DEFAULT_IDLE_MS
   const pairFailDelayMs = opts.pairFailDelayMs ?? 200
   const ops = createOps(sc)
+  const completion = new CompletionTracker({ initializing: true })
+  const completionSeed = new AbortController()
   let hostUi
   const http = createServer(async (req, res) => {
     if (req.method === 'GET' && req.url === '/diagnostics') {
@@ -328,6 +331,7 @@ export function createPocketServer(opts) {
   const childSessions = new Set()
   const authedClients = () => [...clients].filter((c) => c.device)
   const broadcast = (m) => { for (const c of authedClients()) c.push(m) }
+  const unsubscribeCompletion = completion.subscribe((snapshot) => broadcast({ ev: 'completion', ...snapshot }))
   const projectionKeys = new Set(['sessionStats', 'tokenUsage', 'contextPressure', 'contextBreakdown', 'permissions', 'modelSelection', 'agentPreset', 'goal', 'plan'])
   // Follow's snapshot is the baseline. Hold newer projections until it is sent,
   // including while a reconnect snapshot is paged or trimmed for the wire.
@@ -343,6 +347,9 @@ export function createPocketServer(opts) {
     broadcast(payload)
   }
   const unsub = opts.onSessionEvent?.((kind, args) => {
+    if (kind === 'status') completion.status(args[0], args[1] === true)
+    else if (kind === 'added') completion.added(args[0]?.sessionId, args[0]?.running === true)
+    else if (kind === 'removed') completion.remove(args[0])
     if (kind === 'added') {
       const summary = args[0]
       if (summary?.origin === 'subagent') childSessions.add(summary.sessionId)
@@ -353,6 +360,18 @@ export function createPocketServer(opts) {
     broadcast({ ev: 'session', ...sessionEventPayload(kind, args) })
     opts.onSessionLifecycle?.(kind, args)
   })
+  // Subscribe before seeding, so no transition can fall into the async list gap.
+  // Client list refreshes never seed or replace the Host's unread state.
+  void (async () => {
+    let items = []
+    try {
+      const result = await sc.list({}, AbortSignal.any([completionSeed.signal, AbortSignal.timeout(120_000)]))
+      items = result?.items ?? []
+    } catch (error) {
+      if (!completionSeed.signal.aborted) console.error('[pocket] completion seed failed:', error)
+    }
+    if (!completionSeed.signal.aborted) completion.seed(items)
+  })()
 
   const adminOps = {
     'pairing.open': () => pairing.open(),
@@ -360,6 +379,11 @@ export function createPocketServer(opts) {
     'pairing.status': () => pairing.status(),
   }
   const deviceOps = {
+    'completion.state': () => completion.snapshot(),
+    'completion.view': (a, _s, client) => {
+      need(a.sessionId === null || str(a.sessionId), 'sessionId must be a nonempty string or null')
+      return completion.view(client, a.sessionId)
+    },
     'devices.list': () => ({ devices: devices.list() }),
     'devices.revoke': (a) => {
       need(str(a.deviceId), 'deviceId required')
@@ -398,6 +422,7 @@ export function createPocketServer(opts) {
       disposed = true
       clearTimeout(helloTimer); clearInterval(beat); clients.delete(client)
       hostUi?.revoke(client)
+      completion.disconnect(client)
       for (const ac of client.subs.values()) ac.abort()
     }
     const client = {
@@ -580,6 +605,7 @@ export function createPocketServer(opts) {
   }
 
   return {
+    completion,
     devices, pairing,
     /** A service-scoped, fixed-local Host backend. Disposing removes ops and all grants. */
     installHostUi(backend) {
@@ -760,6 +786,8 @@ export function createPocketServer(opts) {
     address: () => http.address(),
     close: () => new Promise((resolve) => {
       unsub?.()
+      completionSeed.abort()
+      unsubscribeCompletion()
       hostUi?.dispose()
       hostUi = undefined
       for (const c of [...clients]) c.close(1001, 'shutdown')

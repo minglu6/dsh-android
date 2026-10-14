@@ -238,6 +238,8 @@ Packages: `ui-sidebar`, `ui-workspace`, `ui-plugin-manager`, `ui-schedule`.
 
 Empty: `empty.none` 暂无会话 / `empty.noMatches` 无匹配结果.
 
+Completed-but-unread sessions display a green dot in the leading status slot. Pocket's Host tracker owns the shared `{epoch, revision, unreadIds}` snapshot; Android uses `completion.state/view` plus pushed `completion` events, and the desktop plugin supplies the same state through `uiSession.setCompletionUnreadSource`. Viewing loaded content in either foreground client clears both ends; background follows, covered/hidden views and merely opening the drawer do not acknowledge it. Running/pending status takes precedence, archived rows hide the dot, and workspace folders do not aggregate completion dots. Reconnection preserves Host state; Host/plugin restart resets it. This requires the updated official desktop client as well as the bridge and APK.
+
 ---
 
 ## 5. Right panel

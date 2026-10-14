@@ -90,6 +90,13 @@ object Pocket {
     val routes = MutableStateFlow<Map<String, Route>>(emptyMap())
     val active = MutableStateFlow<String?>(null)
     val sessions = MutableStateFlow<List<SessionSummary>>(emptyList())
+    private val completionReminders = CompletionReminders()
+    val completionUnread = completionReminders.unreadIds
+    private val completionViewLock = Mutex()
+    private var desiredViewedSession: String? = null
+    private var completionReadySession: String? = null
+    private var completionViewClient: PocketClient? = null
+    private var completionViewSession: String? = null
     val approvals = MutableStateFlow<List<Approval>>(emptyList())
     val userQuestions = MutableStateFlow<List<UserQuestion>>(emptyList())
     val archivedIds = MutableStateFlow<Set<String>>(emptySet())
@@ -251,6 +258,8 @@ object Pocket {
 
     fun connect(profileId: String) {
         connJob?.cancel(); client?.close(); client = null
+        completionReminders.reset()
+        desiredViewedSession = null
         clearFirstPrompt()
         prefs.hostSettings.clear()
         followEpoch.incrementAndGet()
@@ -300,6 +309,8 @@ object Pocket {
                 val hello = c.connect(factories, Auth.Token(token), CONNECT_TIMEOUT_MS)
                 applyCompatibility(hello)
                 client = c; ops.value = hello.ops
+                completionReminders.reset()
+                completionViewClient = null
                 followEpoch.incrementAndGet()
                 detachFollow()
                 reducer.clearComposerProjections()
@@ -376,6 +387,14 @@ object Pocket {
     }
 
     private suspend fun refreshAll(c: PocketClient) {
+        if ("completion.state" in ops.value) {
+            try {
+                val snapshot = c.call("completion.state")
+                if (client === c) completionReminders.accept(snapshot)
+                syncCompletionView()
+            } catch (e: CancellationException) { throw e }
+            catch (e: Exception) { errors.tryEmit(e.message ?: "完成状态同步失败") }
+        }
         runCatching { sessions.value = c.listSessions().sortedByDescending { it.updatedAt } }
         runCatching { approvals.value = c.call("approval.pending")["approvals"].arr().orEmpty().mapNotNull { (it as? JsonObject)?.let(Approval::parse) } }
         loadModelCatalog(c)
@@ -553,6 +572,7 @@ object Pocket {
                 invalidatePermissionCatalog()
                 client?.let { c -> main.launch { loadPermissionCatalog(c) } }
             }
+            "completion" -> completionReminders.accept(m)
             "follow" -> {
                 val sid = m["subId"].str() ?: return
                 if (sid == subId) applyFrame(m["frame"])
@@ -718,12 +738,18 @@ object Pocket {
             goal = goal,
             agentPreset = preset,
         )
+        if (f["type"].str() == "snapshot" || f["type"].str() == "resume") {
+            completionReadySession = st.sessionId
+            syncCompletionView()
+        }
     }
 
     /** Revoke delivery eligibility synchronously, before any unsubscribe can suspend. */
     private fun detachFollow(): String? {
         val old = subId
         subId = null
+        completionReadySession = null
+        syncCompletionView()
         pendingFollowEpoch = null
         goalProjectionSeq = -1L
         presetProjectionSeq = -1L
@@ -777,6 +803,38 @@ object Pocket {
             if (pendingFollowEpoch == epoch) {
                 pendingFollowEpoch = null
                 stray.clear()
+            }
+        }
+    }
+
+    /** Called only by the foreground conversation surface, never by background following. */
+    fun setViewedSession(sessionId: String?) = main.launch {
+        desiredViewedSession = sessionId
+        syncCompletionView()
+    }
+
+    private fun syncCompletionView() = main.launch {
+        completionViewLock.withLock {
+            val c = client ?: return@withLock
+            if ("completion.view" !in ops.value) return@withLock
+            val viewed = desiredViewedSession?.takeIf {
+                it == chat.value?.sessionId && it == completionReadySession
+            }
+            if (completionViewClient === c && completionViewSession == viewed) return@withLock
+            try {
+                val snapshot = c.call("completion.view", jsonOf("sessionId" to (viewed ?: JsonNull)))
+                if (client === c) {
+                    completionViewClient = c
+                    completionViewSession = viewed
+                    completionReminders.accept(snapshot)
+                }
+            } catch (e: CancellationException) { throw e }
+            catch (e: Exception) {
+                if (client === c) {
+                    errors.tryEmit(e.message ?: "查看状态同步失败")
+                    // Release stale Host presence rather than silently acknowledging future tasks.
+                    c.close()
+                }
             }
         }
     }

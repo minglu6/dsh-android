@@ -37,7 +37,8 @@ class PocketFollowTest {
     @Before fun setUp() {
         Pocket.init(RuntimeEnvironment.getApplication())
         val fields = listOf("client", "subId", "pendingFollowEpoch", "reducer", "inspectorLog", "permissionProjectionSeq",
-            "modelProjectionSeq", "modelUsesDefault", "firstPromptSessionId").associateWith(::get)
+            "modelProjectionSeq", "modelUsesDefault", "firstPromptSessionId",
+            "desiredViewedSession", "completionReadySession", "completionViewClient", "completionViewSession").associateWith(::get)
         val modelEpochs = listOf("modelCatalogEpoch", "modelSelectionEpoch").associateWith { (get(it) as AtomicLong).get() }
         val modelFlows = listOf("catalog", "model", "_catalogLoading", "_catalogError", "_modelPending",
             "_firstPrompt", "permissionCatalog", "permissionCatalogLoading")
@@ -93,10 +94,16 @@ class PocketFollowTest {
         Pocket.chat.value = ChatState("A")
         Pocket.permission.value = emptyMap()
         Pocket.ops.value = emptySet()
+        put("desiredViewedSession", null)
+        put("completionReadySession", null)
+        put("completionViewClient", null)
+        put("completionViewSession", null)
+        (get("completionReminders") as CompletionReminders).reset()
     }
 
     @After fun tearDown() = runBlocking {
         jobs.forEach { it.cancelAndJoin() }
+        (get("completionReminders") as CompletionReminders).reset()
         client.close()
         requests.close()
         restore()
@@ -119,6 +126,37 @@ class PocketFollowTest {
         """{"type":"snapshot","cursor":$seq,"records":[],"projections":{"asOfSeq":$seq,"values":{"permissions":{"currentValue":"workspace-write"}}}}""")
     private fun open(session: String) = Pocket.openSession(session).also { jobs += it }
     private suspend fun finish(job: Job) = withTimeout(5000) { job.join() }
+
+    @Test fun unreadClearsOnlyAfterForegroundConversationHasARealSnapshot() = runBlocking {
+        Pocket.ops.value = setOf("completion.view")
+        fun state(revision: Int, ids: String = "[]") =
+            """{"epoch":"host","revision":$revision,"unreadIds":$ids}"""
+        fun completion(revision: Int, ids: String) {
+            val event = PocketJson.parseToJsonElement("""{"ev":"completion","epoch":"host","revision":$revision,"unreadIds":$ids}""").jsonObject
+            Pocket.javaClass.getDeclaredMethod("onPush", JsonObject::class.java).apply { isAccessible = true }.invoke(Pocket, event)
+        }
+        completion(1, """["A"]""")
+        finish(Pocket.setViewedSession("A"))
+        val beforeLoad = request("completion.view")
+        assertTrue(beforeLoad["args"]["sessionId"] is JsonNull)
+        reply(beforeLoad, state(1, """["A"]"""))
+        assertEquals(setOf("A"), Pocket.completionUnread.value)
+        snapshot("sub-A")
+        val viewed = request("completion.view")
+        assertEquals("A", viewed["args"]["sessionId"].str())
+        completion(3, "[]")
+        reply(viewed, state(2, """["A"]"""))
+        finish(Pocket.setViewedSession(null))
+        val background = request("completion.view")
+        assertTrue(background["args"]["sessionId"] is JsonNull)
+        reply(background, state(3))
+        completion(4, """["A"]""")
+        assertEquals(setOf("A"), Pocket.completionUnread.value)
+        // A background follow frame is not a new read acknowledgement.
+        snapshot("sub-A", 11)
+        delay(100)
+        assertTrue(requests.tryReceive().isFailure)
+    }
 
     private fun invalidateModels() {
         Pocket.javaClass.getDeclaredMethod("invalidateModelCatalog").apply { isAccessible = true }.invoke(Pocket)

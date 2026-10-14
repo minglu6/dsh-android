@@ -141,6 +141,14 @@ WebSocket 管理操作要求 owner 身份。管理 UI 通过受本机信任边�
 
 上述实时通知需要运行相应版本桥接；只更新 App 无法让旧 Host 产生新事件。
 
+### 双端完成未读状态
+
+- Host 桥接维护 `{epoch, revision, unreadIds}`，运行开始清除旧提醒，运行结束且没有查看端时产生提醒；历史空闲会话不会在初始化时全部标为未读。
+- 手机通过 `completion.state` 读取快照、`completion` 事件接收更新，使用 `completion.view {sessionId:string|null}` 声明当前实际可见会话。`follow` 不等于查看；连接断开自动释放查看状态，未读保留至查看或 Host／桥接重启。
+- 桌面通过同源 `GET /pocket/completion/events` SSE 接收 `{clientId,...snapshot}`，以 `POST /pocket/completion/view {clientId,sessionId}` 回写查看状态。路由沿用本机 Host/Origin 信任边界；SSE 断开后旧 `clientId` 失效。
+- 桌面 `uiSession.setCompletionUnreadSource` 让原生状态点消费同一份未读状态，不修改 running/pending、不伪造 mainView 引用。需更新官方客户端；缺少该 API 时保留配对管理并明确警告，不声称两端已同步。
+- 页面失焦、隐藏、全局面板／设置覆盖或内容未加载时不确认已读。手机插件设置 WebView 不代理上述路由，由原生会话界面管理查看状态。客户端按连接代际和快照版本拒绝过期响应，防止绿点被旧数据恢复。
+
 ## 插件自定义 Web 界面
 
 这是插件详情的可选入口，不是原生模型设置或内置插件目录的默认实现。仅当 Host 提供 `webServer` 与 `connection` 时公布 `ui.open({section?})` / `ui.close({ticket?})`。

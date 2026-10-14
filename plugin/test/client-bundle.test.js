@@ -55,7 +55,7 @@ function clientContext() {
   const listeners = new Map()
   const entries = new Map()
   const ctx = {
-    inject: (_names, apply) => apply(ctx),
+    inject: (names, apply) => names.every(name => name in ctx) ? apply(ctx) : undefined,
     sessions: { list: {} },
     effect(effect, name) {
       // The desktop-only icon observer is unrelated to the launcher contract.
