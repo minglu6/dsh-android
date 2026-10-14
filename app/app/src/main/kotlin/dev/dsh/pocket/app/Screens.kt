@@ -188,6 +188,23 @@ private fun SessionDrawerBody(
     var addWorkspaceOpen by remember { mutableStateOf(false) }
     var menuSessionId by remember { mutableStateOf<String?>(null) }
     var collapsedWorkspaces by remember(host) { mutableStateOf(Pocket.prefs.collapsedWorkspaces(host)) }
+    val sessionLimits = remember(host) { mutableStateMapOf<String, Int>() }
+    val runningSessionIds = remember(sessions) {
+        val byId = sessions.associateBy { it.sessionId }
+        buildSet {
+            sessions.filter { it.running }.forEach { session ->
+                add(session.sessionId)
+                var child = session
+                val visited = mutableSetOf(session.sessionId)
+                while (child.origin == "subagent") {
+                    val parent = byId[child.parentSessionId] ?: break
+                    if (!visited.add(parent.sessionId)) break
+                    add(parent.sessionId)
+                    child = parent
+                }
+            }
+        }
+    }
     var savedOrder by remember(host) { mutableStateOf(Pocket.prefs.manualSessionOrder(host)) }
     val currentBlank = sessions.firstOrNull { it.sessionId == chat?.sessionId && it.blank }?.sessionId
     val completeOrder = reconcileSessionOrder(sessions, savedOrder).let { ids ->
@@ -208,12 +225,20 @@ private fun SessionDrawerBody(
         Pocket.prefs.sessionOrderBy = orderBy
     }
     fun toggleGroup(key: String) {
+        sessionLimits.remove(key)
         collapsedWorkspaces = if (key in collapsedWorkspaces) collapsedWorkspaces - key else collapsedWorkspaces + key
         Pocket.prefs.setCollapsedWorkspaces(host, collapsedWorkspaces)
     }
-    @Composable fun sessionRows(rows: List<dev.dsh.pocket.protocol.SessionSummary>) {
+    @Composable fun sessionRows(rows: List<dev.dsh.pocket.protocol.SessionSummary>, groupKey: String? = null) {
         val peers = rows.filter { !it.blank && it.sessionId !in archived && it.archived != true }.map { it.sessionId }
-        rows.forEach { s ->
+        val limit = if (groupKey == null) Int.MAX_VALUE else sessionLimits[groupKey] ?: 5
+        var idleCount = 0
+        val projected = rows.filter { session ->
+            if (session.blank || session.sessionId in runningSessionIds) true
+            else ++idleCount <= limit
+        }
+        val hiddenCount = rows.size - projected.size
+        projected.forEach { s ->
             key(s.sessionId) {
                 SessionRow(s, s.sessionId == chat?.sessionId, s.sessionId in archived || s.archived == true,
                     s.sessionId in pinned && s.sessionId !in archived, menuSessionId == s.sessionId,
@@ -237,6 +262,25 @@ private fun SessionDrawerBody(
                         { saveOrder(moveSession(moveOrder, peers, s.sessionId, 1)) }
                     },
                 )
+            }
+        }
+        if (groupKey != null && idleCount > 5) {
+            val expanded = hiddenCount == 0
+            val label = if (expanded) navText("收起", "Show less")
+                else navText("展开其余 $hiddenCount 个会话", "Show $hiddenCount more sessions")
+            Box(
+                Modifier.fillMaxWidth().heightIn(min = 48.dp).testTag("sessionOverflow:$groupKey")
+                    .clickable(onClickLabel = label) {
+                        sessionLimits[groupKey] = when {
+                            expanded -> 5
+                            hiddenCount <= 5 -> Int.MAX_VALUE
+                            else -> limit + 5
+                        }
+                    }
+                    .padding(start = 48.dp, end = 16.dp, top = 8.dp, bottom = 8.dp),
+                contentAlignment = Alignment.CenterStart,
+            ) {
+                Text(label, fontSize = 13.sp, color = T.Text3)
             }
         }
     }
@@ -360,12 +404,12 @@ private fun SessionDrawerBody(
                         else if (archivedFilter == ArchivedFilter.Only) L.emptyArchivedSessions() else L.emptySessions(),
                         color = T.Caption, modifier = Modifier.padding(16.dp))
                 }
-                if (groupBy == SessionGroupBy.Flat) sessionRows(rest)
+                if (groupBy == SessionGroupBy.Flat) sessionRows(rest, "flat")
                 else {
                     WorkspaceNavigationGroups(
                         workspaces, rest, groupBy == SessionGroupBy.WorkspaceTree,
                         collapsedWorkspaces, ::toggleGroup, onPick,
-                        renderSessions = { sessionRows(it) },
+                        renderSessions = { groupKey, rows -> sessionRows(rows, groupKey) },
                     )
                 }
             }

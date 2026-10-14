@@ -19,7 +19,7 @@ import kotlinx.coroutines.CancellationException
 internal fun WorkspaceNavigationGroups(
     workspaces: List<WorkspaceView>, sessions: List<SessionSummary>, tree: Boolean,
     collapsed: Set<String>, onToggle: (String) -> Unit, onPick: (String) -> Unit,
-    renderSessions: @Composable (List<SessionSummary>) -> Unit,
+    renderSessions: @Composable (String, List<SessionSummary>) -> Unit,
 ) {
     val chat by Pocket.chat.collectAsState()
     val draftPath by Pocket.draftWorkspacePath.collectAsState()
@@ -42,7 +42,7 @@ internal fun WorkspaceNavigationGroups(
                 WorkspaceGroupHeader(path.ifEmpty { L.ungrouped() }, path, key in collapsed, { onToggle(key) }, depth = depth,
                     active = fallback.any { it.sessionId == currentId } || children.any(::containsCurrent))
                 if (key !in collapsed) {
-                    renderSessions(fallback)
+                    renderSessions(key, fallback)
                     children.forEach { group(it.path, it.children, depth + 1) }
                 }
             } else {
@@ -53,7 +53,7 @@ internal fun WorkspaceNavigationGroups(
                         active = workspace.workspaceId == currentWorkspace?.workspaceId || (index == 0 && children.any(::containsCurrent)))
                     if (key !in collapsed) {
                         if (index == 0) children.forEach { group(it.path, it.children, depth + 1) }
-                        renderSessions(sessions.filter { it.sessionId in workspace.sessionIds } + if (index == 0) fallback else emptyList())
+                        renderSessions(key, sessions.filter { it.sessionId in workspace.sessionIds } + if (index == 0) fallback else emptyList())
                     }
                 }
             }

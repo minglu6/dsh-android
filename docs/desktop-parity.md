@@ -234,6 +234,10 @@ OnePlus device evidence with the real Host catalog: [model list](screenshots/pho
 
 ## 4. Sidebar (left)
 
+Session history follows desktop `WorkspaceBrowser.collapsedSessionRows`: each workspace (keyed by entity ID, not path), Ungrouped group and flat list initially shows five idle rows. Running sessions, parents with running subagents and the current blank session remain visible without consuming that quota or changing the existing order. The muted, title-aligned `展开其余 {n} 个会话` / `Show {n} more sessions` control reveals five more idle rows per tap; the final batch stays fully expanded as history changes. `收起` / `Show less`, or closing and reopening a workspace, restores five rows. Search results and the separate pinned section remain unbounded. Expansion state is local to the active Host and does not mutate session history.
+
+Verified with 19 passing `DrawerSidebarParityTest` cases (including batch boundaries, live running-state changes, blank rows, same-path workspace isolation, group reset, search and pinned rows), light/dark rendered captures, and the installed debug APK on OnePlus: the real 27-session Ungrouped history expanded 5 → 10 → 15 → 20 → 25 → 27 and collapsed back to five without sending a prompt.
+
 Packages: `ui-sidebar`, `ui-workspace`, `ui-plugin-manager`, `ui-schedule`.
 
 | Feature | Locale | Data | Phone decision |

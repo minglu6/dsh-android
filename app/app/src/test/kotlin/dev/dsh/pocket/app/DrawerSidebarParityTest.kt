@@ -15,6 +15,11 @@ import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.assertTextEquals
+import androidx.compose.ui.test.performScrollTo
+import androidx.compose.ui.test.performTextInput
+import androidx.compose.ui.test.onNodeWithContentDescription
+import androidx.compose.ui.test.hasSetTextAction
 import dev.dsh.pocket.protocol.SessionSummary
 import dev.dsh.pocket.protocol.WorkspaceView
 import dev.dsh.pocket.protocol.Approval
@@ -62,6 +67,98 @@ class DrawerSidebarParityTest {
         Pocket.draftWorkspacePath.value = null
         Pocket.approvals.value = emptyList()
         Pocket.userQuestions.value = emptyList()
+    }
+
+    @Test
+    @OptIn(com.github.takahirom.roborazzi.ExperimentalRoborazziApi::class)
+    fun historyExpandsInBatchesAndResetsWithoutHidingRunningOrBlankSessions() {
+        val rows = (1..17).map {
+            SessionSummary("s$it", "历史会话 $it", "/repo", false, false, (100 - it).toLong(), null)
+        }
+        Pocket.sessions.value = rows + listOf(
+            SessionSummary("running", "运行中的会话", "/repo", true, false, 80, null),
+            SessionSummary("blank", "空白会话", "/repo", false, true, 101, null),
+            SessionSummary("child", "子智能体", "/repo", true, false, 1, "s17", origin = "subagent"),
+        )
+        Pocket.workspaces.value = listOf(WorkspaceView("repo", "/repo", "Project",
+            Pocket.sessions.value.map { it.sessionId }, null, null))
+        Pocket.chat.value = ChatState("blank")
+        rule.setContent { PocketTheme { SessionDrawer({}, {}, {}, {}) } }
+        fun overflow() = rule.onNodeWithTag("sessionOverflow:workspace:repo")
+        fun assertVisible(last: Int) {
+            for (i in 1..16) {
+                val row = rule.onNodeWithText("历史会话 $i")
+                if (i <= last) row.assertExists() else row.assertDoesNotExist()
+            }
+            rule.onNodeWithText("历史会话 17").assertExists()
+            rule.onNodeWithText("运行中的会话").assertExists()
+            rule.onNodeWithText("空白会话").assertExists()
+            rule.onNodeWithText("子智能体").assertDoesNotExist()
+        }
+        assertVisible(5)
+        overflow().assertTextEquals("展开其余 11 个会话")
+        for (appearance in listOf(Appearance.Light, Appearance.Dark)) {
+            rule.runOnIdle { Pocket.prefs.appearance = appearance }
+            overflow().performScrollTo()
+            rule.onRoot().captureRoboImage("build/screenshots/session-history-${appearance.name}.png",
+                roborazziOptions = RoborazziOptions(taskType = RoborazziTaskType.Record))
+        }
+        overflow().performClick()
+        assertVisible(10)
+        overflow().assertTextEquals("展开其余 6 个会话").performScrollTo().performClick()
+        assertVisible(15)
+        overflow().assertTextEquals("展开其余 1 个会话").performScrollTo().performClick()
+        assertVisible(16)
+        overflow().assertTextEquals("收起")
+        rule.runOnIdle {
+            Pocket.sessions.value += SessionSummary("extra", "新增历史", "/repo", false, false, 0, null)
+            Pocket.workspaces.value = Pocket.workspaces.value.map { it.copy(sessionIds = it.sessionIds + "extra") }
+        }
+        rule.onNodeWithText("新增历史").assertExists()
+        overflow().performScrollTo().performClick()
+        assertVisible(5)
+        rule.onNodeWithText("新增历史").assertDoesNotExist()
+        rule.runOnIdle { Pocket.sessions.value = Pocket.sessions.value.map { it.copy(running = false) } }
+        rule.onNodeWithText("历史会话 17").assertDoesNotExist()
+        rule.onNodeWithText("运行中的会话").assertDoesNotExist()
+        overflow().assertTextEquals("展开其余 14 个会话")
+    }
+
+    @Test fun historyLimitsAreWorkspaceIdentityScopedAndResetOnClosingGroup() {
+        Pocket.sessions.value = listOf("a", "b").flatMap { prefix ->
+            (1..7).map { SessionSummary("$prefix$it", "$prefix-$it", "/same", false, false, (100 - it).toLong(), null) }
+        }
+        Pocket.workspaces.value = listOf("a", "b").map { prefix ->
+            WorkspaceView(prefix, "/same", "Workspace $prefix", (1..7).map { "$prefix$it" }, null, null)
+        }
+        rule.setContent { PocketTheme { SessionDrawer({}, {}, {}, {}) } }
+        rule.onNodeWithTag("sessionOverflow:workspace:a").performScrollTo().performClick()
+        rule.onNodeWithText("a-7").assertExists()
+        rule.onNodeWithText("b-6").assertDoesNotExist()
+        rule.onNodeWithTag("sessionOverflow:workspace:b").performScrollTo().performClick()
+        rule.onNodeWithText("b-7").assertExists()
+        rule.onNodeWithText("Workspace a").performScrollTo().performClick()
+        rule.onNodeWithText("Workspace a").performClick()
+        rule.onNodeWithText("a-6").assertDoesNotExist()
+        rule.onNodeWithText("b-7").assertExists()
+    }
+
+    @Test fun flatHistoryFoldsButSearchAndPinnedRowsRemainVisible() {
+        Pocket.prefs.sessionGroupBy = SessionGroupBy.Flat
+        Pocket.sessions.value = (1..8).map {
+            SessionSummary("s$it", "History $it", "/repo", false, false, (100 - it).toLong(), null)
+        }
+        Pocket.pinnedIds.value = setOf("s8")
+        rule.setContent { PocketTheme { SessionDrawer({}, {}, {}, {}) } }
+        rule.onNodeWithText("History 8").assertExists()
+        rule.onNodeWithText("History 6").assertDoesNotExist()
+        rule.onNodeWithTag("sessionOverflow:flat").assertTextEquals("展开其余 2 个会话")
+        rule.onNodeWithContentDescription(L.search()).performClick()
+        rule.onNode(hasSetTextAction()).performTextInput("History")
+        rule.onNodeWithText("History 6").assertExists()
+        rule.onNodeWithText("History 7").assertExists()
+        rule.onNodeWithText("History 8").assertExists()
+        rule.onNodeWithTag("sessionOverflow:flat").assertDoesNotExist()
     }
 
     @Test

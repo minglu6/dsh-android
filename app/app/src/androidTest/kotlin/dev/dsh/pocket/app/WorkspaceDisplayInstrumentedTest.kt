@@ -35,7 +35,7 @@ class WorkspaceDisplayInstrumentedTest {
         Pocket.ops.value = setOf("workspace.rename", "workspace.delete")
         var toggles = 0
         rule.setContent { PocketTheme { Column(Modifier.fillMaxSize()) {
-            WorkspaceNavigationGroups(listOf(workspace), emptyList(), false, emptySet(), { toggles++ }, {}) {}
+            WorkspaceNavigationGroups(listOf(workspace), emptyList(), false, emptySet(), { toggles++ }, {}) { _, _ -> }
         } } }
         rule.onNodeWithText("默认工作区").assertIsDisplayed()
         rule.onNodeWithTag("workspaceNewSession:default").assertIsDisplayed()
