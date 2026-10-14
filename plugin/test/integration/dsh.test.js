@@ -3,7 +3,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { spawn, spawnSync } from 'node:child_process'
-import { mkdtempSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, writeFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import WebSocket from 'ws'
@@ -88,10 +88,9 @@ test('real dsh: permissions + presets ops', { skip: !hasDsh, timeout: 240_000 },
 test('real dsh: file and session reference contracts', { skip: !hasDsh, timeout: 240_000 }, async (t) => {
   const { bootDsh, pocketClient, PLUGIN_DIR } = await import('./helpers.js')
   const port = 19500 + Math.floor(Math.random() * 500)
-  const { home } = await bootDsh(t, {
-    plugins: [PLUGIN_DIR],
-    patch: `- id: dsh-pocket\n  config:\n    host: 127.0.0.1\n    port: ${port}\n    token: ${TOKEN}\n`,
-  })
+  const patch = `- id: dsh-pocket\n  config:\n    host: 127.0.0.1\n    port: ${port}\n    token: ${TOKEN}\n`
+  const firstHost = await bootDsh(t, { plugins: [PLUGIN_DIR], patch })
+  const { home } = firstHost
   writeFileSync(join(home, 'reference-contract.txt'), 'reference contract fixture\n')
   const c = await pocketClient(`ws://127.0.0.1:${port}`)
   t.after(() => c.close())
@@ -114,4 +113,27 @@ test('real dsh: file and session reference contracts', { skip: !hasDsh, timeout:
   const encodedId = Buffer.from(JSON.stringify(target.sessionId)).toString('base64url')
   assert.equal(candidate.mention, `@[Reference contract target](dsh-session:${encodedId})`)
   assert.ok(!sessions.items.some(item => item.sessionId === source.sessionId), 'self is excluded')
+
+  c.close()
+  await firstHost.stop()
+  const restarted = await bootDsh(t, { plugins: [], patch, home })
+  t.after(async () => { await restarted.stop(); rmSync(home, { recursive: true, force: true }) })
+  const cold = await pocketClient(`ws://127.0.0.1:${port}`)
+  t.after(() => cold.close())
+  await cold.ok('hello', { token: TOKEN })
+  // A history snapshot alone does not activate an Agent after a Host restart.
+  const coldFollow = await cold.ok('follow', { sessionId: source.sessionId })
+  await cold.next(e => e.ev === 'follow' && e.subId === coldFollow.subId && e.frame.type === 'snapshot')
+  const [resumedFiles, resumedSessions] = await Promise.all([
+    cold.ok('references.files', { sessionId: source.sessionId, query: 'reference-contract' }),
+    cold.ok('references.sessions', { sessionId: source.sessionId, query: target.sessionId }),
+  ])
+  assert.ok(resumedFiles.items.some(item => item.path === 'reference-contract.txt'))
+  const resumedTarget = resumedSessions.items.find(item => item.sessionId === target.sessionId)
+  assert.ok(resumedTarget, 'a cold session remains referenceable before any prompt')
+  // Discovery may fall back to the id before the cold title projection is cached.
+  assert.ok(resumedTarget.mention.endsWith(`](dsh-session:${encodedId})`), 'canonical identity survives restart')
+  const missing = await cold.call('references.sessions', { sessionId: 'session-missing-reference-contract', query: '' })
+  assert.equal(missing.ok, false)
+  assert.equal(missing.error.code, 'session/not-found')
 })

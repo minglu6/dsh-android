@@ -1,4 +1,5 @@
 import { spawn, spawnSync } from 'node:child_process'
+import { once } from 'node:events'
 import { mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
@@ -8,8 +9,8 @@ export const hasDsh = spawnSync('dsh', ['--version'], { encoding: 'utf8' }).stat
 export const PLUGIN_DIR = resolve(import.meta.dirname, '../..')
 
 /** Boot `dsh web` in a throwaway DSH_HOME with the given plugin dirs and patch YAML. */
-export async function bootDsh(t, { plugins, patch }) {
-  const home = mkdtempSync(join(tmpdir(), 'dshhome-'))
+export async function bootDsh(t, { plugins, patch, home: existingHome }) {
+  const home = existingHome ?? mkdtempSync(join(tmpdir(), 'dshhome-'))
   const env = { ...process.env, DSH_HOME: home }
   for (const dir of plugins) {
     const add = spawnSync('dsh', ['plugin', '--profile', 'web', 'add', dir], { env, encoding: 'utf8' })
@@ -17,7 +18,13 @@ export async function bootDsh(t, { plugins, patch }) {
   }
   writeFileSync(join(home, 'profiles/web/cordis.patch.yml'), patch)
   const proc = spawn('dsh', ['web', '--no-open', '--port', '0'], { env, stdio: ['ignore', 'pipe', 'pipe'] })
-  t.after(() => proc.kill())
+  const stop = async () => {
+    if (proc.exitCode !== null || proc.signalCode !== null) return
+    const exited = once(proc, 'exit')
+    proc.kill()
+    await exited
+  }
+  t.after(stop)
   let log = ''
   const webUrl = await new Promise((ok, fail) => {
     const timer = setTimeout(() => fail(new Error('dsh did not start:\n' + log)), 120_000)
@@ -32,7 +39,7 @@ export async function bootDsh(t, { plugins, patch }) {
     proc.stdout.on('data', on); proc.stderr.on('data', on)
     proc.on('exit', (c) => fail(new Error(`dsh exited ${c}:\n${log}`)))
   })
-  return { home, webUrl, log: () => log }
+  return { home, webUrl, stop, log: () => log }
 }
 
 /** JSON-over-WS client for the pocket protocol. */

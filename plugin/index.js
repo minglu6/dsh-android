@@ -234,11 +234,11 @@ export function apply(ctx, config = {}) {
       },
     }))
   })
-  ctx.inject(['fileReferences', 'agents'], (c) => {
-    c.effect(() => server.registerOps(fileReferenceOps(c.fileReferences, c.agents)))
+  ctx.inject(['fileReferences', 'sessionController'], (c) => {
+    c.effect(() => server.registerOps(fileReferenceOps(c.fileReferences, c.sessionController)))
   })
-  ctx.inject(['sessionReferenceResolver', 'agents', 'sessionQuery'], (c) => {
-    c.effect(() => server.registerOps(sessionReferenceOps(c.sessionReferenceResolver, c.agents, c.sessionQuery)))
+  ctx.inject(['sessionReferenceResolver', 'sessionController', 'sessionQuery'], (c) => {
+    c.effect(() => server.registerOps(sessionReferenceOps(c.sessionReferenceResolver, c.sessionController, c.sessionQuery)))
   })
   ctx.inject(['fileUploads', 'agents'], (c) => {
     c.effect(() => server.registerOps(uploadOps(c.fileUploads, c.agents)))

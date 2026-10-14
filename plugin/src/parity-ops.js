@@ -12,6 +12,16 @@ function agentOf(agents, sessionId) {
   return agent
 }
 
+/** Reference discovery must resume persisted sessions, not only inspect the live Agent map. */
+async function resolveReferenceAgent(sessionController, sessionId, signal) {
+  if (!str(sessionId)) throw bad('sessionId required')
+  signal?.throwIfAborted()
+  const result = await sessionController.resolveAgent(sessionId)
+  if ('error' in result) throw result.error
+  signal?.throwIfAborted()
+  return result.agent
+}
+
 /** `sessions.search` over sessionController.search. */
 export function searchOps(sc) {
   return {
@@ -135,10 +145,10 @@ export function feedbackOps(messageFeedback) {
 }
 
 /** `@` file mention candidates (`ctx.fileReferences`). */
-export function fileReferenceOps(fileReferences, agents) {
+export function fileReferenceOps(fileReferences, sessionController) {
   return {
     'references.files': async (a, signal) => {
-      const agent = agentOf(agents, a.sessionId)
+      const agent = await resolveReferenceAgent(sessionController, a.sessionId, signal)
       if (!fileReferences?.list) {
         throw Object.assign(new Error('fileReferences unavailable'), { code: 'unavailable' })
       }
@@ -150,10 +160,10 @@ export function fileReferenceOps(fileReferences, agents) {
 }
 
 /** `@` session / subagent mention candidates (`ctx.sessionReferenceResolver`). */
-export function sessionReferenceOps(sessionReferenceResolver, agents, sessionQuery) {
+export function sessionReferenceOps(sessionReferenceResolver, sessionController, sessionQuery) {
   return {
     'references.sessions': async (a, signal) => {
-      const agent = agentOf(agents, a.sessionId)
+      const agent = await resolveReferenceAgent(sessionController, a.sessionId, signal)
       if (!sessionReferenceResolver?.remoteExportCandidates) {
         throw Object.assign(new Error('sessionReferenceResolver unavailable'), { code: 'unavailable' })
       }
