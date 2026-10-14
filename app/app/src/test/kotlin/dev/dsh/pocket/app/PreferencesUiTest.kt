@@ -76,6 +76,29 @@ class PreferencesUiTest {
         rule.runOnIdle { assertTrue(renderedToken.luminance() < 0.1f) }
     }
 
+    @Test fun failedSettingsReadCanBeRetriedWithoutReopeningThePage() {
+        var unavailable = true
+        rule.runOnIdle {
+            Pocket.prefs.hostSettings.bind(
+                describe = {
+                    check(!unavailable) { "settings read failed" }
+                    host.describe()
+                },
+                mutate = { _, _, _ -> error("Retry must not write settings") },
+            )
+        }
+        rule.setContent { PocketTheme { GeneralSettingsScreen {} } }
+        rule.onNodeWithText("settings read failed").assertExists()
+        rule.runOnIdle { unavailable = false }
+        rule.onNodeWithText(L.retry()).performClick()
+        rule.runOnIdle {
+            assertTrue(Pocket.prefs.hostSettings.ready)
+            assertTrue(Pocket.prefs.hostSettings.error == null)
+        }
+        rule.onNodeWithText("settings read failed").assertDoesNotExist()
+        rule.onNodeWithText(L.retry()).assertDoesNotExist()
+    }
+
     @Test fun advancedFontSizesStartCollapsedAndCanBeExpandedAndCollapsed() {
         rule.setContent { PocketTheme { GeneralSettingsScreen {} } }
         rule.onNodeWithText("代码字号").assertDoesNotExist()
