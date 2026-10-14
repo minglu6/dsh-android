@@ -174,8 +174,8 @@ internal fun TurnUsageAction(turn: Int, usage: TurnTokenUsage) {
     ) {
         Row(
             modifier = Modifier.background(if (expanded) T.HoverBg else Color.Transparent, T.R8)
-                .padding(horizontal = 2.dp, vertical = 5.dp),
-            horizontalArrangement = Arrangement.spacedBy(2.dp),
+                .padding(start = 11.dp, end = 2.dp, top = 5.dp, bottom = 5.dp),
+            horizontalArrangement = Arrangement.spacedBy(4.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Icon(ImageVector.vectorResource(R.drawable.dsh_statistics_database), null, Modifier.size(14.dp), tint = T.Text3)
