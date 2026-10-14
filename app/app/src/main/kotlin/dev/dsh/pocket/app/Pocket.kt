@@ -22,6 +22,7 @@ data class ChatState(
     val sessionId: String,
     val items: List<Item> = emptyList(),
     val steps: List<StepRecord> = emptyList(),
+    val queuedPrompts: List<QueuedPrompt> = emptyList(),
     val title: String? = null,
     val running: Boolean = false,
     val usage: Usage = Usage(0, 0, 0, 0, 0),
@@ -564,7 +565,8 @@ object Pocket {
                     // session status before / without a folded turn/end; mirror idle into the open chat.
                     if (!r) chat.value?.takeIf { it.sessionId == id && it.running }?.let { st ->
                         reducer.markIdle()
-                        chat.value = st.copy(running = false, runStartedAt = null, items = reducer.items(), steps = reducer.stepRecords())
+                        chat.value = st.copy(running = false, runStartedAt = null, items = reducer.items(), steps = reducer.stepRecords(),
+                            queuedPrompts = reducer.queueMessages())
                     }
                     client?.let { c -> main.launch { refreshTitles(c); if (!r) { delay(4000); refreshTitles(c) } } } }
                 "activity" -> { val id = m["sessionId"].str(); val t = m["updatedAt"].long() ?: 0
@@ -687,6 +689,7 @@ object Pocket {
         chat.value = st.copy(
             items = reducer.items(),
             steps = reducer.stepRecords(),
+            queuedPrompts = reducer.queueMessages(),
             turns = turns,
             inspectorRecords = inspectorLog.snapshot(),
             title = reducer.title ?: st.title,
@@ -816,6 +819,7 @@ object Pocket {
             chat.value = chat.value?.copy(
                 items = reducer.items(),
                 steps = reducer.stepRecords(),
+                queuedPrompts = reducer.queueMessages(),
                 turns = reducer.turnRecords(),
                 inspectorRecords = inspectorLog.snapshot(),
                 composerMetrics = reducer.composerMetrics,
@@ -896,20 +900,42 @@ object Pocket {
                 permission.value = permission.value + (id to c.setPermission(id, p))
             }
             openSession(id).join()
-            if (text.isNotBlank()) { echo(text); c.prompt(id, text, "queue") }
+            if (text.isNotBlank() && client === c) {
+                chat.value?.takeIf { it.sessionId == id }?.let { sendPrompt(c, it, text) }
+            }
         } catch (e: Exception) { errors.tryEmit(e.message ?: e.toString()) }
     }
 
-    fun send(text: String) = main.launch {
-        val c = client ?: return@launch; val st = chat.value ?: return@launch
-        val mode = if (st.running) prefs.busySend.mode else "queue"
-        echo(text)
-        runCatching { c.prompt(st.sessionId, text, mode) }.onFailure { errors.tryEmit(it.message ?: "发送失败") }
-    }
+    fun send(text: String) = sendWithFiles(text, emptyList(), emptyList())
 
-    private fun echo(text: String) {
-        reducer.echo(text)
-        chat.value?.let { chat.value = it.copy(items = reducer.items(), steps = reducer.stepRecords()) }
+    private suspend fun sendPrompt(
+        c: PocketClient,
+        st: ChatState,
+        text: String,
+        images: List<PromptImage> = emptyList(),
+        files: List<PromptFile> = emptyList(),
+    ) {
+        val target = reducer
+        val requestId = UUID.randomUUID().toString()
+        val mode = if (st.running) prefs.busySend.mode else "queue"
+        fun syncEcho() {
+            if (client === c && reducer === target) {
+                chat.value?.takeIf { it.sessionId == st.sessionId }?.let {
+                    chat.value = it.copy(items = target.items(), steps = target.stepRecords(),
+                        queuedPrompts = target.queueMessages())
+                }
+            }
+        }
+        target.echo(text, requestId, mode, images = images.size, files = files.size)
+        syncEcho()
+        try {
+            c.prompt(st.sessionId, text, mode, images, files, requestId = requestId)
+        } catch (e: Exception) {
+            target.discardEcho(requestId)
+            syncEcho()
+            if (e is CancellationException) throw e
+            errors.tryEmit(e.message ?: "发送失败")
+        }
     }
 
     /** dsh titles a session asynchronously after the first turn; the list is the source of truth. */
@@ -1173,19 +1199,12 @@ object Pocket {
         }.onFailure { errors.tryEmit(it.message ?: "导出失败") }
     }
 
-    fun sendImages(text: String, images: List<PromptImage>) = main.launch {
-        val c = client ?: return@launch; val st = chat.value ?: return@launch
-        val mode = if (st.running) prefs.busySend.mode else "queue"
-        if (text.isNotBlank()) echo(text)
-        runCatching { c.prompt(st.sessionId, text, mode, images) }.onFailure { errors.tryEmit(it.message ?: "发送失败") }
-    }
+    fun sendImages(text: String, images: List<PromptImage>) = sendWithFiles(text, images, emptyList())
 
     fun sendWithFiles(text: String, images: List<PromptImage>, files: List<PromptFile>) = main.launch {
-        val c = client ?: return@launch; val st = chat.value ?: return@launch
-        val mode = if (st.running) prefs.busySend.mode else "queue"
-        if (text.isNotBlank()) echo(text)
-        runCatching { c.prompt(st.sessionId, text, mode, images, files) }
-            .onFailure { errors.tryEmit(it.message ?: "发送失败") }
+        val c = client ?: return@launch
+        val st = chat.value ?: return@launch
+        sendPrompt(c, st, text, images, files)
     }
 
     /** Upload a non-image file; returns receiptId or null on failure. */

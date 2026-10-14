@@ -6,12 +6,22 @@ import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
+import java.util.UUID
 
 /** Session attachment reference from a user message image block. */
 data class ImageRef(val attachmentId: String, val mediaType: String?)
 
 /** One file declared by `deliverables/presented`. */
 data class DeliverableFile(val path: String, val description: String? = null)
+
+/** Pending input awaiting its own Host turn, separate from the transcript. */
+data class QueuedPrompt(
+    val id: String,
+    val text: String,
+    val images: Int = 0,
+    val files: Int = 0,
+    val sending: Boolean = false,
+)
 
 /** One rendered row of a conversation. */
 sealed interface Item {
@@ -30,6 +40,8 @@ sealed interface Item {
         val seq: Long? = null,
         /** Image attachment refs from content blocks (`type=image`). */
         val imageRefs: List<ImageRef> = emptyList(),
+        val requestId: String? = null,
+        val messageId: String? = null,
     ) : Item
     data class Reasoning(
         override val key: String, val text: String, val durationMs: Long?, val live: Boolean,
@@ -310,7 +322,15 @@ class TranscriptReducer {
     private val toolTimings = HashMap<String, ToolCallTiming>()
     private val approvalCall = HashMap<String, String>()
     private val userByRpc = HashMap<String, Int>()
-    private val localEchoes = ArrayList<Pair<Int, String>>()
+    private data class InboxReceipt(val target: String, val index: Int?, val seq: Long)
+    private data class LocalEcho(val prompt: QueuedPrompt, val queued: Boolean, val receipt: InboxReceipt? = null)
+    private val localEchoes = LinkedHashMap<String, LocalEcho>()
+    private val userByMessage = HashMap<String, Int>()
+    private val inbox = mapOf("next-turn" to ArrayList<JsonElement>(), "next-step" to ArrayList<JsonElement>())
+    private var inboxSeq = -1L
+    /** Admission can precede a delayed projection containing the same occurrence. */
+    private val retiredMessages = HashSet<String>()
+    private val retiredRequests = HashSet<String>()
     private val stepStartTimes = HashMap<String, Long>()
     private val settledSteps = ArrayList<StepRecord>()
     private val turnFacts = LinkedHashMap<Int, TurnRecord>()
@@ -376,17 +396,44 @@ class TranscriptReducer {
 
     fun items(): List<Item> = committed + (live?.items() ?: emptyList())
 
+    fun queueMessages(): List<QueuedPrompt> {
+        val host = inbox.getValue("next-turn").filterNot { message ->
+            val rpc = message["source"]["rpcId"].str()
+            isRetired(message) || (rpc != null && localEchoes[rpc]?.queued == false)
+        }.map(::queuedPrompt)
+        val admitted = inbox.values.flatten().mapNotNull { it["source"]["rpcId"].str() }.toSet()
+        return host + localEchoes.values.filter { it.queued && it.prompt.id !in admitted }.map { it.prompt }
+    }
+
     /** Apply one follow frame; returns true when visible state changed. */
     fun apply(frame: JsonElement?): Boolean {
         when (frame["type"].str()) {
             "snapshot" -> {
-                val keep = localEchoes.map { it.second }
+                val keep = localEchoes.toMap()
                 val knownTurns = turnFacts.toMap()
                 reset()
+                localEchoes.putAll(keep)
                 records(frame["records"])
-                keep.filter { t -> committed.none { it is Item.User && it.text == t } }.forEach(::echo)
+                for ((id, echo) in localEchoes.toMap()) {
+                    if (id in retiredRequests || userByRpc[id]?.let { !(committed[it] as Item.User).pending } == true) {
+                        localEchoes.remove(id)
+                    } else if (!echo.queued) addEcho(echo.prompt)
+                }
                 readProjections(frame["projections"], frame["cursor"].long() ?: cursor)
                 cursor = frame["cursor"].long() ?: cursor
+                // A replacement window can omit the admitted user/message entirely.
+                // Only retire acknowledged echoes covered by a newer inbox baseline;
+                // an unacknowledged send or a claim at this exact watermark still waits.
+                val inboxBaseline = frame["projections"]["values"]["inbox"]
+                val inboxBaselineSeq = frame["projections"]["asOfSeq"].long() ?: cursor
+                if (inboxBaseline is JsonObject) {
+                    for ((id, echo) in localEchoes.toMap()) {
+                        val receipt = echo.receipt ?: continue
+                        if (receipt.seq < inboxBaselineSeq && inbox.values.none { messages ->
+                                messages.any { it["source"]["rpcId"].str() == id }
+                            }) discardEcho(id)
+                    }
+                }
                 hasMore = frame["hasMore"].bool() ?: false
                 firstSeq = minSeq(frame["records"])
                 baseline(frame["assistantStream"])
@@ -414,6 +461,8 @@ class TranscriptReducer {
                     if (seq < planProjectionSeq) return false
                     planProjectionSeq = seq
                     planActive = frame["value"]["active"].bool() ?: false
+                } else if (key == "inbox") {
+                    return readInbox(frame["value"], seq)
                 } else return composerProjections.apply(key, frame["value"], seq)
             }
             "assistant-stream" -> stream(frame["frame"])
@@ -462,9 +511,7 @@ class TranscriptReducer {
         if (shift > 0) {
             committed.addAll(0, older)
             rebuildIndexes()
-            for (i in localEchoes.indices) {
-                localEchoes[i] = (localEchoes[i].first + shift) to localEchoes[i].second
-            }
+            // User identities are rebuilt along with tool/compaction indexes.
         }
         if (olderSteps.isNotEmpty()) {
             settledSteps.addAll(0, olderSteps)
@@ -483,10 +530,15 @@ class TranscriptReducer {
         toolIndex.clear()
         compactIndex.clear()
         userByRpc.clear()
+        userByMessage.clear()
         committed.forEachIndexed { i, item ->
             when (item) {
                 is Item.Tool -> if (item.callId.isNotEmpty()) toolIndex[item.callId] = i
                 is Item.Compacted -> compactIndex[item.compactionId] = i
+                is Item.User -> {
+                    item.requestId?.let { userByRpc[it] = i }
+                    item.messageId?.let { userByMessage[it] = i }
+                }
                 else -> {}
             }
         }
@@ -499,6 +551,9 @@ class TranscriptReducer {
 
     private fun reset() {
         committed.clear(); toolIndex.clear(); compactIndex.clear(); approvalCall.clear(); userByRpc.clear(); localEchoes.clear()
+        userByMessage.clear()
+        inbox.values.forEach { it.clear() }
+        inboxSeq = -1L
         toolTimings.clear()
         turnFacts.clear()
         stepStartTimes.clear(); settledSteps.clear(); headerFacts.clear(); toolsByName.clear()
@@ -518,6 +573,7 @@ class TranscriptReducer {
         composerProjections.baseline(p, atSeq)
         val values = p["values"]
         values["title"].str()?.let { title = it }
+        values["inbox"]?.let { readInbox(it, p["asOfSeq"].long() ?: atSeq, baseline = true) }
         val usage = values["tokenUsage"]
         if (usage is JsonObject) {
             val uncached = usage["uncachedInputTokens"].long() ?: 0
@@ -659,6 +715,7 @@ class TranscriptReducer {
             }
             "user/message" -> {
                 val msg = if (data["content"] != null) data else data["message"]
+                retireMessage(msg)
                 if (isTyped(msg)) upsertUser(msg, "u$seq", pending = false, at = e["time"].long(), seq = seq)
                 else upsertContext(msg, "x$seq", at = e["time"].long())
             }
@@ -667,10 +724,7 @@ class TranscriptReducer {
                 upsertContext(msg, "d$seq", at = e["time"].long())
             }
             "system/message" -> upsertSystemPrompt(e, data, seq)
-            // A prompt enters the agent inbox (seq ~3) long before its user/message (written at step start).
-            "agent/inbox/spliced" -> data["inserted"].arr().orEmpty().forEach { m ->
-                if (isTyped(m)) upsertUser(m, "q$seq.${m["source"]["rpcId"].str()}", pending = true, at = e["time"].long(), seq = seq)
-            }
+            "agent/inbox/spliced" -> spliceInbox(data, seq, e["time"].long())
             "assistant/message" -> {
                 steps++
                 val firstTokenFromLive = live?.firstTokenTime
@@ -889,8 +943,8 @@ class TranscriptReducer {
         val images = imageRefs.size.takeIf { it > 0 } ?: blocks.count { it["type"].str() == "image" }
         val sourceJson = prettySource(msg["source"])
         val rpc = msg["source"]["rpcId"].str()
-        val idx = rpc?.let { userByRpc[it] }
-            ?: localEchoes.indexOfFirst { it.second == text }.takeIf { it >= 0 }?.let { localEchoes.removeAt(it).first }
+        val messageId = msg["id"].str()
+        val idx = rpc?.let { userByRpc[it] } ?: messageId?.let { userByMessage[it] }
         if (idx != null) {
             val old = committed[idx] as Item.User
             committed[idx] = old.copy(
@@ -899,12 +953,17 @@ class TranscriptReducer {
                 messageSourceJson = sourceJson ?: old.messageSourceJson,
                 seq = seq ?: old.seq,
                 imageRefs = imageRefs.ifEmpty { old.imageRefs },
+                requestId = rpc ?: old.requestId,
+                messageId = messageId ?: old.messageId,
             )
             if (rpc != null) userByRpc[rpc] = idx
+            if (messageId != null) userByMessage[messageId] = idx
         } else {
             if (rpc != null) userByRpc[rpc] = committed.size
+            if (messageId != null) userByMessage[messageId] = committed.size
             committed += Item.User(
                 key, text, images, pending, at = at, messageSourceJson = sourceJson, seq = seq, imageRefs = imageRefs,
+                requestId = rpc, messageId = messageId,
             )
         }
     }
@@ -916,10 +975,153 @@ class TranscriptReducer {
         }.getOrNull()
     }
 
-    /** Optimistic echo of a message the user just sent; reconciled with the server copy by text. */
-    fun echo(text: String) {
-        localEchoes += committed.size to text
-        committed += Item.User("local-${committed.size}-${text.hashCode()}", text, pending = true)
+    /** The same request identity is sent on the wire; text is never a deduplication key. */
+    fun echo(
+        text: String,
+        requestId: String = UUID.randomUUID().toString(),
+        mode: String = "queue",
+        images: Int = 0,
+        files: Int = 0,
+    ) {
+        if (requestId in localEchoes || requestId in userByRpc || requestId in retiredRequests) return
+        val prompt = QueuedPrompt(requestId, text, images, files, sending = true)
+        val queued = running && mode == "queue"
+        localEchoes[requestId] = LocalEcho(prompt, queued)
+        if (!queued) addEcho(prompt)
+    }
+
+    private fun addEcho(prompt: QueuedPrompt) {
+        if (prompt.id in userByRpc) return
+        userByRpc[prompt.id] = committed.size
+        committed += Item.User("local-${prompt.id}", prompt.text, prompt.images, pending = true, requestId = prompt.id)
+    }
+
+    fun discardEcho(requestId: String) {
+        if (localEchoes.remove(requestId) == null) return
+        val index = userByRpc[requestId]
+        if (index != null && (committed[index] as Item.User).pending) {
+            committed.removeAt(index)
+            rebuildIndexes()
+        }
+    }
+
+    private fun queuedPrompt(message: JsonElement): QueuedPrompt {
+        val blocks = message["content"].arr().orEmpty()
+        return QueuedPrompt(
+            id = message["id"].str() ?: message["source"]["rpcId"].str().orEmpty(),
+            text = blocks.filter { it["type"].str() == "text" }.joinToString("\n") { it["text"].str().orEmpty() },
+            images = blocks.count { it["type"].str() == "image" },
+            files = blocks.count { it["type"].str() == "file" },
+        )
+    }
+
+    private fun isRetired(message: JsonElement?): Boolean =
+        message["id"].str()?.let { it in retiredMessages } == true ||
+            message["source"]["rpcId"].str()?.let { it in retiredRequests } == true
+
+    private fun retireMessage(message: JsonElement?) {
+        message["id"].str()?.let { retiredMessages += it }
+        message["source"]["rpcId"].str()?.let { retiredRequests += it; localEchoes.remove(it) }
+        // Keep the raw inbox positions until the corresponding durable splice arrives.
+    }
+
+    private fun readInbox(value: JsonElement?, seq: Long, baseline: Boolean = false): Boolean {
+        if (seq < inboxSeq || (!baseline && seq == inboxSeq) || value !is JsonObject) return false
+        inboxSeq = seq
+        for ((target, messages) in inbox) {
+            val previous = messages.toList()
+            messages.clear()
+            messages.addAll(value[target].arr().orEmpty())
+            for (old in previous) {
+                if (messages.none { sameMessage(it, old) }) {
+                    // A projection alone cannot distinguish claim from cancellation.
+                    // Keep transcript-owned local submissions until their durable event.
+                    old["source"]["rpcId"].str()?.let { rpc ->
+                        if (localEchoes[rpc]?.queued == true) localEchoes.remove(rpc)
+                    }
+                    if (target == "next-step") removePendingUser(old, preserveLocal = true)
+                }
+            }
+            messages.forEachIndexed { index, message -> observeInboxMessage(target, message, seq, index) }
+        }
+        return true
+    }
+
+    private fun sameMessage(a: JsonElement, b: JsonElement): Boolean {
+        val id = a["id"].str()
+        if (id != null) return id == b["id"].str()
+        val rpc = a["source"]["rpcId"].str()
+        return rpc != null && rpc == b["source"]["rpcId"].str()
+    }
+
+    private fun observeInboxMessage(target: String, message: JsonElement, seq: Long, index: Int, at: Long? = null) {
+        if (isRetired(message)) return
+        val rpc = message["source"]["rpcId"].str()
+        if (rpc != null && localEchoes[rpc]?.queued == true) localEchoes.remove(rpc)
+        if (rpc != null) localEchoes[rpc]?.let { echo ->
+            localEchoes[rpc] = echo.copy(receipt = InboxReceipt(target, index, seq))
+        }
+        if (target == "next-step" && isTyped(message)) {
+            upsertUser(message, "inbox-${queuedPrompt(message).id}", pending = true, at = at, seq = seq)
+        }
+    }
+
+    private fun spliceInbox(data: JsonElement?, seq: Long, at: Long?) {
+        val target = data["target"].str() ?: return
+        val messages = inbox[target] ?: return
+        val start = data["start"].long()?.toInt() ?: return
+        val count = data["removedCount"].long()?.toInt() ?: 0
+        val inserted = data["inserted"].arr().orEmpty()
+        for ((rpc, echo) in localEchoes.toMap()) {
+            val receipt = echo.receipt ?: continue
+            val index = receipt.index ?: continue
+            if (receipt.target != target || receipt.seq >= seq) continue
+            val removed = index >= start && index < start + count
+            if (removed && data["outcome"].str() == "canceled") {
+                discardEcho(rpc)
+                retiredRequests += rpc
+            } else {
+                localEchoes[rpc] = echo.copy(receipt = InboxReceipt(
+                    target, if (removed) null else if (index < start) index else index + inserted.size - count, seq,
+                ))
+            }
+        }
+        if (seq <= inboxSeq) return
+        // A tail snapshot may omit the insertions; its full projection repairs the list.
+        if (start < 0 || count < 0 || start > messages.size || count > messages.size - start) return
+        inboxSeq = seq
+        val removed = messages.subList(start, start + count).toList()
+        messages.subList(start, start + count).clear()
+        messages.addAll(start, inserted)
+        for (message in removed) {
+            if (data["outcome"].str() == "canceled") {
+                message["source"]["rpcId"].str()?.let(::discardEcho)
+                removePendingUser(message)
+                retireMessage(message)
+            } else {
+                // Claimed next-turn inputs remain absent until user/message; next-step
+                // and idle local echoes retain their existing transcript placement.
+                message["id"].str()?.let { retiredMessages += it }
+                message["source"]["rpcId"].str()?.let { rpc ->
+                    if (localEchoes[rpc]?.queued == true) localEchoes.remove(rpc)
+                }
+            }
+        }
+        inserted.forEachIndexed { index, message ->
+            message["id"].str()?.let { retiredMessages.remove(it) }
+            message["source"]["rpcId"].str()?.let { retiredRequests.remove(it) }
+            observeInboxMessage(target, message, seq, start + index, at)
+        }
+    }
+
+    private fun removePendingUser(message: JsonElement, preserveLocal: Boolean = false) {
+        val rpc = message["source"]["rpcId"].str()
+        if (preserveLocal && rpc in localEchoes) return
+        val index = rpc?.let { userByRpc[it] } ?: message["id"].str()?.let { userByMessage[it] } ?: return
+        if ((committed[index] as Item.User).pending) {
+            committed.removeAt(index)
+            rebuildIndexes()
+        }
     }
 
     /**

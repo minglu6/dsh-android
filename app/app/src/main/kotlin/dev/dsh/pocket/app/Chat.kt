@@ -48,6 +48,7 @@ import dev.dsh.pocket.protocol.ImageRef
 import dev.dsh.pocket.protocol.Item
 import dev.dsh.pocket.protocol.PromptFile
 import dev.dsh.pocket.protocol.PromptImage
+import dev.dsh.pocket.protocol.QueuedPrompt
 import dev.dsh.pocket.protocol.ToolStatus
 import dev.dsh.pocket.protocol.UserQuestion
 import dev.dsh.pocket.protocol.get
@@ -412,6 +413,7 @@ fun ChatRoot(
                 }
             }
             GoalBar(st) { sheet = Sheet.Goal }
+            PromptQueue(st.queuedPrompts)
             if (!questionVisible && approval == null) {
             Composer(
                 "发消息或创建任务, / 调用指令, @ 文件或对话", st.running, curPerm, curModel, enabled = dot == Dot.Online && !inspectorPicking,
@@ -1435,6 +1437,47 @@ internal fun UserQuestionCard(
                         else submit()
                     }, enabled = !busy, shape = T.R12, colors = PrimaryColors()) {
                         Text(if (index < q.questions.lastIndex) L.nextQuestion() else "提交答案")
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+internal fun PromptQueue(prompts: List<QueuedPrompt>) {
+    if (prompts.isEmpty()) return
+    val en = Pocket.prefs.language == AppLanguage.En
+    Column(
+        Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 4.dp)
+            .clip(T.R20).background(T.Fill2).testTag("promptQueue").padding(12.dp),
+    ) {
+        Text(
+            if (en) "Queued messages (${prompts.size})" else "排队消息（${prompts.size}）",
+            color = T.Text2, fontSize = 12.sp, fontWeight = FontWeight.Medium,
+            modifier = Modifier.testTag("promptQueueCount"),
+        )
+        Column(Modifier.heightIn(max = 156.dp).verticalScroll(rememberScrollState())) {
+            prompts.forEach { prompt ->
+                key(prompt.id) {
+                    Column(Modifier.fillMaxWidth().padding(top = 8.dp).testTag("queuedPrompt:${prompt.id}")) {
+                        Text(
+                            prompt.text.ifBlank { if (en) "Attachments" else "附件消息" },
+                            color = T.Ink, fontSize = 13.sp, maxLines = 2, overflow = TextOverflow.Ellipsis,
+                        )
+                        val attachments = buildList {
+                            if (prompt.images > 0) add(if (en) "${prompt.images} image${if (prompt.images == 1) "" else "s"}" else "${prompt.images} 张图片")
+                            if (prompt.files > 0) add(if (en) "${prompt.files} file${if (prompt.files == 1) "" else "s"}" else "${prompt.files} 个文件")
+                        }
+                        val status = if (prompt.sending) {
+                            if (en) "Sending…" else "发送中…"
+                        } else {
+                            if (en) "Waiting for this turn to finish" else "等待本轮结束"
+                        }
+                        Text(
+                            (listOf(status) + attachments).joinToString(" · "),
+                            color = T.Text3, fontSize = 11.sp, maxLines = 2, overflow = TextOverflow.Ellipsis,
+                        )
                     }
                 }
             }

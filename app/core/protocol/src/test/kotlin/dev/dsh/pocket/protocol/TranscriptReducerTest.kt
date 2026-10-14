@@ -167,7 +167,7 @@ class TranscriptReducerTest {
     @Test fun firstMessageInNewSessionShowsImmediately() {
         val r = TranscriptReducer()
         r.apply(j("""{"type":"snapshot","cursor":2,"records":[],"projections":{}}"""))
-        r.echo("你好")                                   // optimistic, before any server event
+        r.echo("你好", requestId = "R1")                 // optimistic, before any server event
         assertEquals(listOf(true), r.items().map { (it as Item.User).pending })
         r.apply(ev(3, "agent/inbox/spliced", """{"target":"next-turn","start":0,"inserted":[{"content":[{"type":"text","text":"你好"}],"source":{"kind":"user","rpcId":"R1"},"role":"user"}]}"""))
         r.apply(ev(4, "turn/start", """{"turn":1}"""))
@@ -197,10 +197,10 @@ class TranscriptReducerTest {
 
     @Test fun echoSurvivesLateSnapshot() {
         val r = TranscriptReducer()
-        r.echo("hi")
+        r.echo("hi", requestId = "R1")
         r.apply(j("""{"type":"snapshot","cursor":0,"records":[],"projections":{}}"""))
         assertEquals(listOf("hi"), r.items().map { (it as Item.User).text })
-        r.apply(j("""{"type":"snapshot","cursor":1,"records":[{"type":"event","event":{"type":"user/message","seq":1,"time":1,"data":{"content":[{"type":"text","text":"hi"}],"source":{"kind":"user"}}}}],"projections":{}}"""))
+        r.apply(j("""{"type":"snapshot","cursor":1,"records":[{"type":"event","event":{"type":"user/message","seq":1,"time":1,"data":{"content":[{"type":"text","text":"hi"}],"source":{"kind":"user","rpcId":"R1"}}}}],"projections":{}}"""))
         assertEquals(1, r.items().size)
     }
 

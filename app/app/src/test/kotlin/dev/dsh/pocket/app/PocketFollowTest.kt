@@ -128,6 +128,92 @@ class PocketFollowTest {
     private fun modelCatalog(defaultModel: String = "default") = ModelCatalog.parse(PocketJson.parseToJsonElement(
         """{"groups":[{"id":"p","models":[{"id":"default","name":"Default"},{"id":"next","name":"Next"},{"id":"desktop","name":"Desktop"}]}],"default":{"provider":"p","model":"$defaultModel","reasoningEffort":"high"}}"""))
 
+    @Test fun busyQueueTextImagesAndFilesShareRequestIdentityAndFailureCleanup() = runBlocking {
+        installHostSettingsFixture()
+        push("sub-A", """{"type":"event","event":{"seq":1,"time":1,"type":"turn/start","data":{"turn":1}}}""")
+        val image = PromptImage("image/png", "aW1hZ2U=")
+        val senders: List<() -> Job> = listOf(
+            { Pocket.send("same") },
+            { Pocket.sendImages("", listOf(image)) },
+            { Pocket.sendWithFiles("same", listOf(image), listOf(PromptFile("receipt-1"))) },
+        )
+        senders.forEachIndexed { index, send ->
+            val sending = send().also { jobs += it }
+            val prompt = request("prompt")
+            assertEquals("queue", prompt["args"]["mode"].str())
+            val pending = Pocket.chat.value!!.queuedPrompts.single()
+            assertEquals(prompt["args"]["requestId"].str(), pending.id)
+            assertTrue(pending.sending)
+            assertEquals(if (index == 0) 0 else 1, pending.images)
+            assertEquals(if (index == 2) 1 else 0, pending.files)
+            assertTrue(Pocket.chat.value!!.items.none { it is Item.User })
+            reject(prompt, "send rejected")
+            finish(sending)
+            assertTrue(Pocket.chat.value!!.queuedPrompts.isEmpty())
+            assertTrue(Pocket.chat.value!!.items.none { it is Item.User })
+        }
+    }
+
+    @Test fun hostSteerPreferenceKeepsBusyPromptInTranscriptAndCleansFailedEcho() = runBlocking {
+        val settings = installHostSettingsFixture()
+        settings.desktopSet(SharedSetting.BusySend, JsonPrimitive("steer"))
+        push("sub-A", """{"type":"event","event":{"seq":1,"time":1,"type":"turn/start","data":{"turn":1}}}""")
+        val sending = Pocket.sendWithFiles("current turn", emptyList(), listOf(PromptFile("receipt"))).also { jobs += it }
+        val prompt = request("prompt")
+        assertEquals("steer", prompt["args"]["mode"].str())
+        assertTrue(Pocket.chat.value!!.queuedPrompts.isEmpty())
+        assertEquals("current turn", Pocket.chat.value!!.items.filterIsInstance<Item.User>().single().text)
+        reject(prompt)
+        finish(sending)
+        assertTrue(Pocket.chat.value!!.items.none { it is Item.User })
+    }
+
+    @Test fun delayedPromptFailureCannotDiscardAnotherSessionsEcho() = runBlocking {
+        installHostSettingsFixture()
+        push("sub-A", """{"type":"event","event":{"seq":1,"time":1,"type":"turn/start","data":{"turn":1}}}""")
+        val sending = Pocket.send("same text").also { jobs += it }
+        val oldPrompt = request("prompt")
+        val opening = open("B")
+        reply(request("unfollow"), """{"stopped":true}""")
+        val follow = request("follow")
+        snapshot("sub-B")
+        reply(follow, """{"subId":"sub-B"}""")
+        finish(opening)
+        val currentSending = Pocket.send("same text").also { jobs += it }
+        val currentPrompt = request("prompt")
+        assertEquals("queue", currentPrompt["args"]["mode"].str())
+        assertTrue(Pocket.chat.value!!.queuedPrompts.isEmpty())
+        val before = Pocket.chat.value
+        reject(oldPrompt)
+        finish(sending)
+        assertEquals(before, Pocket.chat.value)
+        assertEquals("same text", Pocket.chat.value!!.items.filterIsInstance<Item.User>().single().text)
+        reply(currentPrompt, "{}")
+        finish(currentSending)
+    }
+
+    @Test fun newSessionsFirstPromptUsesMatchingEchoAndWireIdentity() = runBlocking {
+        installHostSettingsFixture()
+        Pocket.chat.value = null
+        put("subId", null)
+        val creating = Pocket.newSession("first prompt", null, null, null).also { jobs += it }
+        reply(request("sessions.create"), """{"sessionId":"new-session"}""")
+        val follow = request("follow")
+        snapshot("sub-new", 0)
+        reply(follow, """{"subId":"sub-new"}""")
+        val prompt = request("prompt")
+        val requestId = prompt["args"]["requestId"].str()!!
+        assertEquals("new-session", prompt["args"]["sessionId"].str())
+        assertEquals("queue", prompt["args"]["mode"].str())
+        assertTrue(Pocket.chat.value!!.queuedPrompts.isEmpty())
+        assertEquals(1, Pocket.chat.value!!.items.filterIsInstance<Item.User>().size)
+        push("sub-new", """{"type":"event","event":{"seq":1,"time":1,"type":"user/message","data":{"id":"host-first","role":"user","source":{"kind":"user","rpcId":"$requestId"},"content":[{"type":"text","text":"first prompt"}]}}}""")
+        reply(prompt, "{}")
+        finish(creating)
+        assertEquals(1, Pocket.chat.value!!.items.filterIsInstance<Item.User>().size)
+        assertEquals("first prompt", Pocket.chat.value!!.items.filterIsInstance<Item.User>().single().text)
+    }
+
     @Test fun sidebarCreatesBlankSessionWithoutSendingPromptOrRequiringSelection() = runBlocking {
         Pocket.chat.value = null
         put("subId", null)

@@ -172,9 +172,11 @@ class PocketClient(
         mode: String,
         images: List<PromptImage> = emptyList(),
         files: List<PromptFile> = emptyList(),
+        requestId: String? = null,
     ) =
         call("prompt", buildJsonObject {
             put("sessionId", sessionId); put("text", text); put("mode", mode)
+            requestId?.let { put("requestId", it) }
             if (images.isNotEmpty()) putJsonArray("images") {
                 images.forEach { img ->
                     add(buildJsonObject {
