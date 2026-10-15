@@ -3,6 +3,7 @@ package dev.dsh.pocket.app
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsNotEnabled
+import androidx.compose.ui.test.assertTextEquals
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performClick
@@ -11,6 +12,8 @@ import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performScrollTo
 import androidx.compose.runtime.mutableStateMapOf
 import dev.dsh.pocket.protocol.Approval
+import dev.dsh.pocket.protocol.ModelCatalog
+import dev.dsh.pocket.protocol.PocketJson
 import dev.dsh.pocket.protocol.UserQuestion
 import dev.dsh.pocket.protocol.UserQuestionItem
 import dev.dsh.pocket.protocol.UserQuestionOption
@@ -43,6 +46,7 @@ class ComposerTest {
         Pocket.active.value = "p1"
         Pocket.status.value = mapOf("p1" to Dot.Online)
         Pocket.catalog.value = null
+        Pocket.model.value = emptyMap()
         Pocket.ops.value = emptySet()
         Pocket.sessions.value = emptyList()
         Pocket.chat.value = null
@@ -145,6 +149,31 @@ class ComposerTest {
         rule.onNodeWithText("允许一次").assertIsEnabled()
         rule.onNodeWithText("拒绝").performClick()
         assertEquals(2, calls)
+    }
+
+    @Test fun disconnectDisablesComposerModelWithoutOpeningPicker() {
+        Pocket.chat.value = ChatState("s1", loaded = true)
+        Pocket.catalog.value = ModelCatalog.parse(PocketJson.parseToJsonElement("""{
+          "default":{"provider":"p","model":"pro"},
+          "groups":[{"id":"p","name":"Provider","models":[{"id":"pro","name":"DeepSeek Pro"}]}]
+        }"""))
+        Pocket.model.value = mapOf("s1" to ModelChoice("p", "pro", "DeepSeek Pro", null))
+        rule.setContent { PocketTheme { ChatRoot(onMenu = {}) } }
+        rule.onNodeWithTag("composerModel").assertIsEnabled()
+        rule.onNodeWithTag("composerModelName", useUnmergedTree = true).assertTextEquals("DeepSeek Pro")
+        rule.runOnIdle { Pocket.status.value = mapOf("p1" to Dot.Offline) }
+        rule.onNodeWithTag("composerModel").assertIsNotEnabled().performClick()
+        rule.onNodeWithTag("composerModelName", useUnmergedTree = true).assertTextEquals("DeepSeek Pro")
+        rule.onNodeWithTag("modelPicker").assertDoesNotExist()
+    }
+
+    @Test fun disconnectKeepsSelectModelPlaceholderWhenUncached() {
+        rule.setContent { PocketTheme { ChatRoot(onMenu = {}) } }
+        rule.onNodeWithTag("composerModelName", useUnmergedTree = true).assertTextEquals("选择模型")
+        rule.runOnIdle { Pocket.status.value = mapOf("p1" to Dot.Offline) }
+        rule.onNodeWithTag("composerModel").assertIsNotEnabled().performClick()
+        rule.onNodeWithTag("composerModelName", useUnmergedTree = true).assertTextEquals("选择模型")
+        rule.onNodeWithTag("modelPicker").assertDoesNotExist()
     }
 
     @Test fun disconnectDisablesApprovalUntilConnectionReturns() {
