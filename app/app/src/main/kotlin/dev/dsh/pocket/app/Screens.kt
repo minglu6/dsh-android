@@ -1520,7 +1520,7 @@ fun GeneralSettingsScreen(onBack: () -> Unit) {
         GeneralPreferenceRow(L.language(), value = lang.label, enabled = shared.writable(SharedSetting.Language), onClick = { sheet = "lang" })
         Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Text(L.appearance(), fontSize = 14.sp, color = T.Ink)
-            AppearanceCards(appearance, enabled = shared.writable(SharedSetting.Appearance)) { Pocket.prefs.appearance = it }
+            AppearanceCards(appearance) { Pocket.prefs.appearance = it }
         }
         HorizontalDivider(Modifier.padding(horizontal = 16.dp), color = T.Border)
         SettingsFontRow(
@@ -1548,7 +1548,7 @@ fun GeneralSettingsScreen(onBack: () -> Unit) {
             SettingsFontRow(st("终端字号", "Terminal font size"), st("用于侧栏终端", "Used for the sidebar terminal"), terminalFontSize, 10..20, enabled = shared.writable(SharedSetting.TerminalFontSize)) { Pocket.prefs.terminalFontSize = it }
         }
         GeneralPreferenceRow(st("工作步骤展示", "Work details"), st("选择希望看到多少工具调用细节", "Choose how much detail to show for tool calls"), value = transcriptText(transcript), enabled = shared.writable(SharedSetting.Transcript), onClick = { sheet = "transcript" })
-        GeneralPreferenceRow(st("工作步骤收起时机", "When to Collapse Work Details"), st("选择何时自动收起工作步骤", "Choose when to automatically collapse work details"), value = collapseText(collapse), onClick = { sheet = "collapse" })
+        GeneralPreferenceRow(st("工作步骤收起时机", "When to Collapse Work Details"), st("选择何时自动收起工作步骤", "Choose when to automatically collapse work details"), value = collapseText(collapse), enabled = permissionOnline, onClick = { sheet = "collapse" })
         GeneralPreferenceRow(st("显示代码工作视图", "Show coding view"), st("开启后，显示轨迹、本轮代码差异，可选择完整的 Agent 预设切换", "Shows trajectory, code diffs, and all Agent presets"), trailing = {
             Switch(codeWork, { Pocket.prefs.showCodeWorkView = it }, enabled = shared.writable(SharedSetting.CodeWork), colors = SwitchDefaults.colors(checkedTrackColor = T.PrimaryButton, checkedThumbColor = T.OnPrimary))
         })
@@ -1591,7 +1591,7 @@ fun GeneralSettingsScreen(onBack: () -> Unit) {
         }
         "collapse" -> PocketSheet({ sheet = null }) {
             SheetTitle(st("工作步骤收起时机", "When to Collapse Work Details"))
-            CollapseTiming.entries.forEach { o -> OptionRow(collapseText(o), selected = collapse == o) { Pocket.prefs.collapseTiming = o; sheet = null } }
+            CollapseTiming.entries.forEach { o -> OptionRow(collapseText(o), selected = collapse == o, enabled = permissionOnline) { Pocket.prefs.collapseTiming = o; sheet = null } }
         }
         "busy" -> PocketSheet({ sheet = null }) {
             SheetTitle(st("繁忙时的发送行为", "Send behavior while busy"))

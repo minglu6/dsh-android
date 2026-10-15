@@ -154,7 +154,7 @@ internal fun SettingsScaffold(
                 actions()
             }
             if (statuses[active] != Dot.Online) {
-                SettingsMessage(st("Host 未连接，需连接的操作暂不可用", "Host disconnected. Actions requiring a connection are unavailable."))
+                SettingsMessage(st("远程主机未连接，需连接的操作暂不可用", "Host disconnected. Actions requiring a connection are unavailable."))
             }
             Column(Modifier.weight(1f).fillMaxWidth().verticalScroll(rememberScrollState()), content = content)
         }
