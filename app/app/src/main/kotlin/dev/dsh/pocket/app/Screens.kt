@@ -605,13 +605,13 @@ private fun SessionRow(
                             onClick = ::togglePin,
                             enabled = online,
                         )
-                        if ("sessions.rename" in ops && !isArchived) DropdownMenuItem(
+                        if ("sessions.rename" in ops) DropdownMenuItem(
                             text = { Text(L.rename()) },
                             leadingIcon = { Icon(D.edit, null, Modifier.size(16.dp)) },
-                            onClick = { onMenuOpenChange(false); renameOpen = true },
+                            onClick = { onMenuOpenChange(false); renameTitle = s.title.orEmpty(); renameOpen = true },
                             enabled = online,
                         )
-                        if ("sessions.fork" in ops && !isArchived) DropdownMenuItem(
+                        if ("sessions.fork" in ops) DropdownMenuItem(
                             text = { Text(navText("分叉会话", "Fork session")) },
                             leadingIcon = { Icon(D.branch, null, Modifier.size(16.dp)) },
                             onClick = { onMenuOpenChange(false); Pocket.forkSessionFrom(s.sessionId) },
@@ -1370,7 +1370,6 @@ fun SettingsScreen(
     onConnections: () -> Unit,
     onModels: () -> Unit = {},
     onPlugins: () -> Unit = {},
-    onSchedule: () -> Unit = {},
     onCreatePreset: (() -> Unit)? = null,
 ) {
     val profile = Pocket.activeProfile
@@ -1393,7 +1392,6 @@ fun SettingsScreen(
             SettingsNavRow(L.generalNav(), D.settings, onClick = onGeneral)
             SettingsNavRow(L.modelsNav(), D.dataMedium, enabled = online, onClick = onModels)
             if ("plugins.inventory" in visibleOps) SettingsNavRow(st("内置插件", "Built-in plugins"), D.personalization, enabled = online, onClick = onPlugins)
-            if ("schedule.catalog" in visibleOps) SettingsNavRow(L.scheduleNav(), D.clock, enabled = online, onClick = onSchedule)
             SettingsNavRow(st("Agent 预设", "Agent presets"), D.agentPreset, divider = false, enabled = online, onClick = { presets = true })
         }
         Text(st("移动端", "Mobile"), fontSize = 13.sp, color = T.Text3, modifier = Modifier.padding(start = 22.dp, top = 12.dp, bottom = 2.dp))

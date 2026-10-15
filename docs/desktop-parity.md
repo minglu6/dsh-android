@@ -306,7 +306,7 @@ Guide artwork is selected from the owning feature's registry, not from generic c
 | 终端 | `title` 终端 / guide `新建终端` | `terminal.*` | feasible (done) |
 | 浏览器 | `guide.title` 浏览器 | Android WebView | **done** — desktop toolbar, navigation and explicit URL/title restore; no additional explanatory UI |
 | 会话数据诊断 | `tab.title` 会话数据诊断 | Original follow/history records + Android chat projection | **done** — desktop presentation selector/count, table columns, type-filter popover, hierarchy, resizable JSON details and native Chat element picking |
-| 文档预览 | documentpreview locales | Host file bytes + preview (opened via `openResource`, not a guide capsule) | **done** — `files.read` text paging + `files.readBytes` (base64) for image/PDF; `FilePreviewSheet` |
+| 文档预览 | documentpreview locales | Host file bytes / official Office conversion (opened via `openResource`, not a guide capsule) | **done** — text/image/PDF plus DOC/DOCX/PPT/PPTX via chunked `office.*`; XLS/XLSX via the packaged desktop parser and read-only FortuneSheet; `FilePreviewSheet` |
 | Dock split / float | `dock.*` | desktop layout | **hide** (single adaptive end panel) |
 | Deliverable / changes-review tabs | `deliverables.*` | `workspaceChanges.summary` / `.diff` | **done** as native end panels; changes use turn snapshots, not current file contents |
 
@@ -332,8 +332,8 @@ Phone picking temporarily exposes the actual conversation, intercepts the pick w
 | Page | Locale | Decision |
 |---|---|---|
 | 通用设置 | `general.nav` 通用设置; language / appearance / fonts / transcript / collapse / busy-send / performance | **done with platform limits** — browser-verified separator rows; font-size pill with stacked arrows, external px and inline disclosure. Text/code/terminal family inputs commit on blur/Enter and resolve installed Android fonts with ordered fallback; expanded controls reset on remount. Host log uploads retain CAS/readback. Mobile-only preferences stay separate. |
-| 模型 | settings-models | **done** — browser-verified trailing dashed add-provider entry and horizontal creation tabs, compact provider editor and ID/name/options/delete model rows. Per-model options expand in place; custom API field order and save/create actions match desktop. Revision-fenced writes retain drafts and confirm readback; key retry does not recreate configuration. No standalone credential page. |
-| 内置插件 / 侧栏插件 | plugin-manager + inventory | **done with native limits** — Settings → Built-in plugins opens the independently loaded read-only inventory; sidebar Plugins retains native management. “Plugin interfaces” opens the original Host Web client, including installed custom React sections and other Web contributions without per-plugin APK adaptation. Host directory specs work; Android device file picking and desktop-native APIs remain unavailable. |
+| 模型 | settings-models | Native provider forms and Qoder CN footer; no WebView routing. Qoder uses the same `llm-qoder` namespace and write-only credential service, with revision-fenced settings-first saves and retained partial-save state. |
+| 内置插件 / 侧栏插件 | plugin-manager + inventory | Native inventory follows the desktop search field, left disclosure, right neutral preset selector and card-arrow disclosure, without a separate “View details” text action. Plugin management keeps the desktop split Add menu and Creator draft action. |
 | 自动化任务 | ui-schedule | **done** — new conversation for creation; searchable catalog, precise rule/title/instruction editing, conflict-safe delete/history. No pause toggle (`inactive` = ended). |
 | Agent 预设 | agent-preset | **done** — browser-verified built-in/custom cards, single-column phone and two-column wide layout, immediate default selection with CAS/readback, independent mode/usage guides and read-only YAML viewer. Creator entry stages a new Cordis draft without sending. Coding Tools visibility and custom display names follow official rules. |
 | 打开配置文件 | `openDocument` | **hide** (local desktop editor) |
@@ -418,7 +418,7 @@ Model settings use the desktop UI, not the mere existence of Host APIs, as their
 | Browser / session diagnostics | present | native WebView / read-only loaded event window |
 | Settings general rows | present | — |
 | Language / appearance prefs | **done** (labels wired via L; en for new surfaces) | was feasible (partial) |
-| Models / plugins / schedules | **done** (native Compose over official Host APIs) | Models restores default provider configuration; custom plugin cards are temporarily omitted |
+| Models / plugins / schedules | Native management over official Host APIs | Qoder CN's shipped connection card is adapted natively; arbitrary React extensions are not automatically converted into native UI |
 | Open config file / local-path plugin install | hidden | hide (desktop OS chrome) |
 
 ---
@@ -429,7 +429,7 @@ Model settings use the desktop UI, not the mere existence of Host APIs, as their
 
 **Added in this pass (parity-ops):** `sessions.search`, `workspace.state` / `archiveSession` / `unarchiveSession` / `pinSession` / `unpinSession`, `feedback.get` / `feedback.set`, `references.files` / `references.sessions`, `session.attachment`, `attachments.upload`, `userQuestions.answer` (+ push `user-question` / `user-question.closed`).
 
-**Settings ops:** Native Models uses `models.providers` / `models.providerGet` / `models.settingsMutate` / `models.discover` with write-only `credentials.*`, revision checks, draft retention and readback. Built-in Plugins independently uses `plugins.inventory`; its connection-bound load effect handles capability publication, invalidation and manual refresh without losing valid rows or accepting stale replies. Default settings do not enter WebView. Plugins retains its separate optional full-client entry via `ui.open` / `ui.close`; those device/connection-bound Web sessions keep Host process tokens/cookies server-side and enforce path/Origin/CSP restrictions.
+**Settings ops:** Native Models uses `models.providers` / `models.providerGet` / `models.settingsMutate` / `models.discover` with write-only credentials, revisions and readback. Qoder CN uses the existing `llm-qoder` descriptor and credentials operations; PAT-only writes still fence the configuration revision before updating the token. Built-in Plugins independently uses `plugins.inventory`. Optional authenticated Host Web APIs remain separate from Android model navigation. Files use `files.follow` ready/change frames and `unfollow`, keeping the canonical watch/list directory identical.
 
 **Still limited / unfinished:**
 
@@ -438,7 +438,7 @@ Model settings use the desktop UI, not the mere existence of Host APIs, as their
 | Folder attach | desktop-only (**hide**) |
 | Appearance theme tokens | **done** — full `--dsw-alias-*` / `--dsw-specific-*` from ui-theme design-platform.css @ d743267 → `DswColors` + theme-aware `T.*`; Appearance Light/Dark/System drives chrome |
 | Connections / pair / settings chrome | **done** — `Conn` aliases `T.*` (no Tokyo Night); settings cards use `--dsw-alias-settings-card-*`; pair sheet = PocketSheet + primary CTA |
-| Document preview (text / image / PDF) | **done** — tap file path/link in chat or trajectory → `FilePreviewSheet` via `files.read` / `files.readBytes`; copy uses common `copy`/`copied`; PDF via `PdfRenderer` (no GMS) |
+| Document preview | **done** — tap file path/link in chat or trajectory → `FilePreviewSheet`; text/image/PDF, DOC/DOCX/PPT/PPTX through official Host conversion + native `PdfRenderer`, XLS/XLSX through an isolated offline desktop workbook renderer. No macro/formula execution; retain desktop missing-font and omitted-feature warnings. |
 | Wide / foldable layout | **done** — automatically uses two panes at ≥760dp, reserving 480dp for the conversation; narrower screens use the drawer. No Auto/Phone/Desktop preference. |
 | Drawer tap / safe-area | **done** — session row closes drawer; workspace collapse does not; drawer session menu is `DropdownMenu` (first tap not eaten); sheets/nav use system bar insets |
 | OS workspace picker / open-config / local-path plugin install | **hide** (desktop OS chrome) |

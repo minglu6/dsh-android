@@ -301,6 +301,45 @@ class PocketClient(
         call("session.export", jsonOf("sessionId" to sessionId, "includeDescendants" to includeDescendants), timeoutMs = 180_000)
     suspend fun listFiles(sessionId: String, path: String = "."): JsonElement =
         call("files.list", jsonOf("sessionId" to sessionId, "path" to path))
+    /** A bounded invalidation stream, detached even if cancellation races its opening reply. */
+    fun followFiles(sessionId: String, path: String = "."): Flow<JsonObject> = flow {
+        coroutineScope {
+            val subscription = "f-${java.util.UUID.randomUUID()}"
+            val attempt = synchronized(connectionLock) { generation }
+            val inbox = Channel<JsonObject>(Channel.CONFLATED)
+            val collector = launch(start = CoroutineStart.UNDISPATCHED) {
+                events.collect { event ->
+                    if (event["subId"].str() == subscription && event["ev"].str()?.startsWith("files") == true) {
+                        inbox.send(event)
+                    }
+                }
+            }
+            val disconnect = launch {
+                state.first { it == State.Closed }
+                inbox.close(PocketError("transport", closeReason ?: "connection closed"))
+            }
+            try {
+                request("files.follow", jsonOf("sessionId" to sessionId, "path" to path, "subId" to subscription),
+                    expectedGeneration = attempt)
+                for (event in inbox) {
+                    when (event["ev"].str()) {
+                        "files" -> (event["frame"] as? JsonObject)?.let { emit(it) }
+                        "files.end" -> throw PocketError("workspace-file/watch-ended", "directory watch ended")
+                        "files.error" -> throw PocketError(event["error"]["code"].str() ?: "internal",
+                            event["error"]["message"].str() ?: "directory watch failed")
+                    }
+                }
+            } finally {
+                collector.cancel(); disconnect.cancel(); inbox.cancel()
+                withContext(NonCancellable) {
+                    runCatching {
+                        request("unfollow", jsonOf("subId" to subscription), timeoutMs = 5_000,
+                            expectedGeneration = attempt)
+                    }
+                }
+            }
+        }
+    }
     suspend fun readFile(sessionId: String, path: String, offset: Int? = null, limit: Int? = null): JsonElement {
         val range = if (offset != null || limit != null) {
             buildJsonObject {
@@ -312,6 +351,42 @@ class PocketClient(
     }
     suspend fun readFileBytes(sessionId: String, path: String): JsonElement =
         call("files.readBytes", jsonOf("sessionId" to sessionId, "path" to path))
+    /** One connection-bound Office lease. Cancellation releases even a render whose reply never arrived. */
+    suspend fun <T> withOfficePreview(
+        sessionId: String,
+        path: String,
+        block: suspend (OfficePreviewReader) -> T,
+    ): T {
+        val handle = "o-${java.util.UUID.randomUUID()}"
+        val attempt = synchronized(connectionLock) { generation }
+        try {
+            val metadata = request("office.render",
+                jsonOf("sessionId" to sessionId, "path" to path, "subId" to handle),
+                timeoutMs = 610_000, expectedGeneration = attempt)
+            if (metadata["handle"].str() != handle) throw PocketError("document-render/failed", "Invalid Office handle")
+            return block(OfficePreviewReader(sessionId, handle, attempt, metadata))
+        } finally {
+            withContext(NonCancellable) {
+                runCatching {
+                    request("office.release", jsonOf("sessionId" to sessionId, "handle" to handle),
+                        timeoutMs = 5_000, expectedGeneration = attempt)
+                }
+            }
+        }
+    }
+
+    inner class OfficePreviewReader internal constructor(
+        private val sessionId: String,
+        private val handle: String,
+        private val attempt: Long,
+        val metadata: JsonElement,
+    ) {
+        suspend fun read(offset: Long, length: Int): JsonElement =
+            request("office.read", jsonOf("sessionId" to sessionId, "handle" to handle,
+                "offset" to offset, "length" to length,
+                "version" to metadata["version"].str(), "generation" to metadata["generation"].str()),
+                expectedGeneration = attempt)
+    }
     suspend fun listJobs(sessionId: String): JsonElement =
         call("jobs.list", jsonOf("sessionId" to sessionId))
     suspend fun killJob(sessionId: String, jobId: String): JsonElement =

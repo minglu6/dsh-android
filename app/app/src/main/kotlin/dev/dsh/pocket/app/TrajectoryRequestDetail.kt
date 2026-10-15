@@ -67,11 +67,13 @@ fun TrajectoryRequestSheet(
         },
     ) {
         Column(Modifier.fillMaxWidth().padding(14.dp)) {
+            key(request.identity) {
             when (tab) {
                 TrajRequestTab.Overview -> RequestOverview(request, tabs, assistantRow, onOpenResult) { tab = it }
                 TrajRequestTab.Options -> RequestOptions(request.requestConfigJson)
                 TrajRequestTab.Usage -> RequestUsage(request.usage, request.cumulativeUsage)
                 TrajRequestTab.Timing -> RequestTiming(request, assistantRow)
+            }
             }
         }
     }
@@ -134,11 +136,7 @@ private fun RequestOverview(
         Spacer(Modifier.height(8.dp))
         if (TrajRequestTab.Options in tabs && request.requestConfigJson != null) {
             TrajectoryOverviewSection(TrajL.tabOptions, onOpen = { onOpen(TrajRequestTab.Options) }) {
-                Text(
-                    prettyJson(request.requestConfigJson).lineSequence().take(4).joinToString("\n"),
-                    style = T.Mono.copy(fontSize = 11.sp, color = T.Text2, lineHeight = 16.sp),
-                    maxLines = 4,
-                )
+                TrajectoryJsonValue(request.requestConfigJson)
             }
         }
         TrajectoryOverviewSection(TrajL.tabUsage, onOpen = { onOpen(TrajRequestTab.Usage) }) {
@@ -158,16 +156,9 @@ private fun RequestOptions(configJson: String?) {
         }
         return
     }
-    SelectableOutput {
-        Column {
-            Text(TrajL.optionsJson, fontSize = 12.sp, color = T.Text3, modifier = Modifier.padding(bottom = 6.dp))
-            Text(
-                prettyJson(configJson).breakAnywhere(),
-                style = T.Mono.copy(lineHeight = 20.sp),
-                softWrap = true,
-                modifier = Modifier.fillMaxWidth(),
-            )
-        }
+    Column {
+        Text(TrajL.optionsJson, fontSize = 12.sp, color = T.Text3, modifier = Modifier.padding(bottom = 6.dp))
+        TrajectoryJsonValue(configJson)
     }
 }
 

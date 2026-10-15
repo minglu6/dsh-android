@@ -1,25 +1,6 @@
-import { useEffect, useState } from 'react'
-import { createPortal } from 'react-dom'
+import { useEffect } from 'react'
 import type { Context as ClientContext } from '@deepseek-ai/cordis'
 import { installHostUiStyles } from './host-ui-styles.ts'
-
-const NS = 'pocket.host-ui'
-const messages = {
-  zh: {
-    waiting: '请求的设置页“{section}”尚未注册。插件就绪后将自动打开；也可以浏览当前已注册的设置。',
-    unsupported: '此 Host 的设置导航接口不兼容，无法直接打开“{section}”。请从设置导航中选择页面。',
-    settings: '浏览已注册的设置',
-    dismiss: '返回完整界面',
-  },
-  en: {
-    waiting: 'The requested settings section “{section}” is not registered yet. It will open when its plugin is ready, or you can browse the currently registered settings.',
-    unsupported: 'This Host does not expose compatible settings navigation for “{section}”. Please select the page from Settings.',
-    settings: 'Browse registered settings',
-    dismiss: 'Return to the full interface',
-  },
-}
-
-type MessageKey = keyof typeof messages.en
 
 /** Public launcher owner props in the shipped Host. openSection is NOT a launcher prop. */
 type LauncherOwnerProps = {
@@ -34,7 +15,6 @@ type LauncherProps = LauncherOwnerProps & {
   section: string
   slots: ClientContext['slots']
   finish: () => void
-  t: (key: MessageKey) => string
   useSessionReadiness: <T>(select: (state: { phase: string }) => T) => T
 }
 
@@ -55,23 +35,20 @@ function sectionNavigator(slots: ClientContext['slots']): ((id: string) => void)
 }
 
 /** A temporary launcher occupant; the official launcher resumes after navigation. */
-export function HostUiLauncher({ section, slots, finish, openSettings, t, useSessionReadiness }: LauncherProps) {
+export function HostUiLauncher({ section, slots, finish, openSettings, useSessionReadiness }: LauncherProps) {
   const ready = useSessionReadiness(state => state.phase === 'ready')
-  const [problem, setProblem] = useState<MessageKey>('waiting')
   useEffect(() => {
     let finished = false
+    let shown = false
     const navigate = () => {
-      if (!ready) return
-      if (finished) return
-      if (!slots.entries('settings.section').some(entry => entry.options.id === section)) {
-        setProblem('waiting')
-        return
+      if (!ready || finished) return
+      if (!shown) {
+        shown = true
+        queueMicrotask(() => { if (shown) openSettings() })
       }
+      if (!slots.entries('settings.section').some(entry => entry.options.id === section)) return
       const openSection = sectionNavigator(slots)
-      if (!openSection) {
-        setProblem('unsupported')
-        return
-      }
+      if (!openSection) return
       finished = true
       // The official shell closes settings when its initial session snapshot
       // introduces onboarding. Navigate after that render's effects, not before it.
@@ -87,21 +64,13 @@ export function HostUiLauncher({ section, slots, finish, openSettings, t, useSes
     navigate()
     return () => {
       finished = false
+      shown = false
       offSections()
       offShell()
     }
-  }, [section, slots, finish, ready])
+  }, [section, slots, finish, openSettings, ready])
 
-  return createPortal(
-    <aside data-pocket-ui-notice="" role="status" aria-live="polite">
-      <p>{t(problem).replace('{section}', () => section)}</p>
-      <div>
-        <button type="button" onClick={() => { finish(); openSettings() }}>{t('settings')}</button>
-        <button type="button" onClick={finish}>{t('dismiss')}</button>
-      </div>
-    </aside>,
-    document.body,
-  )
+  return null
 }
 
 /** Returns false on ordinary desktop windows, leaving all existing registrations intact. */
@@ -112,7 +81,6 @@ export function installHostUi(ctx: ClientContext): boolean {
   const section = query.get('section')
   // Without a deep link keep the entire official client, including its account launcher.
   if (!section) return true
-  ctx.effect(() => ctx.locale.register(NS, messages), 'pocket:host-ui-locale')
   let completed = false
   ctx.inject(['sessions'], (scope) => {
     scope.slots.inject('settings.launcher', () => {
@@ -124,7 +92,6 @@ export function installHostUi(ctx: ClientContext): boolean {
       const unregister = scope.slots.register({
         name: 'settings.launcher',
         priority: -100,
-        locale: NS,
         inject: () => ({ section, slots: scope.slots, finish, hooks: { sessionReadiness: scope.sessions.list } }),
       }, HostUiLauncher)
       return unregister

@@ -1,0 +1,6 @@
+:root { --dsw-font: sans-serif; --dsw-radius-sm: 8px; --dsw-radius-md: 12px; --ds-ease-in-out: cubic-bezier(.4,0,.2,1); --dsw-static-neutral-bluish-00: #fff; }
+html, body, #root { margin: 0; width: 100%; height: 100%; overflow: hidden; }
+body { background: var(--dsw-alias-bg-document-preview); color: var(--dsw-alias-label-primary); font-family: var(--dsw-font); }
+.status { display: flex; align-items: center; justify-content: center; height: 100%; padding: 16px; box-sizing: border-box; color: var(--dsw-alias-label-secondary); font-size: 14px; }
+/* The native page owns navigation. Workbook touch gestures own just the grid. */
+.fortune-container { overscroll-behavior: contain; }

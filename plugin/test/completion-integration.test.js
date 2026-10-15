@@ -125,9 +125,16 @@ test('WS and desktop share unread; view clears all; follow does not view; reconn
   f.emit('status', ['s', true])
   f.emit('status', ['s', false])
   assert.equal((await a.call('completion.state')).result.revision, cleared.revision)
+  const disconnected = Promise.withResolvers()
+  const disconnect = f.server.completion.disconnect.bind(f.server.completion)
+  t.mock.method(f.server.completion, 'disconnect', (client) => {
+    disconnect(client)
+    disconnected.resolve()
+  })
   const bClosed = once(b.ws, 'close')
   b.ws.close()
   await bClosed
+  await disconnected.promise
   f.emit('status', ['s', true])
   f.emit('status', ['s', false])
   const unread = (await a.call('completion.state')).result

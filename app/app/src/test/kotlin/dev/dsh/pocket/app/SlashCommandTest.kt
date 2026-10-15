@@ -7,6 +7,7 @@ import androidx.compose.ui.test.assertTextContains
 import androidx.compose.ui.test.hasSetTextAction
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.performScrollTo
+import androidx.compose.ui.test.assertIsNotEnabled
 import dev.dsh.pocket.protocol.FrameTransport
 import dev.dsh.pocket.protocol.PocketClient
 import dev.dsh.pocket.protocol.PocketJson
@@ -17,6 +18,7 @@ import kotlinx.coroutines.flow.emptyFlow
 import org.junit.Assert.assertEquals
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performTextInput
 import org.junit.Before
@@ -28,7 +30,7 @@ import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
 
 /**
- * Slash menu must consume the typed `/` and wire each row like desktop / Plus sheet.
+ * Slash typing and the + launcher share the desktop command source and action dispatch.
  * Chat top bar must not show the connection StatusDot (drawer keeps it).
  */
 @RunWith(RobolectricTestRunner::class)
@@ -82,11 +84,11 @@ class SlashCommandTest {
         rule.onNodeWithTag("composerInput").performTextInput("/")
         rule.mainClock.advanceTimeBy(1500)
         rule.waitForIdle()
-        rule.onNodeWithText("/inspect-worktree").performScrollTo().assertIsDisplayed()
-        rule.onNode(hasSetTextAction() and hasText("搜索指令")).performTextInput("inspect")
+        rule.onNodeWithText("inspect-worktree").performScrollTo().assertIsDisplayed()
+        rule.onNode(hasSetTextAction() and hasText("搜索…")).performTextInput("inspect")
         rule.waitForIdle()
-        rule.onNodeWithText("/access-team").assertDoesNotExist()
-        rule.onNodeWithText("/inspect-worktree").performScrollTo().performClick()
+        rule.onNodeWithText("access-team").assertDoesNotExist()
+        rule.onNodeWithText("inspect-worktree").performScrollTo().performClick()
         rule.waitForIdle()
         rule.onNodeWithTag("composerInput").assertTextContains("/inspect-worktree", substring = true)
     }
@@ -96,20 +98,50 @@ class SlashCommandTest {
         rule.onNodeWithTag("composerInput").performTextInput("/")
         rule.mainClock.advanceTimeBy(1500)
         rule.waitForIdle()
-        rule.onNodeWithText("/access-team").performScrollTo().performClick()
+        rule.onNodeWithText("access-team").performScrollTo().performClick()
         rule.mainClock.advanceTimeBy(1500)
         rule.waitForIdle()
         rule.onNodeWithText("Team policy").assertIsDisplayed()
-        rule.onNodeWithText("/access-team").assertDoesNotExist()
+        rule.onNodeWithText("access-team").assertDoesNotExist()
     }
 
-    private fun withHostCatalog(block: () -> Unit) {
+
+    @Test fun plusAndSlashExposeTheSameFullHostCatalog() = withHostCatalog {
+        rule.setContent { PocketTheme { ChatRoot(onMenu = {}) } }
+        rule.onNodeWithContentDescription(L.sectionAdd()).performClick()
+        rule.onNodeWithText("模型").performScrollTo().assertIsDisplayed()
+        rule.onNodeWithText("access-team").performScrollTo().assertIsDisplayed()
+        rule.onNodeWithText("inspect-worktree").performScrollTo().assertIsDisplayed()
+        androidx.test.espresso.Espresso.pressBack()
+        rule.onNodeWithTag("composerInput").performTextInput("/")
+        rule.onNodeWithText("模型").performScrollTo().assertIsDisplayed()
+        rule.onNodeWithText("access-team").performScrollTo().assertIsDisplayed()
+        rule.onNodeWithText("inspect-worktree").performScrollTo().assertIsDisplayed()
+    }
+
+    @Test fun plusDismissalPreservesComposerAndOfflineActionsStayDisabled() = withHostCatalog(
+        commands = """{"commands":[{"name":"plan","definitionId":"@deepseek-ai/dsh-plan-mode"}]}""",
+    ) {
+        Pocket.ops.value += "attachments.upload"
+        rule.setContent { PocketTheme { ChatRoot(onMenu = {}) } }
+        rule.onNodeWithTag("composerInput").performTextInput("keep this draft")
+        rule.onNodeWithContentDescription(L.sectionAdd()).performClick()
+        rule.onNodeWithText("计划").assertIsDisplayed()
+        rule.runOnIdle { Pocket.status.value = mapOf("p1" to Dot.Offline) }
+        rule.onNodeWithText("计划").assertIsNotEnabled()
+        rule.onNodeWithText(L.file()).assertIsNotEnabled()
+        androidx.test.espresso.Espresso.pressBack()
+        rule.onNodeWithTag("composerInput").assertTextContains("keep this draft")
+    }
+    private fun withHostCatalog(
+        commands: String = """{"commands":[
+            {"name":"access-team","description":"Choose the workspace policy","definitionId":"@deepseek-ai/dsh-permission-presets"},
+            {"name":"inspect-worktree","description":"Inspect repository changes","definitionId":"team/worktree","input":{"hint":"arguments"}}
+        ]}""",
+        block: () -> Unit,
+    ) {
         val client = PocketClient()
         val onFrame = client.javaClass.getDeclaredMethod("onFrame", String::class.java).apply { isAccessible = true }
-        val commands = """{"commands":[
-            {"name":"access-team","description":"Choose the workspace policy","definitionId":"@deepseek-ai/dsh-permission-presets"},
-            {"name":"inspect-worktree","description":"Inspect repository changes","definitionId":"team/worktree"}
-        ]}"""
         val permissions = """{"options":[{"value":"team","name":"Team policy"}],"defaultOptions":[{"value":"team","name":"Team policy"}],"defaultPreset":"team"}"""
         val transport = object : FrameTransport {
             override val route = Route.WsLocal

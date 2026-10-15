@@ -165,7 +165,6 @@ private fun Root(deepLink: MutableStateFlow<PairingLink?>) {
                 onConnections = { screen = Screen.Connections },
                 onModels = { screen = Screen.Models },
                 onPlugins = { screen = Screen.BuiltInPlugins },
-                onSchedule = { panelReturn = Screen.Settings; screen = Screen.Schedule },
                 onCreatePreset = {
                     pendingCreatorPreset = "cordis"
                     Pocket.closeChat()
@@ -174,7 +173,14 @@ private fun Root(deepLink: MutableStateFlow<PairingLink?>) {
             )
             Screen.General -> GeneralSettingsScreen(onBack = { screen = Screen.Settings })
             Screen.Models -> ModelsSettingsScreen(onBack = { screen = Screen.Settings })
-            Screen.Plugins -> PluginsSettingsScreen(onBack = { screen = panelReturn })
+            Screen.Plugins -> PluginsSettingsScreen(
+                onBack = { screen = panelReturn },
+                onCreatePlugin = {
+                    pendingCreatorPreset = "cordis"
+                    Pocket.closeChat()
+                    screen = Screen.Chat
+                },
+            )
             Screen.BuiltInPlugins -> BuiltInPluginsScreen(onBack = { screen = Screen.Settings })
             Screen.Schedule -> ScheduleSettingsScreen(
                 onBack = { screen = panelReturn },

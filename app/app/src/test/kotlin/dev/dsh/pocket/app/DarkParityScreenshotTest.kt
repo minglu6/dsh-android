@@ -63,6 +63,6 @@ class DarkParityScreenshotTest {
     }
 
     @Test fun dark_settings() = show("08-settings-dark") {
-        SettingsScreen({}, {}, {}, {}, {}, {})
+        SettingsScreen(onBack = {}, onGeneral = {}, onConnections = {}, onModels = {}, onPlugins = {})
     }
 }

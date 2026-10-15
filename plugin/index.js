@@ -28,6 +28,7 @@ import { listAdvertiseNetworks, pickBindHost, selectNetwork } from './src/advert
 import { loadOrCreateInstanceId } from './src/instance-id.js'
 import { startMdnsAdvertise } from './src/mdns-advertise.js'
 import { collectConnectionDiagnostics } from './src/diagnostics.js'
+import { createOfficePreviewOps } from './src/office-preview.js'
 
 export const name = 'dsh-plugin-pocket'
 // webServer is optional: Cordis `inject` entries are all required, so the
@@ -180,6 +181,13 @@ export function apply(ctx, config = {}) {
   ctx.inject(['commands', 'agents'], (c) => { c.effect(() => server.registerOps(commandOps(c.commands, c.agents))) })
   ctx.inject(['workspaceFiles', 'sessions'], (c) => {
     c.effect(() => server.registerOps(filesOps(c.workspaceFiles, c.sessions, c.get?.('sandboxPolicy'))))
+  })
+  ctx.inject(['officeToPdf', 'workspaceFiles', 'sessions', 'sandboxPolicy'], (c) => {
+    c.effect(() => {
+      const preview = createOfficePreviewOps(c)
+      const unregister = server.registerOps(preview.ops)
+      return () => { preview.dispose(); unregister() }
+    })
   })
   ctx.inject(['jobController'], (c) => { c.effect(() => server.registerOps(jobsOps(c.jobController))) })
   ctx.inject(['terminalController', 'agents'], (c) => {

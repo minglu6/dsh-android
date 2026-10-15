@@ -1,12 +1,22 @@
 package dev.dsh.pocket.app
 
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.rotate
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -153,8 +163,8 @@ internal fun PluginInventoryContent(snapshot: JsonElement) {
     var selectedId by rememberSaveable { mutableStateOf<String?>(null) }
     var presetOpen by rememberSaveable { mutableStateOf(true) }
     var globalOpen by rememberSaveable { mutableStateOf(false) }
-    var expanded by rememberSaveable { mutableStateOf<String?>(null) }
     var choosePreset by remember { mutableStateOf(false) }
+    var expanded by rememberSaveable { mutableStateOf<String?>(null) }
     val presets = snapshot["agentPresets"].arr().orEmpty()
     val entries = snapshot["entries"].arr().orEmpty()
     val selected = inventorySelectedPreset(presets, selectedId)
@@ -164,43 +174,81 @@ internal fun PluginInventoryContent(snapshot: JsonElement) {
     val selectedRows = selected["rows"].arr().orEmpty()
     val otherMatches = if (searching) presets.filter { it != selected && it["rows"].arr().orEmpty().any { row -> inventoryMatches(row, query, english) } } else emptyList()
 
-    OutlinedTextField(query, { query = it }, label = { Text(inventoryText("搜索插件", "Search plugins")) },
-        singleLine = true, modifier = Modifier.fillMaxWidth().padding(horizontal = 18.dp).testTag("plugins.inventory.search"))
+    val searchLabel = inventoryText("搜索插件", "Search plugins")
+    Row(
+        Modifier.fillMaxWidth().padding(horizontal = 18.dp).height(36.dp)
+            .background(T.Surface, T.R12).border(0.5.dp, ThemeState.colors.BorderL4, T.R12)
+            .padding(horizontal = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Icon(D.search, null, Modifier.size(16.dp), tint = T.Text3)
+        BasicTextField(
+            query, { query = it }, singleLine = true,
+            textStyle = TextStyle(color = T.Ink, fontFamily = LocalFonts.text, fontSize = 13.sp),
+            modifier = Modifier.weight(1f).testTag("plugins.inventory.search").semantics { contentDescription = searchLabel },
+            decorationBox = { inner ->
+                Box {
+                    if (query.isEmpty()) Text(searchLabel, color = T.Text3, fontSize = 13.sp)
+                    inner()
+                }
+            },
+        )
+    }
     if (entries.isEmpty() && presets.isEmpty()) InventoryNote(inventoryText("暂无插件。", "No plugins are available."))
     if (searching && globalRows.isEmpty() && selectedRows.none { inventoryMatches(it, query, english) } && otherMatches.isEmpty()) {
         InventoryNote(inventoryText("没有匹配的插件。", "No matching plugins."))
     }
     if (selected != null) {
         val rows = selectedRows.filter { inventoryMatches(it, query, english) }
-        InventoryGroup(inventoryText("会话插件", "Session plugins"), inventoryText("由 Agent 预设按会话组成", "Composed per session by agent presets"), rows.size,
-            presetOpen || searching, { presetOpen = !presetOpen })
-        Box(Modifier.padding(horizontal = 18.dp)) {
-            TextButton({ choosePreset = true }, Modifier.testTag("plugins.inventory.preset")) {
-                val suffix = when {
-                    selected["broken"].str() != null -> inventoryText("（加载失败）", " (failed to load)")
-                    selected["isDefault"].bool() == true -> inventoryText("（默认）", " (default)")
-                    else -> ""
-                }
-                Text(presetName(selected) + suffix)
-                Icon(D.chevronDown, inventoryText("选择要查看的 Agent 预设", "Choose the agent preset to inspect"), Modifier.padding(start = 6.dp).size(16.dp))
+        InventoryGroup(
+            inventoryText("会话插件", "Session plugins"),
+            inventoryText("由 Agent 预设按会话组成", "Composed per session by agent presets"),
+            rows.size, presetOpen || searching, { presetOpen = !presetOpen },
+        ) {
+            fun label(preset: JsonElement): String = presetName(preset) + when {
+                preset["broken"].str() != null -> inventoryText("（加载失败）", " (failed to load)")
+                preset["isDefault"].bool() == true -> inventoryText("（默认）", " (default)")
+                else -> ""
             }
-            DropdownMenu(choosePreset, { choosePreset = false }) {
-                presets.forEach { preset -> DropdownMenuItem(text = { Text(presetName(preset)) }, onClick = {
-                    selectedId = preset["id"].str(); choosePreset = false; expanded = null
-                }) }
+            Box(Modifier.weight(1f), contentAlignment = Alignment.CenterEnd) {
+                Row(
+                    Modifier.widthIn(max = 240.dp).height(36.dp).clip(T.R12).background(T.Fill2)
+                        .clickable { choosePreset = !choosePreset }
+                        .testTag("plugins.inventory.preset")
+                        .semantics { contentDescription = inventoryText("选择要查看的 Agent 预设", "Choose the agent preset to inspect") }
+                        .padding(horizontal = 14.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                    Text(label(selected), color = T.Ink, fontSize = 14.sp, maxLines = 1,
+                        overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
+                    Icon(D.chevronDown, null, Modifier.size(14.dp), tint = T.Ink)
+                }
+                DropdownMenu(choosePreset, { choosePreset = false }, containerColor = T.Surface, shape = T.R12) {
+                    presets.forEach { preset ->
+                        val chosen = preset["id"].str() == selected["id"].str()
+                        DropdownMenuItem(
+                            text = { Text(label(preset), color = T.Ink, fontSize = 14.sp) },
+                            trailingIcon = { if (chosen) Icon(D.check, null, Modifier.size(14.dp), tint = T.Ink) },
+                            onClick = { selectedId = preset["id"].str(); choosePreset = false },
+                        )
+                    }
+                }
             }
         }
         if (presetOpen || searching) {
             selected["broken"].str()?.let { InventoryNote(it, true) }
             selectedRows.forEachIndexed { index, row ->
                 if (inventoryMatches(row, query, english)) {
-                    val key = "preset:${selected["id"].str()}:$index"
-                    InventoryRow(row, english, expanded == key, { expanded = if (expanded == key) null else key }, preset = selected)
+                    val rowKey = "preset:${selected["id"].str()}:$index"
+                    InventoryRow(row, english, expanded == rowKey,
+                        { expanded = if (expanded == rowKey) null else rowKey }, preset = selected)
                 }
             }
             if (otherMatches.isNotEmpty()) {
                 InventoryNote(inventoryText("其他预设中也有匹配的插件：", "Matching plugins in other presets:"))
-                otherMatches.forEach { preset -> TextButton({ selectedId = preset["id"].str(); expanded = null }, Modifier.padding(horizontal = 18.dp)) { Text(presetName(preset)) } }
+                otherMatches.forEach { preset -> TextButton({ selectedId = preset["id"].str() }, Modifier.padding(horizontal = 18.dp)) { Text(presetName(preset)) } }
             }
         }
     }
@@ -208,21 +256,32 @@ internal fun PluginInventoryContent(snapshot: JsonElement) {
         InventoryGroup(inventoryText("全局插件", "Global plugins"), inventoryText("系统与所有会话共用", "Shared by the system and every session"), globalRows.size,
             globalOpen || searching, { globalOpen = !globalOpen })
         if (globalOpen || searching) globalRows.forEach { row ->
-            val key = "global:${row["entryId"].str()}"
-            InventoryRow(row, english, expanded == key, { expanded = if (expanded == key) null else key },
-                providers = inventoryProviders(row, presets), onPreset = { selectedId = it["id"].str(); presetOpen = true; expanded = null })
+            val rowKey = "global:${row["entryId"].str()}"
+            InventoryRow(row, english, expanded == rowKey,
+                { expanded = if (expanded == rowKey) null else rowKey },
+                providers = inventoryProviders(row, presets), onPreset = { selectedId = it["id"].str(); presetOpen = true })
         }
     }
 }
 
 @Composable
-private fun InventoryGroup(title: String, subtitle: String, count: Int, open: Boolean, onToggle: () -> Unit) {
-    Column(Modifier.fillMaxWidth().clickable(onClick = onToggle).padding(start = 20.dp, end = 20.dp, top = 24.dp, bottom = 8.dp)) {
-        Row {
-            Text("$title · $count", Modifier.weight(1f), fontWeight = FontWeight.Medium)
-            Icon(if (open) D.chevronDown else D.chevronRight, if (open) inventoryText("收起", "Collapse") else inventoryText("展开", "Expand"), Modifier.size(18.dp))
+private fun InventoryGroup(
+    title: String, subtitle: String, count: Int, open: Boolean, onToggle: () -> Unit,
+    action: @Composable RowScope.() -> Unit = {},
+) {
+    Column(Modifier.fillMaxWidth().padding(start = 18.dp, end = 18.dp, top = 12.dp, bottom = 10.dp)) {
+        Row(Modifier.fillMaxWidth().heightIn(min = 36.dp), verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Row(Modifier.clickable(onClick = onToggle).heightIn(min = 36.dp),
+                verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Icon(D.chevronDown, if (open) inventoryText("收起", "Collapse") else inventoryText("展开", "Expand"),
+                    Modifier.size(12.dp).rotate(if (open) 0f else -90f), tint = T.Ink)
+                Text(title, color = T.Ink, fontSize = 14.sp, fontWeight = FontWeight.Normal)
+            }
+            action()
         }
-        Text(subtitle, fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Text("$subtitle · $count ${inventoryText("个", "plugins")}", Modifier.padding(start = 20.dp),
+            fontSize = 12.sp, lineHeight = 18.sp, color = T.Text3)
     }
 }
 
@@ -233,38 +292,81 @@ private fun InventoryNote(text: String, failed: Boolean = false) {
 }
 
 @Composable
-private fun InventoryRow(row: JsonElement, english: Boolean, expanded: Boolean, onToggle: () -> Unit,
-    preset: JsonElement? = null, providers: List<JsonElement> = emptyList(), onPreset: (JsonElement) -> Unit = {}) {
+private fun InventoryRow(
+    row: JsonElement, english: Boolean, expanded: Boolean, onToggle: () -> Unit,
+    preset: JsonElement? = null, providers: List<JsonElement> = emptyList(), onPreset: (JsonElement) -> Unit = {},
+) {
     val state = inventoryEnablement(row, providers.isNotEmpty())
+    val title = inventoryTitle(row, english)
     SettingsCard {
         Column(Modifier.fillMaxWidth()) {
-            Column(Modifier.fillMaxWidth().clickable(onClick = onToggle).padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                Text(inventoryTitle(row, english), fontWeight = FontWeight.Medium)
-                Text(inventoryState(state) + if (row["enabled"].bool() == true) " · " + inventoryPhase(row) else "", fontSize = 12.sp,
-                    color = if (state == "failed") MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant)
-                inventoryLocalized(row["meta"]["description"], english)?.takeIf { it.isNotBlank() }?.let {
-                    Text(it, fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Column(
+                Modifier.fillMaxWidth().clickable(onClick = onToggle).padding(horizontal = 14.dp, vertical = 12.dp),
+                verticalArrangement = Arrangement.spacedBy(2.dp),
+            ) {
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(title, Modifier.weight(1f), color = T.Ink, fontWeight = FontWeight.Medium,
+                        fontSize = 14.sp, lineHeight = 20.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    if (row["enabled"].bool() == true) when (row["fiberPhase"].str()) {
+                        "pending" -> Box(Modifier.size(5.dp).background(T.Text3, androidx.compose.foundation.shape.CircleShape))
+                        "loading", "unloading" -> CircularProgressIndicator(Modifier.size(8.dp), color = T.Text3, strokeWidth = 1.dp)
+                    }
+                    if (state != "enabled") {
+                        val color = when (state) {
+                            "failed" -> T.Err
+                            "conditional" -> T.WarnText
+                            "preset" -> T.Accent
+                            else -> T.Text2
+                        }
+                        Text(inventoryState(state), color = color, fontSize = 11.sp,
+                            modifier = Modifier.background(if (state == "disabled") T.Fill2 else color.copy(alpha = 0.08f), T.R4)
+                                .padding(horizontal = 6.dp, vertical = 2.dp))
+                    }
+                    Icon(D.chevronDown, null, Modifier.size(12.dp).rotate(if (expanded) 180f else 0f), tint = T.Text3)
                 }
-                row["entryId"].str()?.removePrefix("include:")?.takeIf { it != inventoryTitle(row, english) }?.let { Text(it, style = T.Mono, fontSize = 11.sp) }
-                Text(if (expanded) inventoryText("收起详情", "Hide details") else inventoryText("查看详情", "View details"), fontSize = 12.sp, color = MaterialTheme.colorScheme.primary)
+                inventoryLocalized(row["meta"]["description"], english)?.takeIf { it.isNotBlank() }?.let {
+                    Text(it, fontSize = 12.sp, lineHeight = 18.sp, color = T.Text3,
+                        maxLines = if (expanded) Int.MAX_VALUE else 2, overflow = TextOverflow.Ellipsis)
+                }
+                row["entryId"].str()?.removePrefix("include:")?.takeIf { it != title }?.let {
+                    Box(Modifier.padding(top = 6.dp)) {
+                        Text(it, style = T.Mono.copy(fontSize = 12.sp, lineHeight = 18.sp, color = T.Text2),
+                            maxLines = 1, overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.background(T.Fill2, T.R4).padding(horizontal = 6.dp, vertical = 1.dp))
+                    }
+                }
             }
             row["meta"]["error"].str()?.let { InventoryNote(inventoryText("包元信息错误：", "Package metadata error: ") + it, true) }
             if (expanded) {
-                HorizontalDivider()
+                HorizontalDivider(color = T.Border, thickness = 0.5.dp)
                 SelectionContainer {
-                    Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        row["entryId"].str()?.let { Text(it, style = T.Mono, fontSize = 12.sp) }
-                        Text(inventoryText("完整名称：", "Module: ") + row["moduleName"].str().orEmpty(), fontSize = 13.sp)
-                        Text(inventoryText("配置状态：", "Configuration: ") + if (providers.isEmpty()) inventoryState(state) else inventoryText("全局已停用，由 Agent 预设按会话提供", "Disabled globally; agent presets provide it per session"), fontSize = 13.sp)
-                        if (preset != null) Text(inventoryText("来自：", "From: ") + presetName(preset), fontSize = 13.sp)
-                        row["condition"].str()?.let { Text(inventoryText("禁用条件：", "Disabled when: ") + it, style = T.Mono, fontSize = 12.sp) }
+                    Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        row["entryId"].str()?.let { Text(it, style = T.Mono.copy(fontSize = 12.sp, lineHeight = 18.sp)) }
+                        InventoryFact(inventoryText("完整名称", "Module"), row["moduleName"].str().orEmpty())
+                        if (preset != null) InventoryFact(inventoryText("来自", "From"), presetName(preset))
+                        InventoryFact(inventoryText("配置状态", "Configuration"), if (providers.isEmpty()) inventoryState(state)
+                            else inventoryText("全局已停用，由 Agent 预设按会话提供", "Disabled globally; agent presets provide it per session"))
                         val showRuntime = if (preset != null) row["fiberPhase"].str() != null else providers.isEmpty() && row["enabled"].bool() == true
-                        if (showRuntime) Text(inventoryText("运行状态：", "Status: ") + inventoryPhase(row), fontSize = 13.sp)
-                        if (providers.isNotEmpty()) Text(inventoryText("启用于：", "Enabled in: ") + providers.joinToString(" · ") { presetName(it) }, fontSize = 13.sp)
+                        if (showRuntime) InventoryFact(inventoryText("运行状态", "Status"), inventoryPhase(row))
+                        row["condition"].str()?.let { InventoryFact(inventoryText("禁用条件", "Disabled when"), it) }
+                        if (providers.isNotEmpty()) {
+                            InventoryFact(inventoryText("启用于", "Enabled in"), providers.joinToString(" · ") { presetName(it) })
+                        }
                     }
                 }
-                if (providers.isNotEmpty()) TextButton({ onPreset(providers.first()) }, Modifier.padding(horizontal = 8.dp)) { Text(inventoryText("去预设分组查看", "View in the preset group")) }
+                if (providers.isNotEmpty()) TextButton({ onPreset(providers.first()) }, Modifier.padding(horizontal = 8.dp)) {
+                    Text(inventoryText("去预设分组查看", "View in the preset group"))
+                }
             }
         }
+    }
+}
+
+@Composable
+private fun InventoryFact(label: String, value: String) {
+    Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+        Text(label, Modifier.width(76.dp), color = T.Text3, fontSize = 12.sp, lineHeight = 18.sp)
+        Text(value, Modifier.weight(1f), color = T.Ink, fontSize = 12.sp, lineHeight = 18.sp)
     }
 }

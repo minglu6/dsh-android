@@ -41,7 +41,8 @@ class ModelSettingsTest {
         rule.setContent { PocketTheme { Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) { content() } } }
     }
 
-    @Test fun modelsScreenLoadsAndEditsNativelyWithoutHostUiCapability() {
+
+    @Test fun modelsScreenEditsNativelyRegardlessOfHostUiCapability() {
         val client = PocketClient()
         val onFrame = client.javaClass.getDeclaredMethod("onFrame", String::class.java).apply { isAccessible = true }
         val requests = mutableListOf<String>()
@@ -89,9 +90,10 @@ class ModelSettingsTest {
         try {
             rule.setContent { PocketTheme { ModelsSettingsScreen {} } }
             rule.onNodeWithText("Gateway").assertExists()
-            rule.onNodeWithText("插件自定义界面").assertDoesNotExist()
+            rule.onNodeWithText(QoderText.Edit.zh).assertDoesNotExist()
             rule.runOnIdle {
                 name = "Updated Gateway"
+                Pocket.ops.value += "ui.open"
                 Pocket.modelSettingsRevision.value++
             }
             rule.onNodeWithText("Updated Gateway").assertExists()
@@ -117,6 +119,8 @@ class ModelSettingsTest {
             rule.onNodeWithText("保存").assertIsEnabled()
             assertEquals(draftText, rule.onNodeWithContentDescription("API 密钥").fetchSemanticsNode().config[SemanticsProperties.EditableText])
             assertFalse("models.settingsMutate" in requests)
+            rule.onNodeWithText("取消").performScrollTo().performClick()
+            rule.onNodeWithContentDescription("API 密钥").assertDoesNotExist()
         } finally {
             field.set(Pocket, previous)
             Pocket.modelSettingsRevision.value = previousRevision
@@ -124,6 +128,20 @@ class ModelSettingsTest {
             Pocket.status.value = previousStatus
             client.close()
         }
+    }
+
+    @Test fun accountNameUsesOfficialLocaleWithoutOverwritingCustomNames() {
+        val account = json("""{"provider":"deepseek-account","displayName":"DeepSeek Account"}""")
+        assertEquals("DeepSeek 账号", providerDisplayName(account, "deepseek-account"))
+        assertEquals("DeepSeek 账号 (deepseek-account)", providerOptionLabel(account, "deepseek-account"))
+        assertEquals("DeepSeek 账号", providerDisplayName(null, "deepseek-account"))
+        assertEquals("My Account", providerDisplayName(json("""{"displayName":"My Account"}"""), "deepseek-account"))
+        assertEquals("DeepSeek Account", providerDisplayName(json("""{"displayName":"DeepSeek Account","declared":true}"""), "deepseek-account"))
+        assertEquals("Team account", providerDisplayName(json("""{"displayName":"DeepSeek Account","profile":{"displayName":"Team account"}}"""), "deepseek-account"))
+        assertEquals("DeepSeek Account", providerDisplayName(account, "other-provider"))
+        Pocket.prefs.language = AppLanguage.En
+        assertEquals("DeepSeek Account", providerDisplayName(account, "deepseek-account"))
+        assertEquals("DeepSeek Account (deepseek-account)", providerOptionLabel(account, "deepseek-account"))
     }
 
     @Test fun disconnectDisablesOpenRemovalConfirmationAndKeepsCancelAvailable() {

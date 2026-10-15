@@ -72,6 +72,7 @@ fun TrajectoryDetailSheet(
         },
     ) {
         Spacer(Modifier.height(8.dp))
+        key(row.key) {
         when (tab) {
             TrajDetailTab.Overview -> TrajOverview(row, tabs, parentRequest, onOpenRequest, onOpenRequestTiming, toolCalls, onOpenTool) { tab = it }
             TrajDetailTab.Input, TrajDetailTab.Code -> {
@@ -100,6 +101,7 @@ fun TrajectoryDetailSheet(
             TrajDetailTab.Diff -> TrajSystemDiff(row)
             TrajDetailTab.SystemPrompt -> TrajPayload(row.rawDetail, missing = TrajL.recordSystemPromptMissing)
             TrajDetailTab.Tools -> TrajToolsCatalog(row.toolsJson)
+        }
         }
     }
 }
@@ -214,12 +216,14 @@ private fun TrajOverview(
         if (TrajDetailTab.Input in tabs || TrajDetailTab.Code in tabs) {
             val inputTab = if (TrajDetailTab.Code in tabs) TrajDetailTab.Code else TrajDetailTab.Input
             TrajectoryOverviewSection(inputTab.label, onOpen = { onOpen(inputTab) }) {
-                TrajCodePreview(row.inputDetail?.let { prettyJson(it) } ?: TrajL.recordNoPayload)
+                if (inputTab == TrajDetailTab.Code) {
+                    TrajCodePreview(codeProgram(row.toolName, row.inputDetail, row.schemaDetail)?.source ?: row.inputDetail.orEmpty())
+                } else TrajPayload(row.inputDetail, missing = TrajL.recordNoPayload, inset = false)
             }
         }
         if (TrajDetailTab.Output in tabs) {
             TrajectoryOverviewSection(TrajL.tabResult, onOpen = { onOpen(TrajDetailTab.Output) }) {
-                TrajCodePreview(row.outputDetail ?: TrajL.recordNoResult)
+                TrajPayload(row.outputDetail, missing = TrajL.recordNoResult, error = row.isError, inset = false)
             }
         }
         if (TrajDetailTab.Schema in tabs) {
@@ -247,7 +251,7 @@ private fun TrajOverview(
         }
         if (TrajDetailTab.RawOutput in tabs) {
             TrajectoryOverviewSection(TrajL.tabRawOutput, onOpen = { onOpen(TrajDetailTab.RawOutput) }) {
-                TrajCodePreview(row.rawDetail ?: row.outputDetail ?: TrajL.recordNoOutput)
+                TrajPayload(row.rawDetail ?: row.outputDetail, missing = TrajL.recordNoOutput, inset = false)
             }
         }
     }
@@ -418,7 +422,7 @@ private fun TrajToolsCatalog(toolsJson: String?) {
 
 
 @Composable
-private fun TrajPayload(value: String?, missing: String, error: Boolean = false) {
+private fun TrajPayload(value: String?, missing: String, error: Boolean = false, inset: Boolean = true) {
     if (value.isNullOrBlank()) {
         SelectableOutput {
             Text(missing, fontSize = 14.sp, color = T.Text3, modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp))
@@ -426,25 +430,12 @@ private fun TrajPayload(value: String?, missing: String, error: Boolean = false)
         return
     }
     val paths = remember(value) { extractWorkspacePaths(value) }
-    val shown = runCatching { prettyJson(value) }.getOrDefault(value).breakAnywhere()
     if (paths.isNotEmpty()) {
-        Column(Modifier.padding(horizontal = 14.dp, vertical = 4.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        Column(Modifier.padding(horizontal = if (inset) 14.dp else 0.dp, vertical = 4.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
             paths.forEach { FileLinkChip(it) }
         }
     }
-    SelectableOutput {
-        Text(
-            shown,
-            style = T.Mono.copy(lineHeight = 20.sp, color = if (error) T.Err else T.Ink),
-            softWrap = true,
-            modifier = Modifier
-                .padding(horizontal = 14.dp)
-                .fillMaxWidth()
-                .clip(T.R12)
-                .background(if (error) T.Err.copy(alpha = 0.06f) else T.Fill2)
-                .padding(14.dp),
-        )
-    }
+    TrajectoryJsonValue(value, modifier = Modifier.padding(horizontal = if (inset) 14.dp else 0.dp), error = error)
 }
 
 /** Pull likely workspace file paths from tool JSON / previews for preview chips. */
@@ -475,17 +466,11 @@ private fun TrajSchema(schemaDetail: String?) {
             Text(parsed.name, fontSize = 16.sp, fontWeight = FontWeight.SemiBold, color = T.Ink)
             Text(parsed.description, fontSize = 13.sp, color = T.Text2, lineHeight = 20.sp, modifier = Modifier.padding(top = 4.dp, bottom = 10.dp))
             Text(TrajL.recordParameters, fontSize = 12.sp, color = T.Text3, modifier = Modifier.padding(bottom = 6.dp))
-            Text(
-                SchemaPrettyJson.encodeToString(JsonElement.serializer(), parsed.parameters).breakAnywhere(),
-                style = T.Mono.copy(lineHeight = 20.sp),
-                softWrap = true,
-                modifier = Modifier.fillMaxWidth().clip(T.R12).background(T.Fill2).padding(14.dp),
-            )
+            TrajectoryJsonValue(parsed.parameters.toString())
         }
     }
 }
 
-private val SchemaPrettyJson = Json { prettyPrint = true; ignoreUnknownKeys = true }
 
 @Composable
 private fun TrajTiming(row: TrajRow) {

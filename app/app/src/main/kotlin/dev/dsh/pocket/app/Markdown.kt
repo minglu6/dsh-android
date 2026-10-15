@@ -379,8 +379,17 @@ private fun MdBlockView(block: MdBlock, bodySp: TextUnit, bodyColor: Color) {
             block.items.forEachIndexed { idx, item ->
                 if (idx > 0) Spacer(Modifier.height(6.dp))
                 Row(Modifier.fillMaxWidth()) {
-                    Text("${block.start + idx}.", color = T.Text2, fontSize = bodySp, modifier = Modifier.width(22.dp))
-                    Column(Modifier.weight(1f)) { item.forEach { MdBlockView(it, bodySp, bodyColor) } }
+                    Text(
+                        "${block.start + idx}.",
+                        style = TextStyle(
+                            color = T.Text2, fontFamily = LocalFonts.text,
+                            fontSize = bodySp, lineHeight = (bodySp.value + 10).sp,
+                        ),
+                        modifier = Modifier.width(22.dp).alignBy(FirstBaseline),
+                    )
+                    Column(Modifier.weight(1f).alignBy(FirstBaseline)) {
+                        item.forEach { MdBlockView(it, bodySp, bodyColor) }
+                    }
                 }
             }
         }

@@ -69,6 +69,53 @@ class MarkdownLayoutTest {
     @Test fun fileLinkFitsItsInlineSlotInDarkTheme() = checkFileLink(Appearance.Dark, 14)
     @Test fun fileLinkFitsItsInlineSlotWithLargeText() = checkFileLink(Appearance.Light, 22)
 
+    @Test fun orderedListMarkersAlignWithFirstLineInLightTheme() = checkOrderedList(Appearance.Light, 14)
+    @Test fun orderedListMarkersAlignWithFirstLineInDarkTheme() = checkOrderedList(Appearance.Dark, 14)
+    @Test fun orderedListMarkersAlignWithLargeText() = checkOrderedList(Appearance.Light, 22)
+
+    private fun checkOrderedList(appearance: Appearance, fontSize: Int) {
+        installHostSettingsFixture()
+        val previous = Pocket.prefs.appearance
+        try {
+            Pocket.prefs.appearance = appearance
+            rule.setContent {
+                PocketTheme {
+                    CompositionLocalProvider(LocalTextStyle provides androidx.compose.material3.MaterialTheme.typography.bodyLarge) {
+                        Box(Modifier.fillMaxWidth().background(T.Bg).padding(16.dp)) {
+                            MarkdownView(
+                                "### 建议\n\n1. **关注官网**：每年初教育部考试中心会公布全年考试计划，建议年初查看并提前报名\n" +
+                                    "2. **提前报名**：热门考点（北京、上海、广州等）考位紧张，建议提前1-2个月报名\n" +
+                                    "3. **成绩有效期**：托业成绩有效期为 **2年**，规划好考试时间",
+                                bodyFontSize = fontSize.sp,
+                            )
+                        }
+                    }
+                }
+            }
+            listOf("关注官网", "提前报名", "成绩有效期").forEachIndexed { index, label ->
+                val marker = rule.onNodeWithText("${index + 1}.")
+                val body = rule.onNodeWithText("$label：", substring = true)
+                val markerLayouts = mutableListOf<TextLayoutResult>()
+                val bodyLayouts = mutableListOf<TextLayoutResult>()
+                marker.performSemanticsAction(SemanticsActions.GetTextLayoutResult) { it(markerLayouts) }
+                body.performSemanticsAction(SemanticsActions.GetTextLayoutResult) { it(bodyLayouts) }
+                val markerLayout = markerLayouts.single()
+                val bodyLayout = bodyLayouts.single()
+                assertEquals("marker stays on one line", 1, markerLayout.lineCount)
+                assertTrue("body wraps on the phone", bodyLayout.lineCount > 1)
+                assertEquals(
+                    "number shares the first body baseline, not the multiline block center",
+                    body.fetchSemanticsNode().boundsInRoot.top + bodyLayout.firstBaseline,
+                    marker.fetchSemanticsNode().boundsInRoot.top + markerLayout.firstBaseline,
+                    1f,
+                )
+            }
+            rule.onRoot().captureRoboImage("build/screenshots/markdown-list-${appearance.name.lowercase()}-$fontSize.png")
+        } finally {
+            Pocket.prefs.appearance = previous
+        }
+    }
+
     private fun checkFileLink(appearance: Appearance, fontSize: Int) {
         installHostSettingsFixture()
         val previous = Pocket.prefs.appearance

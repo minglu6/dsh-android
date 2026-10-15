@@ -529,11 +529,23 @@ internal fun composerTrigger(text: String, cursor: Int): ComposerTrigger? {
     var start = end
     while (start > 0 && !text[start - 1].isWhitespace()) start--
     if (start == end) return null
-    val kind = text[start]
-    if (kind != '@' && kind != '/') return null
-    if (kind == '/' && text.take(start).isNotBlank()) return null
-    if (kind == '@' && (text.substring(start + 1, end).startsWith("[") || '"' in text.substring(start + 1, end))) return null
-    return ComposerTrigger(kind, start, end, text.substring(start + 1, end))
+    if (text[start] == '@') {
+        if (text.substring(start + 1, end).startsWith("[") || '"' in text.substring(start + 1, end)) return null
+        return ComposerTrigger('@', start, end, text.substring(start + 1, end))
+    }
+    for (index in end - 1 downTo start) {
+        if (text[index] != '/') continue
+        if (index > 0) {
+            val previous = text.codePointBefore(index)
+            val type = Character.getType(previous)
+            if (Character.isLetter(previous) || type == Character.DECIMAL_DIGIT_NUMBER.toInt() ||
+                type == Character.LETTER_NUMBER.toInt() || type == Character.OTHER_NUMBER.toInt() ||
+                previous == '_'.code || previous == '/'.code) continue
+            if (previous == ':'.code && index >= 2 && !text[index - 2].isWhitespace()) continue
+        }
+        return ComposerTrigger('/', index, end, text.substring(index + 1, end))
+    }
+    return null
 }
 
 internal fun replaceComposerToken(

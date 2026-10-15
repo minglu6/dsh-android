@@ -181,6 +181,8 @@ For `run_code`, 参数 label becomes **代码**.
 | Schema | name, description, parameters from call-time tools |
 | 计时 | 开始时间, 时长, 计时来源 |
 
+JSON 参数、结果、Schema 与请求选项共用可折叠树：折叠预览保留桌面前 4 个对象字段／前 5 个数组元素及 2 层预览规则。默认复制字符串原始值，对象／数组复制格式化 JSON；长按复制按钮提供桌面对应的值、JSON、格式化／紧凑 JSON 和属性路径菜单。复制不包含为换行插入的零宽字符；超深内容保留完整原文及复制能力。
+
 ---
 
 ### 3.6 Tool results & errors

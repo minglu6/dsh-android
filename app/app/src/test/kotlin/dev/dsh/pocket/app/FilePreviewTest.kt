@@ -54,10 +54,16 @@ class FilePreviewTest {
         }
     }
 
-    @Test fun officeAndArchivesNeverPretendToBeText() {
-        assertEquals(PreviewKind.Unsupported, previewKindFor("report.DOCX"))
-        assertEquals(PreviewKind.Unsupported, previewKindFor("table.xlsx"))
-        assertEquals(PreviewKind.Unsupported, previewKindFor("archive.zip"))
+    @Test fun officeFormatsUseTheirReadersAndUnsupportedBinariesNeverPretendToBeText() {
+        listOf("report.DOCX", "report.doc", "slides.ppt", "slides.PPTX").forEach {
+            assertEquals(PreviewKind.Office, previewKindFor(it))
+        }
+        listOf("table.xls", "table.XLSX").forEach {
+            assertEquals(PreviewKind.Workbook, previewKindFor(it))
+        }
+        listOf("archive.zip", "macros.xlsm", "table.xlsb", "text.odt", "slides.odp").forEach {
+            assertEquals(PreviewKind.Unsupported, previewKindFor(it))
+        }
         assertEquals(PreviewKind.Text, previewKindFor("notes.md"))
         assertEquals(PreviewKind.Pdf, previewKindFor("report.PDF"))
     }

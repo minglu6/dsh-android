@@ -164,6 +164,41 @@ class MentionUiTest {
         assertFalse(requests.any { it["op"].str() in setOf("sessions.create", "prompt") })
     }
 
+    @Test fun firstPlusMenuCreatesRealBlankSessionAndPreservesDraft() {
+        assertBlankCommandMenuPreparesSession(slash = false)
+    }
+
+    @Test fun firstSlashMenuCreatesRealBlankSessionAndPreservesTrigger() {
+        assertBlankCommandMenuPreparesSession(slash = true)
+    }
+
+    private fun assertBlankCommandMenuPreparesSession(slash: Boolean) {
+        Pocket.ops.value = setOf("sessions.create", "commands.list", "commands.execute")
+        val draft = if (slash) "/ins" else "保留尚未发送的草稿"
+        showChat()
+        rule.onNodeWithTag("composerInput").performTextInput(draft)
+        if (!slash) rule.onNodeWithContentDescription(L.sectionAdd()).performClick()
+        val create = request("sessions.create")
+        assertEquals("workspace", create["args"]["workspaceId"].str())
+        assertFalse(requests.any { it["op"].str() in setOf("commands.list", "prompt", "commands.execute") })
+        reply(create, """{"sessionId":"command-session"}""")
+        reply(request("follow"), """{"subId":"mention-sub"}""")
+        rule.waitForIdle()
+        assertFalse(requests.any { it["op"].str() == "commands.list" })
+        snapshot()
+        val catalog = request("commands.list")
+        assertEquals("command-session", catalog["args"]["sessionId"].str())
+        reply(catalog, """{"commands":[{"name":"inspect-host","description":"Host command"}]}""")
+        rule.onNodeWithText("inspect-host").assertIsDisplayed()
+        androidx.test.espresso.Espresso.pressBack()
+        assertCanonicalDraft(draft)
+        assertEquals("command-session", Pocket.chat.value?.sessionId)
+        assertTrue(Pocket.chat.value!!.loaded)
+        assertTrue(Pocket.chat.value!!.items.isEmpty())
+        assertNull(Pocket.firstPrompt.value)
+        assertFalse(requests.any { it["op"].str() in setOf("sessions.create", "prompt", "commands.execute") })
+    }
+
     @Test fun existingSessionSearchDoesNotCreateAnotherConversation() {
         Pocket.chat.value = ChatState("existing", loaded = true)
         showChat()

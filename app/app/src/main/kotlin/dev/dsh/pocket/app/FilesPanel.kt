@@ -27,8 +27,9 @@ import dev.dsh.pocket.protocol.arr
 import dev.dsh.pocket.protocol.bool
 import dev.dsh.pocket.protocol.get
 import dev.dsh.pocket.protocol.str
-import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.ensureActive
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.lifecycle.repeatOnLifecycle
 
 private fun ft(zh: String, en: String) = if (Pocket.prefs.language == AppLanguage.En) en else zh
 
@@ -47,82 +48,96 @@ internal fun workspaceFilesParentPath(path: String): String? =
 
 @Composable
 fun FilesSheet(sessionId: String, onDismiss: () -> Unit, onBack: (() -> Unit)? = null) {
-    var requestedPath by remember(sessionId) { mutableStateOf("") }
-    var path by remember(sessionId) { mutableStateOf("") }
-    var entries by remember(sessionId) { mutableStateOf<List<WorkspaceFileEntry>>(emptyList()) }
-    var loading by remember(sessionId) { mutableStateOf(true) }
-    var failure by remember(sessionId) { mutableStateOf<String?>(null) }
-    var truncated by remember(sessionId) { mutableStateOf(false) }
-    var generation by remember(sessionId) { mutableIntStateOf(0) }
-    var previewPath by remember(sessionId) { mutableStateOf<String?>(null) }
+    val host by Pocket.active.collectAsState()
+    var requestedPath by remember(host, sessionId) { mutableStateOf("") }
+    var path by remember(host, sessionId) { mutableStateOf("") }
+    var entries by remember(host, sessionId) { mutableStateOf<List<WorkspaceFileEntry>>(emptyList()) }
+    var loading by remember(host, sessionId) { mutableStateOf(true) }
+    var failure by remember(host, sessionId) { mutableStateOf<String?>(null) }
+    var truncated by remember(host, sessionId) { mutableStateOf(false) }
+    var generation by remember(host, sessionId) { mutableIntStateOf(0) }
+    var previewPath by remember(host, sessionId) { mutableStateOf<String?>(null) }
     val listState = rememberLazyListState()
     val sessions by Pocket.sessions.collectAsState()
-    val host by Pocket.active.collectAsState()
     val status by Pocket.status.collectAsState()
     val ops by Pocket.ops.collectAsState()
     val online = host != null && status[host] == Dot.Online
     val canList = online && "files.list" in ops
+    val canWatch = canList && "files.follow" in ops
+    val lifecycle = LocalLifecycleOwner.current.lifecycle
     val cwd = sessions.firstOrNull { it.sessionId == sessionId }?.cwd
     val reloadLabel = ft("重新读取", "Reload")
 
     fun load(target: String) {
         if (!canList) return
+        if (target != path) {
+            entries = emptyList()
+            truncated = false
+            loading = true
+        }
         requestedPath = target
         path = target
-        loading = true
         failure = null
         generation++
     }
 
-    LaunchedEffect(sessionId, generation, cwd) {
-        if (!canList) {
+    LaunchedEffect(host, sessionId, generation, cwd, canList, canWatch, previewPath, lifecycle) {
+        if (!canList || previewPath != null) {
             loading = false
             return@LaunchedEffect
         }
-        val requestGeneration = generation
+        val client = Pocket.clientOrNull() ?: return@LaunchedEffect
         val target = requestedPath
-        loading = true
-        failure = null
+        val requestGeneration = generation
+        fun currentRequest() = generation == requestGeneration && Pocket.active.value == host
         if (cwd.isNullOrBlank()) {
             entries = emptyList()
             loading = false
             return@LaunchedEffect
         }
-        try {
-            val result = Pocket.listFiles(sessionId, target.ifEmpty { "." })
-            ensureActive()
-            if (generation != requestGeneration) return@LaunchedEffect
-            val listedPath = result["path"].str() ?: target
-            // Never derive an up-navigation from an absolute or escaping path.
-            val relativePath = if (listedPath == ".") "" else listedPath
-            if (relativePath.startsWith('/') || relativePath.contains('\\') ||
-                relativePath.split('/').any { it == ".." } ||
-                (relativePath.length >= 2 && relativePath[1] == ':')
-            ) {
-                throw PocketError("workspace-file/outside-workspace", listedPath)
-            }
-            val listedEntries = result["entries"].arr().orEmpty().mapNotNull { entry ->
-                val name = entry["name"].str() ?: return@mapNotNull null
-                // A list entry is a single child, never another path.
-                val validName = name.isNotEmpty() && name != "." && name != ".." &&
-                    '/' !in name && '\\' !in name
-                WorkspaceFileEntry(name, if (validName) entry["type"].str() ?: "other" else "other")
-            }.sortedWith(compareBy<WorkspaceFileEntry> { it.type != "directory" }.thenBy(String.CASE_INSENSITIVE_ORDER) { it.name })
-            path = relativePath
-            entries = listedEntries
-            truncated = result["truncated"].bool() == true
-        } catch (cancelled: CancellationException) {
-            throw cancelled
-        } catch (error: Exception) {
-            ensureActive()
-            if (generation != requestGeneration) return@LaunchedEffect
-            entries = emptyList()
-            truncated = false
-            failure = filesFailure(error)
+        lifecycle.repeatOnLifecycle(Lifecycle.State.RESUMED) {
+            observeWorkspaceDirectory(
+                list = { watchedPath -> client.listFiles(sessionId, watchedPath ?: target.ifEmpty { "." }) },
+                changes = if (canWatch) client.followFiles(sessionId, target.ifEmpty { "." }) else null,
+                onListing = listing@{ result ->
+                    if (!currentRequest()) return@listing
+                    val listedPath = result["path"].str() ?: target
+                    // Never derive an up-navigation from an absolute or escaping path.
+                    val relativePath = if (listedPath == ".") "" else listedPath
+                    if (relativePath.startsWith('/') || relativePath.contains('\\') ||
+                        relativePath.split('/').any { it == ".." } ||
+                        (relativePath.length >= 2 && relativePath[1] == ':')
+                    ) {
+                        throw PocketError("workspace-file/outside-workspace", listedPath)
+                    }
+                    val listedEntries = result["entries"].arr().orEmpty().mapNotNull { entry ->
+                        val name = entry["name"].str() ?: return@mapNotNull null
+                        // A list entry is a single child, never another path.
+                        val validName = name.isNotEmpty() && name != "." && name != ".." &&
+                            '/' !in name && '\\' !in name
+                        WorkspaceFileEntry(name, if (validName) entry["type"].str() ?: "other" else "other")
+                    }.sortedWith(compareBy<WorkspaceFileEntry> { it.type != "directory" }.thenBy(String.CASE_INSENSITIVE_ORDER) { it.name })
+                    path = relativePath
+                    entries = listedEntries
+                    truncated = result["truncated"].bool() == true
+                    failure = null
+                    loading = false
+                    // Pin both reads and the next subscription to the directory actually displayed.
+                    // A symlink may change its target while this panel remains open.
+                    if (requestedPath != relativePath) {
+                        requestedPath = relativePath
+                        generation++
+                    }
+                },
+                onFailure = failed@{ error ->
+                    if (!currentRequest()) return@failed
+                    failure = filesFailure(error)
+                    loading = false
+                },
+            )
         }
-        if (generation == requestGeneration) loading = false
     }
-    LaunchedEffect(sessionId, requestedPath) { listState.scrollToItem(0) }
+    LaunchedEffect(host, sessionId, requestedPath) { listState.scrollToItem(0) }
 
     val preview = previewPath
     if (preview != null) {
@@ -188,16 +203,16 @@ fun FilesSheet(sessionId: String, onDismiss: () -> Unit, onBack: (() -> Unit)? =
                         Text(ft("正在读取…", "Reading…"), color = T.Text3, fontSize = 13.sp)
                     }
                 }
-                failure != null -> item {
-                    Column(Modifier.padding(horizontal = 20.dp, vertical = 12.dp)) {
-                        SelectableOutput {
-                            Text(failure.orEmpty(), color = T.Err, fontSize = 13.sp, lineHeight = 20.sp)
-                        }
-                        TextButton(onClick = { load(path) }, enabled = canList) { Text(reloadLabel, color = if (canList) T.Accent else T.Caption) }
-                    }
-                }
                 else -> {
-                    if (entries.isEmpty()) item {
+                    if (failure != null) item {
+                        Column(Modifier.padding(horizontal = 20.dp, vertical = 12.dp)) {
+                            SelectableOutput {
+                                Text(failure.orEmpty(), color = T.Err, fontSize = 13.sp, lineHeight = 20.sp)
+                            }
+                            TextButton(onClick = { load(path) }, enabled = canList) { Text(reloadLabel, color = if (canList) T.Accent else T.Caption) }
+                        }
+                    }
+                    if (entries.isEmpty() && failure == null) item {
                         Text(
                             ft("空目录", "Empty directory"), color = T.Text3, fontSize = 13.sp,
                             modifier = Modifier.padding(horizontal = 20.dp, vertical = 16.dp),

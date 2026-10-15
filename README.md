@@ -15,7 +15,7 @@ Available surfaces depend on the Host version and enabled plugins. The list belo
 | Area | Capabilities |
 | --- | --- |
 | Sessions | Streaming chat, reasoning and tool process, history, queue / steer send, approvals and user questions, model and reasoning-effort selection |
-| Workspaces | Session grouping, register and switch Host workspaces, directory browse and search, file preview |
+| Workspaces | Session grouping, register and switch Host workspaces, directory browse and search, file preview including Word, PowerPoint, Excel and PDF |
 | Host tools | PTY terminal, background jobs, session trajectory and data diagnostics; a phone-local browser panel |
 | Configuration | Host model providers, Agent presets, shared general settings, plugin management and the built-in plugin inventory |
 | Automation | Task search, rule editing, delivery history and deletion; the create entry opens a conversation |

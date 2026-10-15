@@ -11,6 +11,8 @@ import dev.dsh.pocket.protocol.Item
 import dev.dsh.pocket.protocol.StepRecord
 import dev.dsh.pocket.protocol.StepUsage
 import dev.dsh.pocket.protocol.ToolStatus
+import kotlinx.serialization.json.Json
+import org.junit.Assert.assertEquals
 import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
@@ -91,15 +93,23 @@ class TrajectoryInteractionTest {
         hasText(label) and SemanticsMatcher.expectValue(SemanticsProperties.Role, Role.Tab),
     )
 
+    private fun assertCopiedJson(expected: String) {
+        rule.onNodeWithTag("trajectory-json-copy").performClick()
+        rule.runOnIdle {
+            val clipboard = RuntimeEnvironment.getApplication().getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+            val copied = clipboard.primaryClip!!.getItemAt(0).text.toString()
+            assertEquals(Json.parseToJsonElement(expected), Json.parseToJsonElement(copied))
+        }
+    }
+
     private fun assertToolDetail(key: String, args: String, result: String, turn: Int) {
         show()
         row(key).assertIsDisplayed().performClick()
         rule.onNodeWithText("${TrajL.turnLabel(turn)} · ${TrajL.groupStep(1)}").assertIsDisplayed()
         tab(TrajL.tabPayload).performClick()
-        rule.onNodeWithText(prettyJson(args).breakAnywhere()).assertIsDisplayed()
+        assertCopiedJson(args)
         tab(TrajL.tabResult).performClick()
-        rule.onNodeWithText(result.breakAnywhere()).assertIsDisplayed()
-        rule.onNodeWithText(prettyJson(args).breakAnywhere()).assertDoesNotExist()
+        rule.onNodeWithText(result).assertIsDisplayed()
     }
 
     @Test fun readRowOpensItsFullArgumentsAndResult() {
@@ -118,7 +128,7 @@ class TrajectoryInteractionTest {
         rule.onNodeWithText("deepseek-v4.1-expert").assertIsDisplayed()
         tab(TrajL.tabPayload).assertDoesNotExist()
         tab(TrajL.tabOptions).performClick()
-        rule.onNodeWithText(prettyJson(secondConfig).breakAnywhere()).assertIsDisplayed()
+        assertCopiedJson(secondConfig)
     }
 
     @Test fun searchFiltersRowsByNonPrimaryArgumentAndClearingRestoresBothTurns() {
@@ -147,7 +157,7 @@ class TrajectoryInteractionTest {
         rowKeys.forEach { row(it).assertIsDisplayed() }
         row("bash-tool").performClick()
         tab(TrajL.tabResult).performClick()
-        rule.onNodeWithText(bashResult.breakAnywhere()).assertIsDisplayed()
+        rule.onNodeWithText(bashResult).assertIsDisplayed()
     }
 
     @Test fun turnsFoldAndUnfoldWhilePreservingTheCallsFoldState() {
@@ -173,7 +183,7 @@ class TrajectoryInteractionTest {
         rule.onNodeWithTag("trajectory-preview-bash-tool").assertDoesNotExist()
         rule.onNodeWithTag("trajectory-preview-read-tool").assertIsDisplayed().performClick()
         tab(TrajL.tabPayload).performClick()
-        rule.onNodeWithText(prettyJson(readArgs).breakAnywhere()).assertIsDisplayed()
+        assertCopiedJson(readArgs)
         rule.onNodeWithContentDescription(TrajL.detailsClose).performClick()
         row("a10").assertIsDisplayed()
     }

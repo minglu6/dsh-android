@@ -44,6 +44,23 @@ bundled npm package license texts in
 `app/app/src/main/assets/code-preview/THIRD_PARTY_NOTICES`; these notices and the
 DeepSeek license are shipped in the APK alongside the renderer.
 
+The Office warning vector and localized font/conversion feedback follow
+`ui-sidebar-documentpreview`. The Excel renderer vendors that module's parsers,
+read-only workbook UI, styles, fixtures and required primitives in
+`workbook-preview/vendor/`, retaining its MIT license.
+
+The workbook bundle uses FortuneSheet core/react 1.0.4 (MIT, Copyright (c) 2022
+Suzhou Ruilisi Technology Co., Ltd), with the official DeepSeek Harness patches;
+ExcelJS 4.4.0, SheetJS 0.20.3, fast-xml-parser 5.11.1, fflate 0.8.3,
+PapaParse 5.7.0, React/ReactDOM 18.3.1 and clsx 2.1.1. Package licenses and
+embedded ExcelJS browser notices ship in
+`app/app/src/main/assets/workbook-preview/THIRD_PARTY_NOTICES`.
+The npm omissions for `@nodable/entities` and saxes are covered by upstream
+[`val-parsers` MIT](https://github.com/nodable/val-parsers/blob/main/LICENSE)
+and [`saxes` ISC/MIT](https://github.com/lddubeau/saxes/blob/v5.0.1/LICENSE)
+license copies in `workbook-preview/vendor/`.
+
+
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
 in the Software without restriction, including without limitation the rights

@@ -126,7 +126,6 @@ test('phone deep links wait for arbitrary sections and navigate the real owner s
   launcher.component({ ...launcher.options.inject(), openSettings() {}, t: key => key, useSessionReadiness: select => select({ phase: 'ready' }) })
   const cleanup = client.effects[0]()
   assert.deepEqual(opened, [])
-  assert.equal(client.states.at(-1), 'waiting')
   host.publish('settings.section', [{ options: { id: 'third-party-settings' } }])
   await Promise.resolve()
   assert.deepEqual(opened, ['third-party-settings'])
@@ -138,7 +137,7 @@ test('phone deep links wait for arbitrary sections and navigate the real owner s
   assert.equal(host.listeners.get('sidebar.settings').size, 0)
 })
 
-test('an incompatible settings owner is explicit and rechecked when the owner changes', async () => {
+test('a settings owner becoming available completes deferred section navigation', async () => {
   const client = loadClient('?pocket-ui=1&section=models')
   const host = clientContext()
   host.publish('settings.section', [{ options: { id: 'models' } }])
@@ -146,7 +145,6 @@ test('an incompatible settings owner is explicit and rechecked when the owner ch
   const launcher = host.registrations[0]
   launcher.component({ ...launcher.options.inject(), openSettings() {}, t: key => key, useSessionReadiness: select => select({ phase: 'ready' }) })
   const cleanup = client.effects[0]()
-  assert.equal(client.states.at(-1), 'unsupported')
   assert.equal(launcher.removed, false)
   const opened = []
   host.publish('sidebar.settings', [{

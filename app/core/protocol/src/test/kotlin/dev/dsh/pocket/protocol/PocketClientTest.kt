@@ -111,6 +111,144 @@ class PocketClientTest {
         field.isAccessible = true
         return (field.get(client) as Map<*, *>).size
     }
+    @Test fun officeCancellationBeforeRenderReplyReleasesTheRequestedHandle() = runTest {
+        withClient { client, transport ->
+            transport.onSend = {
+                val request = transport.requests.last()
+                if (request["op"].str() == "office.release") transport.reply(request, jsonOf("released" to true))
+            }
+            val download = launch { client.withOfficePreview("s1", "report.docx") { error("must not receive a lease") } }
+            runCurrent()
+            val opening = transport.requests.last()
+            assertEquals("office.render", opening["op"].str())
+            advanceTimeBy(120_001)
+            assertTrue(download.isActive)
+            download.cancel()
+            download.join()
+            val release = transport.requests.last()
+            assertEquals("office.release", release["op"].str())
+            assertEquals(opening["args"]["subId"].str(), release["args"]["handle"].str())
+            assertEquals("s1", release["args"]["sessionId"].str())
+            assertEquals(0, pendingCount(client))
+        }
+    }
+
+    @Test fun officePagesCarryRevisionAndReleaseOnDownloadFailure() = runTest {
+        withClient { client, transport ->
+            transport.onSend = {
+                val request = transport.requests.last()
+                when (request["op"].str()) {
+                    "office.render" -> transport.reply(request, jsonOf("handle" to request["args"]["subId"],
+                        "version" to "v1", "generation" to "g1"))
+                    "office.read" -> transport.reply(request, jsonOf("data" to "JVBERg=="))
+                    "office.release" -> transport.reply(request, jsonOf("released" to true))
+                }
+            }
+            assertFailsWith<IllegalStateException> {
+                client.withOfficePreview("s1", "report.docx") { reader ->
+                    reader.read(128L, 256)
+                    error("disk full")
+                }
+            }
+            val page = transport.requests.single { it["op"].str() == "office.read" }
+            assertEquals(128L, page["args"]["offset"].long())
+            assertEquals(256, page["args"]["length"].int())
+            assertEquals("v1", page["args"]["version"].str())
+            assertEquals("g1", page["args"]["generation"].str())
+            assertEquals("office.release", transport.requests.last()["op"].str())
+        }
+    }
+
+    @Test fun officeReaderCannotReadOrReleaseAgainstAReplacementHost() = runTest {
+        val client = PocketClient(backgroundScope)
+        val first = FakeTransport()
+        val second = FakeTransport()
+        try {
+            client.connect(TransportFactory { first }, Auth.Token("first"))
+            first.onSend = {
+                val request = first.requests.last()
+                if (request["op"].str() == "office.render") {
+                    first.reply(request, jsonOf("handle" to request["args"]["subId"],
+                        "version" to "v1", "generation" to "g1"))
+                }
+            }
+            client.withOfficePreview("s1", "report.docx") { reader ->
+                client.connect(TransportFactory { second }, Auth.Token("second"))
+                assertFailsWith<PocketError> { reader.read(0, 128) }
+            }
+            assertFalse(second.requests.any { it["op"].str()?.startsWith("office.") == true })
+        } finally { client.close() }
+    }
+
+
+    @Test fun fileWatchReceivesReadyBeforeOpeningReplyAndIgnoresOtherSubscriptions() = runTest {
+        withClient { client, transport ->
+            transport.onSend = {
+                val request = transport.requests.last()
+                if (request["op"].str() == "unfollow") transport.reply(request, jsonOf("stopped" to true))
+            }
+            val frames = async { client.followFiles("s1", "src").take(1).toList() }
+            runCurrent()
+            val opening = transport.requests.last()
+            assertEquals("files.follow", opening["op"].str())
+            val subscription = opening["args"]["subId"].str()
+            transport.push(jsonOf("ev" to "files", "subId" to "f-old", "frame" to jsonOf("kind" to "change")))
+            transport.push(jsonOf("ev" to "files", "subId" to subscription, "frame" to jsonOf("kind" to "ready")))
+            runCurrent()
+            transport.reply(opening, jsonOf("subId" to subscription))
+            assertEquals("ready", frames.await().single()["kind"].str())
+            assertEquals("unfollow", transport.requests.last()["op"].str())
+            assertEquals(subscription, transport.requests.last()["args"]["subId"].str())
+        }
+    }
+
+    @Test fun cancellingFileWatchBeforeOpeningReplyStillUnfollows() = runTest {
+        withClient { client, transport ->
+            transport.onSend = {
+                val request = transport.requests.last()
+                if (request["op"].str() == "unfollow") transport.reply(request, jsonOf("stopped" to true))
+            }
+            val watch = launch { client.followFiles("s1", "old-directory").collect {} }
+            runCurrent()
+            val opening = transport.requests.last()
+            watch.cancel()
+            watch.join()
+            assertEquals("unfollow", transport.requests.last()["op"].str())
+            assertEquals(opening["args"]["subId"].str(), transport.requests.last()["args"]["subId"].str())
+            transport.reply(opening, jsonOf("subId" to opening["args"]["subId"]))
+            runCurrent()
+            assertEquals(0, pendingCount(client))
+        }
+    }
+
+    @Test fun fileWatchDisconnectReleasesCollectorAndNewConnectionCanSubscribe() = runTest {
+        val client = PocketClient(backgroundScope)
+        val first = FakeTransport()
+        val second = FakeTransport()
+        try {
+            client.connect(TransportFactory { first }, Auth.Token("test-token"))
+            val watch = async {
+                runCatching { client.followFiles("s1", ".").collect {} }.exceptionOrNull()
+            }
+            runCurrent()
+            first.reply(first.requests.last(), jsonOf("subId" to first.requests.last()["args"]["subId"]))
+            runCurrent()
+            client.close()
+            assertIs<PocketError>(watch.await())
+            client.connect(TransportFactory { second }, Auth.Token("test-token"))
+            second.onSend = {
+                val request = second.requests.last()
+                if (request["op"].str() == "files.follow") {
+                    second.push(jsonOf("ev" to "files", "subId" to request["args"]["subId"],
+                        "frame" to jsonOf("kind" to "ready")))
+                }
+                second.reply(request, jsonOf("subId" to request["args"]["subId"]))
+            }
+            assertEquals("ready", client.followFiles("s1", ".").take(1).toList().single()["kind"].str())
+        } finally {
+            client.close()
+        }
+    }
 
     private suspend fun TestScope.assertNextRequestIgnoresLateReply(
         client: PocketClient,

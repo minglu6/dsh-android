@@ -92,6 +92,45 @@ export function filesOps(workspaceFiles, sessions, sandboxPolicy) {
       const scope = await scopeOf(a.sessionId)
       return workspaceFiles.list(scope, str(a.path) ? a.path : '.', signal)
     },
+    ...(typeof workspaceFiles.changes === 'function' ? {
+      'files.follow': (a, _signal, client) => {
+        if (!str(a.sessionId) || !/^f-[a-zA-Z0-9-]{1,80}$/.test(a.subId ?? '')) throw bad('sessionId and file subscription id required')
+        const path = str(a.path) ? a.path : '.'
+        if (path.startsWith('/') || path.includes('\\') || path.includes('\0') ||
+            path.split('/').includes('..') || /^[a-z][a-z\d+.-]*:/iu.test(path)) {
+          throw Object.assign(new Error('directory must be inside the workspace'), { code: 'workspace-file/outside-workspace' })
+        }
+        if (!client?.subs || typeof client.push !== 'function') throw bad('live client required')
+        const subId = a.subId
+        if (client.subs.has(subId)) throw bad('subscription already exists')
+        const ac = new AbortController()
+        // Register before any await: cancellation before the reply can still unfollow.
+        client.subs.set(subId, ac)
+        void (async () => {
+          try {
+            const scope = await scopeOf(a.sessionId)
+            ac.signal.throwIfAborted()
+            // The directory API owns canonical containment, including symlinks.
+            const listed = await workspaceFiles.list(scope, path, ac.signal)
+            ac.signal.throwIfAborted()
+            for await (const frame of workspaceFiles.changes(scope, listed.path || '.', ac.signal)) {
+              if (ac.signal.aborted) break
+              client.push({ ev: 'files', subId, frame: { ...frame, path: listed.path || '.' } })
+            }
+            if (!ac.signal.aborted) client.push({ ev: 'files.end', subId })
+          } catch (error) {
+            if (!ac.signal.aborted) client.push({
+              ev: 'files.error', subId,
+              error: { code: error?.code ?? 'internal', message: String(error?.message ?? error) },
+            })
+          } finally {
+            ac.abort()
+            if (client.subs.get(subId) === ac) client.subs.delete(subId)
+          }
+        })()
+        return { subId }
+      },
+    } : {}),
     'files.read': async (a, signal) => {
       if (!str(a.path)) throw bad('path required')
       const scope = await scopeOf(a.sessionId)

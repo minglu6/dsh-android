@@ -1,0 +1,203 @@
+package dev.dsh.pocket.app
+
+import android.content.ClipboardManager
+import android.content.Context
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.test.*
+import kotlinx.serialization.json.*
+import org.junit.Assert.*
+import org.junit.Before
+import org.junit.Rule
+import org.junit.Test
+import org.junit.runner.RunWith
+import org.robolectric.RobolectricTestRunner
+import org.robolectric.RuntimeEnvironment
+import org.robolectric.annotation.Config
+import org.robolectric.annotation.GraphicsMode
+
+class TrajectoryJsonTest {
+    @Test fun emptyContainersAndEscapedKeysRemainDistinctAndValid() {
+        val source = """{"a/b":{"~key":["line\nquote\"\\",{},[]]},"a~1b":null}"""
+        val root = trajectoryJsonDocument(source).root!!
+        val rows = trajectoryJsonRows(root, setOf("", "/a~1b", "/a~1b/~0key"))
+        assertNotNull(rows.find { it.path == "/a~01b" })
+        assertEquals("line\nquote\"\\", rows.first { it.path == "/a~1b/~0key/0" }.value.jsonPrimitive.content)
+        val empty = rows.filter { it.path.endsWith("/1") || it.path.endsWith("/2") }
+        assertEquals(2, empty.size)
+        assertTrue(empty.none { it.expandable })
+        assertEquals(listOf("1: {}", "2: []"), empty.map { trajectoryJsonRowText(it, false) })
+    }
+
+    @Test fun invalidJsonRetainsOriginalErrorText() {
+        listOf("HTTP 500: connection failed\nretry later", "Error", "01", "{broken", "[true,]").forEach { source ->
+            val document = trajectoryJsonDocument(source)
+            assertNull(source, document.root)
+            assertEquals(source, document.source)
+            assertFalse(document.depthLimited)
+        }
+    }
+
+    @Test fun deeplyNestedInputUsesBoundedRawFallbackAndPreservesEveryByte() {
+        val source = "[".repeat(20_000) + "0" + "]".repeat(20_000)
+        val document = trajectoryJsonDocument(source)
+        assertTrue(document.depthLimited)
+        assertNull(document.root)
+        assertEquals(source, document.source)
+    }
+
+    @Test fun maximumSupportedDepthExpandsIteratively() {
+        val source = "[".repeat(TRAJECTORY_JSON_MAX_DEPTH) + "0" + "]".repeat(TRAJECTORY_JSON_MAX_DEPTH)
+        val document = trajectoryJsonDocument(source)
+        assertFalse(document.depthLimited)
+        assertNotNull(document.root)
+        val paths = (0..TRAJECTORY_JSON_MAX_DEPTH).map { "/0".repeat(it) }.toSet()
+        val rows = trajectoryJsonRows(document.root!!, paths)
+        assertEquals(TRAJECTORY_JSON_MAX_DEPTH * 2 + 1, rows.size)
+        assertEquals("0: 0", trajectoryJsonRowText(rows.first { it.depth == TRAJECTORY_JSON_MAX_DEPTH }, false))
+    }
+
+    @Test fun bracesAndEscapedQuotesInsideLongStringsAreNotNesting() {
+        val value = "[".repeat(1000) + "\"\\\n" + "x".repeat(4000)
+        val source = JsonPrimitive(value).toString()
+        assertEquals(JsonPrimitive(value), trajectoryJsonDocument(source).root)
+    }
+
+    @Test fun collapsedPreviewsUseDesktopFieldElementAndDepthLimits() {
+        assertEquals("{a: 1, b: 2, c: 3, d: 4, …}", trajectoryJsonPreview(
+            Json.parseToJsonElement("""{"a":1,"b":2,"c":3,"d":4,"hidden":5}""")))
+        assertEquals("[0, 1, 2, 3, 4, …]", trajectoryJsonPreview(Json.parseToJsonElement("[0,1,2,3,4,5]")))
+        assertEquals("{queries: [{…}], limit: 5}", trajectoryJsonPreview(
+            Json.parseToJsonElement("""{"queries":[{"query":"not exposed until expanded"}],"limit":5}""")))
+        assertEquals("""{text: "quote\"slash\\line\n"}""", trajectoryJsonPreview(
+            Json.parseToJsonElement("""{"text":"quote\"slash\\line\n"}""")))
+    }
+
+    @Test fun copyModesPreserveValuesAndProduceDesktopFormattedAndCompactJson() {
+        val raw = "quote\"slash\\line\nzero\u200Bwidth"
+        val primitive = JsonPrimitive(raw)
+        assertEquals(raw, trajectoryJsonCopyText(primitive, "$.text", TrajectoryJsonCopyMode.Value))
+        assertEquals(primitive, Json.parseToJsonElement(
+            trajectoryJsonCopyText(primitive, "$.text", TrajectoryJsonCopyMode.Json)))
+        val root = Json.parseToJsonElement("""{"text":"value","count":2}""")
+        assertEquals("{\n  \"text\": \"value\",\n  \"count\": 2\n}",
+            trajectoryJsonCopyText(root, "$", TrajectoryJsonCopyMode.PrettyJson))
+        assertEquals("""{"text":"value","count":2}""",
+            trajectoryJsonCopyText(root, "$", TrajectoryJsonCopyMode.CompactJson))
+    }
+
+    @Test fun propertyPathsDistinguishArrayIndexesFromObjectKeysAndEscapeSpecialNames() {
+        val root = Json.parseToJsonElement("""{"items":[{"0":{"a.b":{"quote\"key":1}}}]}""")
+        val rows = trajectoryJsonRows(root, setOf("", "/items", "/items/0", "/items/0/0", "/items/0/0/a.b"))
+        val leaf = rows.first { it.path == "/items/0/0/a.b/quote\"key" }
+        assertEquals("""$.items[0]["0"]["a.b"]["quote\"key"]""",
+            trajectoryJsonCopyText(leaf.value, leaf.copyPath, TrajectoryJsonCopyMode.Path))
+        assertEquals("""$[""]""", trajectoryJsonPropertyPath("$", ""))
+        assertEquals("""$["a/b"]""", trajectoryJsonPropertyPath("$", "a/b"))
+    }
+}
+
+@RunWith(RobolectricTestRunner::class)
+@GraphicsMode(GraphicsMode.Mode.NATIVE)
+@Config(sdk = [34], qualifiers = "w412dp-h915dp-xxhdpi")
+class TrajectoryJsonInteractionTest {
+    @get:Rule val rule = createComposeRule()
+    private val source = """{"queries":[{"query":"DSH \"JSON\" tree","recency":null}],"limit":5}"""
+
+    @Before fun setUp() {
+        Pocket.init(RuntimeEnvironment.getApplication())
+        installHostSettingsFixture()
+    }
+
+    private fun copiedText(): String {
+        val clipboard = RuntimeEnvironment.getApplication().getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+        return clipboard.primaryClip!!.getItemAt(0).text.toString()
+    }
+
+    @Test fun queriesCanCollapseReexpandAndCopySemanticallyIdenticalPrettyJson() {
+        rule.setContent { PocketTheme { TrajectoryJsonValue(source) } }
+        rule.onNodeWithTag("trajectory-json-row:/queries/0").assertDoesNotExist()
+        rule.onNodeWithTag("trajectory-json-toggle:/queries").performClick()
+        rule.onNodeWithTag("trajectory-json-toggle:/queries/0").performClick()
+        rule.onNodeWithTag("trajectory-json-row:/queries/0/query").assertIsDisplayed()
+        rule.onNodeWithTag("trajectory-json-toggle:/queries").performClick()
+        rule.onNodeWithTag("trajectory-json-row:/queries/0/query").assertDoesNotExist()
+        rule.onNodeWithTag("trajectory-json-toggle:/queries").performClick()
+        rule.onNodeWithTag("trajectory-json-row:/queries/0/query").assertIsDisplayed()
+        rule.onNodeWithTag("trajectory-json-copy").performClick()
+        rule.runOnIdle {
+            assertTrue(copiedText().startsWith("{\n  \"queries\": ["))
+            assertEquals(Json.parseToJsonElement(source), Json.parseToJsonElement(copiedText()))
+        }
+        rule.onNodeWithTag("trajectory-json-copy:/queries").performClick()
+        rule.runOnIdle {
+            assertEquals(Json.parseToJsonElement(source).jsonObject["queries"], Json.parseToJsonElement(copiedText()))
+        }
+    }
+
+    @Test fun primitiveCopyDefaultsToRawValueAndLongPressOffersJsonAndPath() {
+        rule.setContent { PocketTheme { TrajectoryJsonValue(source) } }
+        rule.onNodeWithTag("trajectory-json-toggle:/queries").performClick()
+        rule.onNodeWithTag("trajectory-json-toggle:/queries/0").performClick()
+        val copy = rule.onNodeWithTag("trajectory-json-copy:/queries/0/query")
+        copy.performClick()
+        rule.runOnIdle { assertEquals("DSH \"JSON\" tree", copiedText()) }
+        copy.performTouchInput { longClick() }
+        rule.onNodeWithText("复制值").assertIsDisplayed()
+        rule.onNodeWithText("复制格式化 JSON").assertDoesNotExist()
+        rule.onNodeWithText("复制 JSON").performClick()
+        rule.runOnIdle { assertEquals(JsonPrimitive("DSH \"JSON\" tree"), Json.parseToJsonElement(copiedText())) }
+        copy.performTouchInput { longClick() }
+        rule.onNodeWithText("复制属性路径").performClick()
+        rule.runOnIdle { assertEquals("$.queries[0].query", copiedText()) }
+    }
+
+    @Test fun containerLongPressOffersPrettyCompactAndPathWithoutPrimitiveActions() {
+        rule.setContent { PocketTheme { TrajectoryJsonValue(source) } }
+        val copy = rule.onNodeWithTag("trajectory-json-copy:/queries")
+        copy.performTouchInput { longClick() }
+        rule.onNodeWithText("复制值").assertDoesNotExist()
+        rule.onNodeWithText("复制 JSON").assertDoesNotExist()
+        rule.onNodeWithText("复制格式化 JSON").assertIsDisplayed()
+        rule.onNodeWithText("复制紧凑 JSON").performClick()
+        rule.runOnIdle { assertEquals("""[{"query":"DSH \"JSON\" tree","recency":null}]""", copiedText()) }
+        copy.performTouchInput { longClick() }
+        rule.onNodeWithText("复制属性路径").performClick()
+        rule.runOnIdle { assertEquals("$.queries", copiedText()) }
+        copy.performTouchInput { longClick() }
+        rule.onNodeWithText("复制格式化 JSON").performClick()
+        rule.runOnIdle {
+            assertTrue(copiedText().startsWith("[\n  {"))
+            assertEquals(Json.parseToJsonElement(source).jsonObject["queries"], Json.parseToJsonElement(copiedText()))
+        }
+    }
+
+    @Test fun switchingRecordsWithIdenticalArgumentsResetsExpansion() {
+        val row = mutableStateOf(TrajRow("one", 0, TrajL.kindTool, "search", inputDetail = source))
+        rule.setContent {
+            PocketTheme { Box(Modifier.fillMaxSize()) { TrajectoryDetailSheet(row.value, 1, onDismiss = {}) } }
+        }
+        rule.onNodeWithTag("trajectory-json-toggle:/queries").performClick()
+        rule.onNodeWithTag("trajectory-json-row:/queries/0").assertIsDisplayed()
+        rule.runOnIdle { row.value = row.value.copy(key = "two") }
+        rule.onNodeWithTag("trajectory-json-row:/queries/0").assertDoesNotExist()
+        rule.onNodeWithTag("trajectory-json-toggle:/queries").assertIsDisplayed()
+        rule.onNode(hasText(TrajL.tabPayload) and SemanticsMatcher.expectValue(
+            androidx.compose.ui.semantics.SemanticsProperties.Role, androidx.compose.ui.semantics.Role.Tab,
+        )).performClick()
+        rule.onNodeWithTag("trajectory-json-toggle:/queries").performClick()
+        rule.onNodeWithTag("trajectory-json-row:/queries/0").assertIsDisplayed()
+        rule.onNodeWithTag("trajectory-json-copy").performClick()
+        rule.runOnIdle { assertEquals(Json.parseToJsonElement(source), Json.parseToJsonElement(copiedText())) }
+    }
+
+    @Test fun nonJsonErrorIsReadableAndCopiesUnmodifiedText() {
+        val error = "HTTP 500: connection failed\n" + "x".repeat(120)
+        rule.setContent { PocketTheme { TrajectoryJsonValue(error, error = true) } }
+        rule.onNodeWithText(error).assertIsDisplayed()
+        rule.onNodeWithTag("trajectory-json-copy").performClick()
+        rule.runOnIdle { assertEquals(error, copiedText()) }
+    }
+}

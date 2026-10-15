@@ -12,6 +12,20 @@ import { UI_COOKIE, UI_TICKET_MS, UI_SESSION_MS } from '../src/host-ui.js'
 const LAUNCH = 'fixture-process-launch-secret'
 const HOST_COOKIE = 'fixture-host-cookie-secret'
 const OWNER = 'fixture-pocket-owner-secret'
+const ACCOUNT_PATH = '/plugins/??@deepseek-ai/dsh-client-ui-settings-account/client.js&rev=art'
+const ARTWORK = Buffer.alloc(70_000, 42)
+const BOOT = {
+  rev: 'fixture',
+  entries: [
+    { id: 'bootstrap', url: '/plugins/bootstrap.js', rev: 'boot' },
+    { id: 'custom-plugin', url: '/plugins/custom/client.js', rev: 'custom' },
+    { id: 'account', url: ACCOUNT_PATH, rev: 'art' },
+  ],
+  batches: [
+    { phase: 'bootstrap', url: '/plugins/bootstrap.js', rev: 'boot', entries: ['bootstrap'] },
+    { phase: 'application', url: '/plugins/combined.js', rev: 'combined', entries: ['custom-plugin', 'account'] },
+  ],
+}
 
 function http(origin, path, { method = 'GET', headers = {}, body, binary = false } = {}) {
   return new Promise((resolve, reject) => {
@@ -67,7 +81,7 @@ function deniedSocket(origin, path, headers = {}) {
   })
 }
 
-async function fixture(t, { install = true } = {}) {
+async function fixture(t, { install = true, image = ARTWORK } = {}) {
   const seen = []
   let time = Date.now()
   let exchanges = 0
@@ -87,8 +101,12 @@ async function fixture(t, { install = true } = {}) {
       res.writeHead(200, { 'content-type': 'text/html' }).end(`<!doctype html><html><head>
 <script>globalThis["__DSH_CONNECTION_RECOVERY__"] = {"backoffBaseMs":500,"launchUrl":"http://127.0.0.1/?token=${LAUNCH}","cookie":"${HOST_COOKIE}"}</script>
 <script>globalThis.__DSH_TRANSPORT__={streamBaseUrl:"http://127.0.0.1:1234",ownsHost:true}</script>
-<script>globalThis["__DSH_BOOT__"] = {"rev":"fixture","entries":[{"id":"custom-plugin","url":"/plugins/custom/client.js"}]}</script>
+<link rel="preload" as="script" href="/plugins/combined.js">
+<script>globalThis["__DSH_BOOT__"] = ${JSON.stringify(BOOT)}</script>
 <script type="module" src="/assets/app.js"></script></head><body><div id="root">official shell</div></body></html>`)
+    } else if (req.url === ACCOUNT_PATH) {
+      res.writeHead(200, { 'content-type': 'text/javascript' })
+        .end(`var onboarding_welcome_default = "data:image/png;base64,${image.toString('base64')}";globalThis.artwork = onboarding_welcome_default;`)
     } else if (url.pathname.startsWith('/assets/') || url.pathname.startsWith('/plugins/')) {
       res.writeHead(200, { 'content-type': 'text/javascript' }).end('globalThis.fixturePluginLoaded=true')
     } else if (url.pathname === '/api/echo' || url.pathname === '/api') {
@@ -373,4 +391,65 @@ test('device store liveness is checked without rewriting authentication on every
   }
   f.server.devices.revoke(f.issued.deviceId)
   assert.equal((await http(f.origin, '/assets/app.js', { headers: { cookie } })).status, 401)
+})
+
+test('phone boot preserves every module without waiting for combined application downloads', { timeout: 10_000 }, async (t) => {
+  const f = await fixture(t)
+  const { cookie } = await f.session()
+  const page = await http(f.origin, '/?pocket-ui=1&section=models', { headers: { cookie } })
+  const context = {}
+  for (const [, attributes, source] of page.body.matchAll(/<script\b([^>]*)>([\s\S]*?)<\/script>/gu)) {
+    if (!attributes.includes('src=')) runInNewContext(source, context)
+  }
+  const graph = JSON.parse(JSON.stringify(context.__DSH_BOOT__))
+  assert.deepEqual(graph.entries, BOOT.entries)
+  assert.deepEqual(graph.batches.flatMap(batch => batch.entries), BOOT.entries.map(entry => entry.id))
+  assert.deepEqual(graph.batches[0], BOOT.batches[0])
+  for (const batch of graph.batches.filter(batch => batch.phase === 'application')) {
+    assert.equal(batch.entries.length, 1)
+    assert.equal((await http(f.origin, batch.url, { headers: { cookie } })).status, 200)
+  }
+})
+
+test('onboarding artwork loads on demand with unchanged bytes and device-bound authorization', { timeout: 10_000 }, async (t) => {
+  const f = await fixture(t)
+  const { grant, cookie } = await f.session()
+  const script = await http(f.origin, ACCOUNT_PATH, { headers: { cookie } })
+  assert.equal(script.status, 200)
+  const context = {}
+  runInNewContext(script.body, context)
+  assert.ok(context.artwork.startsWith('/assets/pocket-artwork/'))
+  const image = await http(f.origin, context.artwork, { headers: { cookie }, binary: true })
+  assert.equal(image.status, 200)
+  assert.equal(image.headers['content-type'], 'image/png')
+  assert.deepEqual(image.body, ARTWORK)
+  assert.equal((await http(f.origin, context.artwork)).status, 401)
+  await f.client.call('ui.close', { ticket: grant.ticket })
+  assert.equal((await http(f.origin, context.artwork, { headers: { cookie } })).status, 401)
+})
+
+test('revoking a UI session aborts a backpressured artwork response', { timeout: 15_000 }, async (t) => {
+  const image = Buffer.alloc(10 * 1024 * 1024, 23)
+  const f = await fixture(t, { image })
+  const { grant, cookie } = await f.session()
+  const script = await http(f.origin, ACCOUNT_PATH, { headers: { cookie } })
+  assert.equal(script.status, 200)
+  const context = {}
+  runInNewContext(script.body, context)
+  const outgoing = request(`${f.origin}${context.artwork}`, { headers: { cookie } })
+  const received = once(outgoing, 'response')
+  outgoing.end()
+  const [response] = await received
+  response.pause()
+  response.on('error', () => {})
+  const aborted = once(response, 'aborted')
+  try {
+    await f.client.call('ui.close', { ticket: grant.ticket })
+    response.resume()
+    await aborted
+    assert.equal(response.complete, false)
+  } finally {
+    response.destroy()
+    outgoing.destroy()
+  }
 })

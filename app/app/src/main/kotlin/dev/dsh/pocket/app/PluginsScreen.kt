@@ -14,6 +14,13 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.res.vectorResource
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.IntRect
+import androidx.compose.ui.unit.IntSize
+import androidx.compose.ui.unit.LayoutDirection
+import androidx.compose.ui.window.PopupPositionProvider
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
@@ -148,26 +155,122 @@ private fun partsSummary(rows: List<JsonElement>, plugins: List<JsonElement>): S
 }
 
 @Composable
-fun PluginsSettingsScreen(onBack: () -> Unit) {
+fun PluginsSettingsScreen(onBack: () -> Unit, onCreatePlugin: () -> Unit) {
     val profile by Pocket.active.collectAsState()
     key(profile) {
         MaterialTheme(colorScheme = MaterialTheme.colorScheme.copy(primary = T.PrimaryButton, onPrimary = T.OnPrimary)) {
-            PluginsPage(profile, onBack)
+            PluginsPage(profile, onBack, onCreatePlugin)
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+internal fun PluginPageIntro() {
+    val tooltip = rememberTooltipState(isPersistent = true)
+    val scope = rememberCoroutineScope()
+    val gap = with(LocalDensity.current) { 4.dp.roundToPx() }
+    val position = remember(gap) {
+        object : PopupPositionProvider {
+            override fun calculatePosition(anchorBounds: IntRect, windowSize: IntSize, layoutDirection: LayoutDirection, popupContentSize: IntSize): IntOffset {
+                val x = (anchorBounds.center.x - popupContentSize.width / 2).coerceIn(0, (windowSize.width - popupContentSize.width).coerceAtLeast(0))
+                val below = anchorBounds.bottom + gap
+                val y = if (below + popupContentSize.height <= windowSize.height) below else (anchorBounds.top - gap - popupContentSize.height).coerceAtLeast(0)
+                return IntOffset(x, y)
+            }
+        }
+    }
+    BackHandler(tooltip.isVisible) { tooltip.dismiss() }
+    Row(Modifier.padding(horizontal = 18.dp), verticalAlignment = Alignment.CenterVertically) {
+        Text(pt("安装、启用和配置插件", "Install, enable, and configure plugins"), color = T.Text3, fontSize = 13.sp,
+            modifier = Modifier.weight(1f, fill = false))
+        TooltipBox(
+            positionProvider = position,
+            tooltip = {
+                PlainTooltip(Modifier.widthIn(max = 300.dp)) {
+                    Text(pt("在这里配置官方插件，安装和管理其他插件。内置插件列表及运行状态可在「设置 → 内置插件」中查看", "Configure official plugins and install or manage other plugins here. View the built-in plugin list and runtime status in Settings → Built-in plugins."))
+                }
+            },
+            state = tooltip,
+        ) {
+            IconButton({ scope.launch { tooltip.show() } }) {
+                Icon(ImageVector.vectorResource(R.drawable.dsh_info), pt("插件说明", "About plugins"), Modifier.size(11.dp), tint = T.Text3)
+            }
         }
     }
 }
 
 @Composable
-private fun PluginsPage(profile: String?, onBack: () -> Unit) {
+internal fun PluginAddMenu(
+    enabled: Boolean,
+    creatorEnabled: Boolean,
+    creatorDescription: String,
+    onOpen: () -> Unit,
+    onInstall: () -> Unit,
+    onCreatePlugin: () -> Unit,
+) {
+    var expanded by remember { mutableStateOf(false) }
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Button({ expanded = false; onInstall() }, enabled = enabled,
+            shape = T.R8, contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp)) {
+            Text(pt("添加插件", "Add plugin"), fontSize = 13.sp)
+        }
+        Box {
+            IconButton({ expanded = true; onOpen() }, enabled = enabled) {
+                Icon(D.chevronDown, pt("选择添加插件方式", "Choose how to add a plugin"))
+            }
+            DropdownMenu(expanded, { expanded = false }, containerColor = T.Surface, shape = T.R12) {
+                DropdownMenuItem(
+                    text = { Column {
+                        Text(pt("安装第三方插件", "Install a third-party plugin"))
+                        Text(pt("支持 npm 包、Git 仓库和本地目录", "Supports npm packages, Git repositories, and local directories"), fontSize = 12.sp, color = T.Text3)
+                    } },
+                    leadingIcon = { Icon(D.download, null, Modifier.size(16.dp)) },
+                    enabled = enabled,
+                    onClick = { expanded = false; onInstall() },
+                )
+                DropdownMenuItem(
+                    text = { Column {
+                        Text(pt("让 Agent 创建插件", "Let the agent create a plugin"))
+                        Text(creatorDescription, fontSize = 12.sp, color = T.Text3)
+                    } },
+                    leadingIcon = { Icon(D.agentPreset, null, Modifier.size(16.dp)) },
+                    enabled = enabled && creatorEnabled,
+                    onClick = { expanded = false; onCreatePlugin() },
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun PluginsPage(profile: String?, onBack: () -> Unit, onCreatePlugin: () -> Unit) {
     val ops by Pocket.ops.collectAsState()
     val status by Pocket.status.collectAsState()
     val catalogRevision by Pocket.pluginCatalogRevision.collectAsState()
+    val presetRoster by Pocket.presetRoster.collectAsState()
     val online = profile != null && status[profile] == Dot.Online
     val scope = rememberCoroutineScope()
-    var hostUi by remember { mutableStateOf(false) }
-    if (hostUi) {
-        HostUiScreen(pt("插件自定义界面", "Plugin interfaces")) { hostUi = false }
-        return
+    var creatorState by remember { mutableStateOf("idle") }
+    val creatorPresent = presetRoster.any { it["id"].str() == "cordis" }
+    fun loadCreator() {
+        if (creatorState == "loading") return
+        creatorState = "loading"
+        scope.launch {
+            try {
+                val connection = checkNotNull(Pocket.clientOrNull())
+                val operation = when {
+                    "presets.settings" in ops -> "presets.settings"
+                    "presets.list" in ops -> "presets.list"
+                    else -> { creatorState = "unavailable"; return@launch }
+                }
+                val result = connection.call(operation)
+                if (Pocket.active.value != profile || Pocket.clientOrNull() !== connection) return@launch
+                Pocket.presetRoster.value = result["presets"].arr().orEmpty().filterIsInstance<JsonObject>()
+                creatorState = "ready"
+            } catch (e: CancellationException) { throw e }
+            catch (_: Exception) { creatorState = "unavailable" }
+        }
     }
     var bundles by remember { mutableStateOf<List<JsonElement>>(emptyList()) }
     var plugins by remember { mutableStateOf<List<JsonElement>>(emptyList()) }
@@ -320,23 +423,31 @@ private fun PluginsPage(profile: String?, onBack: () -> Unit) {
         SettingsScaffold(selected?.let(::pluginTitle) ?: if (moreOptional) pt("实验性插件", "Experimental plugins") else pt("插件", "Plugins"), ::back, actions = {
             IconButton(::reload, enabled = online && !locked) { Icon(D.refresh, pt("刷新", "Refresh")) }
             if ((selected == null && !moreOptional && managementAvailable && "plugins.install" in ops) || installRequest != null) {
-                Button({ openInstall() }, enabled = installRequest != null || (online && !locked),
-                    shape = T.R8, contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp)) {
-                    Text(if (installRequest != null) pt("安装任务", "Installation") else pt("添加插件", "Add plugin"), fontSize = 13.sp)
-                }
+                if (installRequest != null) {
+                    Button({ openInstall() }, shape = T.R8, contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp)) {
+                        Text(pt("安装任务", "Installation"), fontSize = 13.sp)
+                    }
+                } else PluginAddMenu(
+                    enabled = online && !locked,
+                    creatorEnabled = creatorState == "ready" && creatorPresent && "sessions.create" in ops,
+                    creatorDescription = when {
+                        creatorState == "idle" || creatorState == "loading" -> pt("正在确认创造模式是否可用", "Checking whether Creator mode is available")
+                        creatorState != "ready" -> pt("暂时不可用，请重新打开菜单重试", "Temporarily unavailable. Reopen this menu to retry")
+                        !creatorPresent -> pt("当前配置未提供创造模式", "Creator mode is not included in this configuration")
+                        else -> pt("进入创造模式，制作属于你的 DSH 插件", "Enter Creator mode and make your own DSH plugin")
+                    },
+                    onOpen = ::loadCreator,
+                    onInstall = { openInstall() },
+                    onCreatePlugin = onCreatePlugin,
+                )
             }
         }) {
             error?.let { PluginMessage(it, true) }
             outcome?.let { PluginOutcome(it) }
             if (loading || busy) LinearProgressIndicator(Modifier.fillMaxWidth().padding(horizontal = 18.dp))
-            if ("ui.open" in ops) SettingsCard {
-                SettingsNavRow(pt("打开插件自定义界面", "Open plugin interfaces"), D.pluginPinwheel,
-                    value = pt("与桌面共用", "Shared with desktop"), divider = false,
-                    enabled = online && !locked, onClick = { hostUi = true })
-            }
             if (selected == null) {
                 if (!moreOptional) {
-                    PluginMessage(pt("安装、启用和配置插件", "Install, enable and configure plugins"))
+                    PluginPageIntro()
                     val configurations = namespaces.filter { it["ns"].str() in officialConfigurations }
                     if (configurations.isNotEmpty()) PluginSection(pt("内置插件配置", "Built-in plugin settings"))
                     configError?.let { PluginMessage(it, true) }
@@ -457,7 +568,13 @@ private fun PluginsPage(profile: String?, onBack: () -> Unit) {
         inspection = inspection, result = installResult, error = installError, catalogUpdate = catalogUpdate,
         busy = installing || checking, unresolved = installRequest != null, online = online && !busy && !loading,
         approval = approval, onApproval = { approval = it }, cancelling = cancelling,
-        onClose = { installOpen = false },
+        onClose = {
+            installOpen = false
+            if (installRequest == null && !installing && !checking) {
+                installSpec = ""; registry = ""; inspection = null; installResult = null
+                installError = null; catalogSelection = null; approval = false
+            }
+        },
         onInspect = {
             if (!busy && !loading && !installing && !checking && installRequest == null && online && installSpec.isNotBlank()) {
                 checking = true; installError = null; inspection = null; installResult = null
@@ -594,7 +711,6 @@ private fun PluginInstallDialog(
                 if (guideOpen) {
                     Text(pt("填入插件 npm 包名：社区插件 README 安装命令中 dsh plugin add 或 pnpm add 之后的部分，例如 dsh-xxx 或 @作者/插件名。", "Enter the npm package name: the part after dsh plugin add or pnpm add in the community plugin README, such as dsh-xxx or @author/plugin."), fontSize = 13.sp)
                     TextButton({ onSpec("dsh-plugin-whale-pet") }, enabled = !busy && !unresolved) { Text(pt("填入示例：", "Use example: ") + "dsh-plugin-whale-pet") }
-                    Text(pt("按需安装的官方插件提供更新；其他插件请先卸载再安装新版。插件的 Web 页面可从「插件自定义界面」打开，无需逐插件适配 APK。", "On-demand official plugins offer updates. Uninstall other plugins before installing a newer version. Open installed Web pages through Plugin interfaces; no per-plugin APK adaptation is needed."), fontSize = 12.sp)
                 }
                 TextButton({ registryOpen = !registryOpen }) { Text(pt("安装源", "Registry")) }
                 if (registryOpen) {
@@ -814,7 +930,6 @@ private fun PluginConfiguration(initial: JsonElement, writable: Boolean, onBack:
                 }
             }
         }
-        if (fields.isEmpty()) PluginMessage(pt("该配置包含专用数据结构，请使用高级编辑，或返回插件页打开「插件自定义界面」。", "This configuration uses specialized data structures. Use advanced editing, or return to Plugins and open Plugin interfaces."))
         Row(Modifier.padding(18.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Button(::commit, enabled = writable && !busy && (drafts.isNotEmpty() || resets.isNotEmpty())) { Text(pt("保存", "Save")) }
             TextButton({
@@ -867,7 +982,6 @@ private fun PluginAdvancedConfiguration(initial: JsonElement, writable: Boolean,
         }
     }
     SettingsScaffold(snapshot["ns"].str().orEmpty(), onBack) {
-        PluginMessage(pt("基于主机 schema 的结构化编辑。每次只修改指定路径，并携带修订号；插件专用页面可从「插件自定义界面」打开。", "Structured editing from the host schema. Each write changes only the selected path with a revision fence. Plugin-specific pages are available through Plugin interfaces."))
         if (canReload && !writable) PluginMessage(pt("配置当前只读", "Settings are read-only"))
         if (busy) LinearProgressIndicator(Modifier.fillMaxWidth().padding(horizontal = 18.dp))
         message?.let { PluginMessage(it, failed) }

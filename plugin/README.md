@@ -122,6 +122,8 @@ WebSocket 管理操作要求 owner 身份。管理 UI 通过受本机信任边�
 |---|---|
 | 工作区 | 使用官方实体、成员关系和归档状态；有活动任务时保留官方拒绝详情，由用户确认停止后再提交。 |
 | 目录选择 | `workspace.directoryList` 仅在官方 `browse` 模式公布；后端支持创建时才公布 `workspace.directoryCreate {path,name}`。返回官方绝对路径，保留空格及业务错误，不另写文件系统实现。仅有 `native` 时手机可输入完整路径，不弹电脑系统窗口。 |
+| 文件目录订阅 | `files.follow {sessionId,path,subId}` 复用官方 `workspaceFiles.changes`，推送 `files` 的 `ready/change` 帧及规范化 `frame.path`；`unfollow` 取消。手机先等 ready 再读取，避免初始竞态；路径变更、断连和退出均取消旧订阅。 |
+| Office 预览 | 可选 `office.render {sessionId,path,subId}` 调用官方 `officeToPdf.render`，返回 `{handle,absolutePath,version,generation,bytes,missingFonts,chunkBytes}`；`office.read {sessionId,handle,version,generation,offset,length}` 返回最多 128 KiB 的 base64 块；`office.release {sessionId,handle}` 或 `unfollow {subId}` 取消／释放，包括尚未返回的转换。仅支持 DOC/DOCX、PPT/PPTX，按 live/persisted session header 解析工作区，不激活 Agent。句柄绑定连接，读取前核对源版本；默认最多 8 个句柄、200 MiB 总预留、100 MiB 单输出，60 秒闲置过期，取消／断线／卸载清理。 |
 | 指令与目标 | 指令来自当前 Agent 的 `commands.list`；目标更新使用官方 `id/revision`，不能从文本猜版本。 |
 | `@` 引用 | 两类查询通过官方 `sessionController.resolveAgent(sessionId)` 加载或恢复 Agent；Host 重载后的历史会话也可直接查询，不以先发送消息为前提。`references.files` 调用 Host `fileReferences.list(agent, query, signal)`，返回 `{items:[{path,kind}]}`；`references.sessions` 调用 `sessionReferenceResolver.remoteExportCandidates(agent, query, signal)`（`candidates` 只是 Remote 名称），保留官方 canonical `mention`，将 `displayTitle ?? label` 映射为 `title`。`kind=subagent` 仅用于 `sessionQuery` 中 `origin=subagent` 且 `parentSession` 为当前会话的直接子智能体，其他候选为 `session`；普通 fork 不算子智能体。 |
 | 后台任务 | `jobs.follow` 推送 `job` / `job.end` / `job.error`，共享 `unfollow` 只取消订阅，不终止任务。 |
@@ -156,18 +158,20 @@ WebSocket 管理操作要求 owner 身份。管理 UI 通过受本机信任边�
 
 ## 插件自定义 Web 界面
 
-这是插件详情的可选入口，不是原生模型设置或内置插件目录的默认实现。仅当 Host 提供 `webServer` 与 `connection` 时公布 `ui.open({section?})` / `ui.close({ticket?})`。
+仅当 Host 提供 `webServer` 与 `connection` 时公布 `ui.open({section?})` / `ui.close({ticket?})`，供已认证客户端按需使用。Android 模型页、内置插件目录和插件管理均为原生界面，不提供泛化的“插件自定义界面”中间入口。Qoder CN 原生卡片复用 `models.settingsMutate` 和写入型 `credentials.*`，不增加认证实现或新协议。
 
 1. `ui.open` 返回 `{ticket,path:"/pocket-ui/open"}`；原生以表单 POST 兑换 `dsh-pocket-web` HttpOnly / SameSite=Strict cookie，并跳转至不带票据的 303 地址。
 2. 单次票据有效 60 秒，网页会话 15 分钟，绑定设备、当前 WS 连接与 authority；断连、撤销或卸载结束相关 HTTP/SSE/WS 会话。
 3. 根页面、官方 assets/plugins/API 及 `/api/remote.mux` 代理到固定本机 Host listener。启动令牌只在服务端兑换内部 cookie，不向手机页面回传 Host 启动令牌、Host cookie 或敏感重定向。
 4. 拒绝 `/pocket/*`、`/open-in-app/*`、任意上游 URL、路径绕过和跨站请求。页面请求与 WS 由 CSP 限定为当前手机端口 origin；不提供第三方脚本到 Android 的 JavaScript bridge、Electron API、设备文件选择或下载。
 
-`/?pocket-ui=1&section=models` 可打开官方模型设置及第三方卡片；无 section 保留完整官方客户端。设置深链等待 session baseline，不替换根组件或影响正常桌面窗口。
+`/?pocket-ui=1&section=models` 打开官方模型设置及第三方卡片；设置深链等待 session baseline，使用官方设置导航，不增加等待说明、引导按钮或替换根组件。正常桌面窗口不受影响。
 
 已认证页面在官方客户端启动前注入独立的 `__DSH_TRANSPORT__={ownsHost:true}`，使 LAN／Tailscale 页面具备与原生已配对连接相同的 Host 管理声明。上游 transport/native/recovery 声明被剥离，不继承其函数、`streamBaseUrl`、进程令牌或 Host cookie；未认证请求无法取得该页面。修改这条链路时必须验证非回环地址，不能只测 USB `127.0.0.1`。
 
 HTML 在脱敏后按 `Accept-Encoding` 协商 gzip，JavaScript/CSS/JSON 同样可压缩；SSE、Range/206、HEAD 与上游已压缩响应不重编码。以上措施**不增加 LAN HTTP 的传输加密**，也不保证任意第三方插件兼容或可信。Android WebView 的 cookie 存储仍为应用级共享；服务端仅接受唯一有效且匹配当前 authority 的会话。
+
+手机启动保留全部官方模块与依赖，但把 application combo 拆为逐模块请求，移除原大包预加载。账户模块中的大型 onboarding PNG 导入改为同源鉴权图片 URL；像素字节不变，只有页面实际使用图片时才读取。资源按内容寻址、在服务作用域内有界保留，退出或撤销设备后不能继续读取；不裁剪插件功能或关闭 WebView 安全检查。
 
 ## 开发与测试
 

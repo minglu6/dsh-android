@@ -211,7 +211,7 @@ class ScreenshotTest {
     }
     @Test fun s23_pluginsSettings() = show("23-plugins-settings") {
         Pocket.ops.value = setOf("plugins.list")
-        PluginsSettingsScreen {}
+        PluginsSettingsScreen(onBack = {}, onCreatePlugin = {})
     }
     @Test fun s24_scheduleSettings() = show("24-schedule-settings") {
         Pocket.ops.value = setOf("schedule.catalog", "schedule.create")
@@ -254,8 +254,8 @@ class ScreenshotTest {
     @Test fun s11_permissionSheet() = showWithDialogs("11-permission-sheet") {
         PermissionPickerSheet("workspace-write", permissions, false, null, {}, {}, {})
     }
-    @Test fun s12_plusSheet() = showWithDialogs("12-plus-sheet") {
-        PlusSheet({}, {}, {}, {}, {}, {}, {}, {}, {})
+    @Test fun s12_commandMenu() = showWithDialogs("12-command-menu") {
+        CommandPopupSheet({}, {}, {}, {}, {}, {}, {}, {}, {})
     }
     @Test fun s14_trajectory() {
         Pocket.chat.value = chatState(hasMore = true)

@@ -58,6 +58,26 @@ class PdfPreviewInstrumentedTest {
         }
     }
 
+    @Test(timeout = 15_000) fun cancellingBorrowedPdfClosesRendererWithoutDeletingOwnersFile() = runBlocking<Unit> {
+        val file = File.createTempFile("office-preview-test-", ".pdf", cacheDir)
+        file.writeBytes(pdfFixture(pageCount = 1, width = 100, height = 100))
+        val opened = CompletableDeferred<PreviewPdf>()
+        val lifetime = launch { holdPreviewPdf(file) { opened.complete(it) } }
+        try {
+            val document = opened.await()
+            val bitmap = document.render(0)
+            try { assertEquals(Color.RED, bitmap.getPixel(bitmap.width / 2, bitmap.height / 2)) }
+            finally { bitmap.recycle() }
+            lifetime.cancelAndJoin()
+            assertTrue(file.exists())
+            assertThrows(IllegalStateException::class.java) { document.render(0) }
+            PreviewPdf(file, deleteOnClose = false).use { assertEquals(1, it.pageCount) }
+        } finally {
+            lifetime.cancelAndJoin()
+            file.delete()
+        }
+    }
+
     private fun pdfFixture(pageCount: Int, width: Int, height: Int): ByteArray {
         val pdf = PdfDocument()
         try {

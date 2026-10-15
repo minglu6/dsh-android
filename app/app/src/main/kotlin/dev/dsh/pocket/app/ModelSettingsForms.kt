@@ -76,8 +76,18 @@ internal fun protocolLabel(protocol: String) = when (protocol) {
     "anthropic-messages" -> "Anthropic Messages"
     else -> protocol
 }
+internal fun providerDisplayName(row: JsonElement?, route: String): String {
+    val configuredName = row["profile"]["displayName"].str()?.takeIf { it.isNotBlank() }
+    val name = configuredName ?: row["displayName"].str() ?: route
+    if (route == "deepseek-account" && configuredName == null && row["declared"] != JsonPrimitive(true) &&
+        (name == route || name == "DeepSeek Account")) {
+        return st("DeepSeek 账号", "DeepSeek Account")
+    }
+    return name
+}
+
 internal fun providerOptionLabel(row: JsonElement?, route: String): String {
-    val name = row["displayName"].str() ?: route
+    val name = providerDisplayName(row, route)
     return if (name == route) route else "$name ($route)"
 }
 

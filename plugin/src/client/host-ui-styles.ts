@@ -1,33 +1,5 @@
 /** Scoped to this WebView window; no generated classes or plugin-specific selectors. */
 const css = `
-html[data-pocket-ui] [data-pocket-ui-notice] {
-  position: fixed;
-  z-index: 1100;
-  inset: auto 12px max(12px, env(safe-area-inset-bottom));
-  box-sizing: border-box;
-  max-height: 50dvh;
-  overflow: auto;
-  padding: 16px;
-  border: 1px solid var(--dsw-alias-border-l2);
-  border-radius: var(--dsw-radius-panel, 16px);
-  background: var(--dsw-alias-bg-layer-2);
-  color: var(--dsw-alias-label-primary);
-  box-shadow: var(--dsw-elevation-prominent);
-  font: inherit;
-  overflow-wrap: anywhere;
-}
-html[data-pocket-ui] [data-pocket-ui-notice] p { margin: 0 0 12px; }
-html[data-pocket-ui] [data-pocket-ui-notice] > div { display: flex; flex-wrap: wrap; gap: 8px; }
-html[data-pocket-ui] [data-pocket-ui-notice] button {
-  min-height: 44px;
-  padding: 8px 12px;
-  border: 1px solid var(--dsw-alias-border-l2);
-  border-radius: var(--dsw-radius-md, 12px);
-  background: var(--dsw-alias-bg-base);
-  color: inherit;
-  font: inherit;
-  cursor: pointer;
-}
 @media (max-width: 700px) {
   html[data-pocket-ui] [data-shortcut-modal="settings"] {
     box-sizing: border-box;

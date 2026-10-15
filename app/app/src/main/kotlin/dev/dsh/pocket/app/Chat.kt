@@ -305,7 +305,8 @@ fun ChatRoot(
     val draftWorkspacePath = draftCwd ?: draftWorkspace?.path
     val sessionPanel = sheet == Sheet.Files || sheet == Sheet.Terminal || sheet == Sheet.SessionInspector
     LaunchedEffect(active, sheet) {
-        if ((sessionPanel || sheet == Sheet.Mentions) && Pocket.chat.value == null && firstPrompt == null) {
+        if ((sessionPanel || sheet == Sheet.Mentions || sheet == Sheet.Plus || sheet == Sheet.Commands) &&
+            Pocket.chat.value == null && firstPrompt == null) {
             sidebarDraft = composerDraft
             try {
                 Pocket.prepareSidebarSession(
@@ -613,17 +614,7 @@ fun ChatRoot(
             )
         }
         Sheet.Preset -> PresetSheet(if (sid == null) effectivePreset else chat?.agentPreset.orEmpty(), editable = sid == null, onDismiss = { sheet = Sheet.None }) { draftPreset = it }
-        Sheet.Plus -> PlusSheet(
-            onDismiss = { sheet = Sheet.None },
-            onPerm = { if (dot == Dot.Online) sheet = Sheet.Permission },
-            onModel = { if (dot == Dot.Online) { modelDirect = true; sheet = Sheet.Model } },
-            onFile = { pickFiles.launch("*/*") },
-            onGoal = { sheet = Sheet.Goal },
-            onPlan = { Pocket.executeCommand("/plan") },
-            onFeedback = { sheet = Sheet.Feedback },
-            onCompact = { Pocket.executeCommand("/compact") },
-            onExport = { doExport() },
-        )
+
         Sheet.More -> MoreSheet(chat, onDismiss = { sheet = Sheet.None }, onFeedback = { sheet = Sheet.Feedback }, onExport = { doExport() })
         Sheet.Panel -> PanelSheet(
             onDismiss = { sheet = Sheet.None },
@@ -646,7 +637,7 @@ fun ChatRoot(
                 },
             )
         }
-        Sheet.Commands -> CommandPopupSheet(
+        Sheet.Plus, Sheet.Commands -> CommandPopupSheet(
             onDismiss = { sheet = Sheet.None },
             onFile = { pickFiles.launch("*/*") },
             onGoal = { sheet = Sheet.Goal },
@@ -656,7 +647,12 @@ fun ChatRoot(
             onPerm = { if (dot == Dot.Online) sheet = Sheet.Permission },
             onModel = { if (dot == Dot.Online) { modelDirect = true; sheet = Sheet.Model } },
             onExport = { doExport() },
-            initialQuery = composerTrigger(composerDraft.text, composerDraft.selection.end)?.query.orEmpty(),
+            initialQuery = if (sheet == Sheet.Commands) composerTrigger(composerDraft.text, composerDraft.selection.end)?.query.orEmpty() else "",
+            leading = composerDraft.text.take(
+                if (sheet == Sheet.Commands) composerTrigger(composerDraft.text, composerDraft.selection.end)?.start ?: composerDraft.selection.start
+                else composerDraft.selection.start,
+            ).isBlank(),
+            consumeSlash = sheet == Sheet.Commands,
         )
         Sheet.Mentions -> Unit // Anchored above the composer without taking input focus.
         Sheet.Files -> sid?.let { FilesSheet(it, onDismiss = { sheet = Sheet.None }, onBack = { sheet = Sheet.Panel }) }

@@ -22,6 +22,8 @@ import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.hasSetTextAction
+import androidx.compose.ui.test.assertIsEnabled
+import androidx.compose.ui.test.assertIsNotEnabled
 import dev.dsh.pocket.protocol.SessionSummary
 import dev.dsh.pocket.protocol.WorkspaceView
 import dev.dsh.pocket.protocol.Approval
@@ -546,6 +548,7 @@ class DrawerSidebarParityTest {
         assertEquals(null, picked)
     }
 
+
     @Test fun forkLineageDoesNotHideOrdinarySession() {
         Pocket.prefs.sessionGroupBy = SessionGroupBy.Flat
         Pocket.sessions.value = listOf(
@@ -664,8 +667,8 @@ class DrawerSidebarParityTest {
         rule.onNodeWithTag("sessionArchive:s1").assertContentDescriptionEquals("取消归档")
         rule.onNodeWithTag("sessionMenu:s1").performClick()
         rule.onNodeWithText("置顶会话").assertDoesNotExist()
-        rule.onNodeWithText("重命名").assertDoesNotExist()
-        rule.onNodeWithText("分叉会话").assertDoesNotExist()
+        rule.onNodeWithText("重命名").assertIsEnabled()
+        rule.onNodeWithText("分叉会话").assertIsEnabled()
         rule.onNodeWithText("取消归档").assertIsDisplayed()
         rule.runOnIdle {
             Pocket.archivedIds.value = emptySet()

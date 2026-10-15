@@ -127,7 +127,6 @@ class OfflineSettingsTest {
         disconnect()
         rule.onNodeWithText(L.modelsNav()).assertIsNotEnabled().performClick()
         rule.onNodeWithText("内置插件").assertIsNotEnabled()
-        rule.onNodeWithText(L.scheduleNav()).assertIsNotEnabled()
         rule.onNodeWithText("连接").assertIsEnabled().performClick()
         rule.runOnIdle { assertEquals(1, connectionsOpened); assertEquals(0, modelsOpened) }
         rule.onRoot().captureRoboImage("build/screenshots/settings-navigation-offline.png",

@@ -202,24 +202,9 @@ fun WorkspaceSheet(cur: String?, onDismiss: () -> Unit, onPick: (String) -> Unit
     }
 }
 
-@Composable
-fun PlusSheet(
-    onDismiss: () -> Unit,
-    onPerm: () -> Unit,
-    onModel: () -> Unit,
-    onFile: () -> Unit,
-    onGoal: () -> Unit,
-    onPlan: () -> Unit,
-    onFeedback: () -> Unit,
-    onCompact: () -> Unit,
-    onExport: () -> Unit,
-) {
-    CommandPopupSheet(onDismiss, onFile, onGoal, onPlan, onFeedback, onCompact, onPerm, onModel, onExport)
-}
 
 @Composable
 fun MoreSheet(chat: ChatState?, onDismiss: () -> Unit, onFeedback: () -> Unit, onExport: () -> Unit) {
-    var renaming by remember { mutableStateOf(false) }
     val active by Pocket.active.collectAsState()
     val status by Pocket.status.collectAsState()
     val ops by Pocket.ops.collectAsState()
@@ -227,45 +212,10 @@ fun MoreSheet(chat: ChatState?, onDismiss: () -> Unit, onFeedback: () -> Unit, o
     val export = "session.export" in ops
     val inChat = chat != null
     PocketSheet(onDismiss) {
-        if (renaming && chat != null) {
-            var t by remember { mutableStateOf(chat.title.orEmpty()) }
-            SheetTitle("重命名会话")
-            OutlinedTextField(t, { t = it }, singleLine = true, shape = T.R12, modifier = Modifier.padding(horizontal = 22.dp).fillMaxWidth())
-            Button({ Pocket.rename(chat.sessionId, t.trim()); onDismiss() }, Modifier.padding(22.dp).fillMaxWidth().height(50.dp), enabled = online && t.isNotBlank(), shape = T.R12,
-                colors = PrimaryColors()) { Text("保存") }
-            return@PocketSheet
-        }
-        // Session-only extras (mobile keeps rename here; desktop puts it on the sidebar row menu).
-        if (chat != null) {
-            OptionRow("重命名", icon = D.edit) { renaming = true }
-            val metrics = chat.composerMetrics
-            SectionLabel(if (metrics.activityIsWholeSession) "会话统计" else "已加载历史统计")
-            Column(Modifier.padding(horizontal = 22.dp, vertical = 4.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                metrics.activity?.let { Text("${it.turns} 轮 · ${it.steps} 步", color = T.Text2, fontSize = 13.sp) }
-                metrics.tokens?.let {
-                    Text("输入 ${kfmt(it.billedInputTokens)} · 输出 ${kfmt(it.outputTokens)}", color = T.Text2, fontSize = 13.sp)
-                    it.cacheHitPercent?.let { percent -> Text("缓存命中 $percent%", color = T.Text3, fontSize = 12.sp) }
-                }
-                if (metrics.activity == null && metrics.tokens == null) Text("主机未提供统计数据", color = T.Text3, fontSize = 13.sp)
-            }
-            Spacer(Modifier.height(8.dp))
-        }
         // Official dsh Session Header ⋯ (dsh-session-log-export HeaderAction): download always listed;
         // feedback when that path is available. Need a session → disable (never hide into an empty sheet).
         OptionRow("下载 Session 日志", icon = D.download, enabled = online && export && inChat) { onExport(); onDismiss() }
-        if ("sessionFeedback.record" in ops) OptionRow("反馈", icon = D.paperPlane, enabled = inChat) { onFeedback() }
-        val fork = "sessions.fork" in ops
-        if (fork && chat != null) {
-            OptionRow(
-                "在新对话中分支",
-                "从当前会话前缀创建分支",
-                D.newChat,
-                enabled = online && !chat.running,
-            ) {
-                Pocket.forkSession(null)
-                onDismiss()
-            }
-        }
+        if ("sessionFeedback.record" in ops) OptionRow("反馈", icon = D.paperPlane, enabled = online && inChat) { onFeedback() }
     }
 }
 
@@ -559,11 +509,7 @@ fun TeamSheet(onDismiss: () -> Unit) {
     }
 }
 
-/**
- * `/` command popup — same sections/rows as desktop `ui-commands` (add + commands).
- * Each pick consumes the typed `/` (desktop `slash/input-consume-token`) then runs the
- * matching action (pickers / sheets / host execute), mirroring [PlusSheet].
- */
+/** The shared desktop command source: both the + launcher and slash typing use this menu. */
 @Composable
 fun CommandPopupSheet(
     onDismiss: () -> Unit,
@@ -576,72 +522,178 @@ fun CommandPopupSheet(
     onModel: () -> Unit,
     onExport: () -> Unit,
     initialQuery: String = "",
+    leading: Boolean = true,
+    consumeSlash: Boolean = true,
 ) {
     val chat by Pocket.chat.collectAsState()
     val active by Pocket.active.collectAsState()
     val status by Pocket.status.collectAsState()
     val ops by Pocket.ops.collectAsState()
+    val sessions by Pocket.sessions.collectAsState()
+    val subagent = sessions.firstOrNull { it.sessionId == chat?.sessionId }?.origin == "subagent"
     val online = status[active] == Dot.Online
-    var query by remember { mutableStateOf(initialQuery) }
-    var commands by remember { mutableStateOf<List<JsonObject>>(emptyList()) }
+    val sessionReady = chat?.loaded == true
+    var query by remember(active, chat?.sessionId) { mutableStateOf(initialQuery) }
+    var commands by remember(active, chat?.sessionId) { mutableStateOf<List<JsonObject>>(emptyList()) }
     var loading by remember { mutableStateOf(true) }
     var error by remember { mutableStateOf<String?>(null) }
     var attempt by remember { mutableIntStateOf(0) }
-    LaunchedEffect(chat?.sessionId, attempt, online) {
-        if (!online) { loading = false; return@LaunchedEffect }
+    LaunchedEffect(active, chat?.sessionId, sessionReady, attempt, online, ops, subagent) {
+        if (!online || !sessionReady) { loading = online && !sessionReady; return@LaunchedEffect }
         loading = true; error = null
         try {
             val id = chat?.sessionId
-            commands = if (id == null) emptyList() else Pocket.commandCatalog(id)
+            commands = if (id == null || subagent || "commands.list" !in ops) emptyList() else Pocket.commandCatalog(id)
         } catch (e: CancellationException) { throw e }
         catch (e: Exception) { error = e.message ?: "无法加载指令" }
         finally { loading = false }
     }
+    val candidates = buildList {
+        addAll(commands)
+        if (sessionReady && "attachments.upload" in ops) add(buildJsonObject { put("name", "file"); put("client", "file") })
+        if (sessionReady && !subagent && "models.catalog" in ops) add(buildJsonObject { put("name", "model"); put("client", "model") })
+    }
+    val collision = candidates.groupingBy { it["name"].str() }.eachCount().entries.firstOrNull { it.value > 1 }?.key
+    val rows = if (collision == null) commandMenuRows(candidates, query, leading) else emptyList()
+    fun consume() { if (consumeSlash) Pocket.consumeComposerSlash() }
     PocketSheet(onDismiss) {
-        SheetTitle("指令")
-        OutlinedTextField(query, { query = it }, placeholder = { Text("搜索指令") }, singleLine = true,
+        OutlinedTextField(query, { query = it }, placeholder = { Text(commandMenuText("搜索…", "Search…")) }, singleLine = true,
             modifier = Modifier.padding(horizontal = 22.dp).fillMaxWidth())
         if (loading) LinearProgressIndicator(Modifier.fillMaxWidth())
         error?.let { Text(it, color = T.Err, modifier = Modifier.padding(22.dp)); TextButton({ attempt++ }, enabled = online) { Text("重试") } }
-        if (chat == null) Text("请先打开会话以读取主机指令目录", color = T.Text3, modifier = Modifier.padding(22.dp))
-        SectionLabel(L.sectionAdd())
-        if ("file".contains(query, true) || L.file().contains(query, true)) OptionRow(L.file(), icon = D.paperclip, code = "file", enabled = online && chat != null && "attachments.upload" in ops) {
-            Pocket.consumeComposerSlash(); onFile(); onDismiss()
-        }
-        if ("model".contains(query, true) || "模型".contains(query)) OptionRow("模型", icon = D.data, code = "model", enabled = online) { Pocket.consumeComposerSlash(); onModel() }
-        if (chat == null && ("permission".contains(query, true) || "权限".contains(query))) OptionRow("权限", icon = D.permission("danger-full-access"), code = "permission", enabled = online) {
-            Pocket.consumeComposerSlash(); onPerm()
-        }
-        SectionLabel(L.sectionCommands())
-        val filtered = commands.filter { it["name"].str().orEmpty().contains(query, true) || it["description"].str().orEmpty().contains(query, true) }
-        if (!loading && error == null && chat != null && filtered.isEmpty()) Text(L.noOptions(), color = T.Text3, modifier = Modifier.padding(22.dp))
-        filtered.forEach { command ->
+        collision?.let { Text("Command contribution /$it collides with a host command", color = T.Err, modifier = Modifier.padding(22.dp)) }
+        if (!loading && error == null && rows.isEmpty()) Text(L.noOptions(), color = T.Text3, modifier = Modifier.padding(22.dp))
+        if (query.isNotEmpty() && rows.isNotEmpty()) SectionLabel(L.sectionCommands())
+        var lastSection: String? = null
+        rows.forEach { command ->
             val name = command["name"].str() ?: return@forEach
             val builtin = builtinCommandName(command["definitionId"].str())
-            val requiresHost = builtin == "plan" || builtin == "compact" || builtin == "export" || builtin == "permission"
-            OptionRow("/$name", command["description"].str(), enabled = online || !requiresHost) {
-                // Only decorate commands that the Host actually advertised. Others return
-                // the real token to the composer so arguments can be reviewed before send.
-                when (builtin) {
-                    "goal" -> { Pocket.consumeComposerSlash(); onGoal() }
-                    "plan" -> {
-                        Pocket.consumeComposerSlash()
-                        if (name == "plan") onPlan() else Pocket.executeCommand("/$name")
+            val client = command["client"].str()
+            if (query.isEmpty()) {
+                val section = if (name in commandAddNames) L.sectionAdd() else L.sectionCommands()
+                if (section != lastSection) SectionLabel(section)
+                lastSection = section
+            }
+            val label = commandMenuLabel(command)
+            val icon = when (client ?: builtin) {
+                "file" -> D.paperclip
+                "model" -> D.data
+                "goal" -> D.goal
+                "plan" -> D.plan
+                "feedback" -> D.paperPlane
+                "compact" -> D.compact
+                "permission" -> D.permission("danger-full-access")
+                "export" -> D.download
+                else -> null
+            }
+            val available = when (client ?: builtin) {
+                "file" -> "attachments.upload" in ops
+                "model" -> "models.catalog" in ops
+                "feedback" -> "sessionFeedback.record" in ops
+                "export" -> "session.export" in ops
+                "permission" -> "permissions.catalog" in ops
+                else -> "commands.execute" in ops
+            }
+            OptionRow(label ?: name, commandMenuDescription(command), icon,
+                code = name.takeIf { label != null && !label.equals(name, ignoreCase = true) },
+                enabled = online && sessionReady && available) {
+                when (client ?: builtin) {
+                    "file" -> { consume(); onDismiss(); onFile() }
+                    "model" -> { consume(); onModel() }
+                    "goal" -> { consume(); onGoal() }
+                    "plan" -> { consume(); if (name == "plan") onPlan() else Pocket.executeCommand("/$name"); onDismiss() }
+                    "feedback" -> { consume(); onFeedback() }
+                    "compact" -> { consume(); if (name == "compact") onCompact() else Pocket.executeCommand("/$name"); onDismiss() }
+                    "permission" -> { consume(); onPerm() }
+                    "export" -> { consume(); onExport(); onDismiss() }
+                    else -> {
+                        if (command["input"] is JsonObject) Pocket.insertComposer("/$name")
+                        else { consume(); Pocket.executeCommand("/$name") }
                         onDismiss()
                     }
-                    "feedback" -> { Pocket.consumeComposerSlash(); onFeedback() }
-                    "compact" -> {
-                        Pocket.consumeComposerSlash()
-                        if (name == "compact") onCompact() else Pocket.executeCommand("/$name")
-                        onDismiss()
-                    }
-                    "permission" -> { Pocket.consumeComposerSlash(); onPerm() }
-                    "export" -> { Pocket.consumeComposerSlash(); onExport(); onDismiss() }
-                    else -> { Pocket.insertComposer("/$name"); onDismiss() }
                 }
             }
         }
     }
+}
+
+private val commandAddNames = listOf("file", "goal", "plan", "feedback")
+private val commandOrderedNames = commandAddNames + listOf("compact", "permission", "model", "export")
+private fun commandMenuText(zh: String, en: String) = if (Pocket.prefs.language == AppLanguage.En) en else zh
+
+internal fun commandMenuLabel(command: JsonObject): String? = when (command["client"].str() ?: builtinCommandName(command["definitionId"].str())) {
+    "file" -> L.file()
+    "model" -> commandMenuText("模型", "Model")
+    "goal" -> commandMenuText("目标", "Goal")
+    "plan" -> commandMenuText("计划", "Plan")
+    "feedback" -> commandMenuText("反馈", "Feedback")
+    "compact" -> commandMenuText("压缩", "Compact")
+    "permission" -> commandMenuText("权限", "Permission")
+    "export" -> commandMenuText("下载日志", "Export")
+    else -> null
+}
+
+private fun commandMenuDescription(command: JsonObject): String? = when (command["client"].str() ?: builtinCommandName(command["definitionId"].str())) {
+    "model" -> commandMenuText("选择本会话使用的模型", "Select the model for this conversation")
+    "goal" -> commandMenuText("设置或查看长期任务目标", "Set or view the goal for a long-running task")
+    "plan" -> commandMenuText("进入或退出计划模式", "Enter or leave plan mode")
+    "feedback" -> commandMenuText("发送关于当前会话的反馈", "Record feedback about this session")
+    "compact" -> commandMenuText("压缩以上对话内容", "Compact older conversation history")
+    "permission" -> commandMenuText("切换权限预设（沙箱模式与审批策略）", "Switch the permission preset (sandbox mode + approval policy)")
+    "export" -> commandMenuText("将当前会话内容导出为 ZIP", "Download this Session log as a ZIP archive")
+    else -> command["description"].str()
+}
+
+/** ui-commands sectionRows + ui-primitives rankByName; names, not builtin identities, set section order. */
+internal fun commandMenuRows(commands: List<JsonObject>, query: String, leading: Boolean): List<JsonObject> {
+    val visible = commands.filter { leading || it["input"]["hint"].str() == null }
+    if (query.isEmpty()) {
+        val byName = visible.associateBy { it["name"].str() }
+        return commandOrderedNames.mapNotNull(byName::get) + visible.filter { it["name"].str() !in commandOrderedNames }
+    }
+    val lowerQuery = query.lowercase(java.util.Locale.ROOT)
+    data class Match(val row: JsonObject, val index: Int, val prefix: Boolean, val score: Int)
+    return visible.mapIndexedNotNull { index, row ->
+        var best: Int? = null
+        var prefix = false
+        for (key in listOfNotNull(row["name"].str(), commandMenuLabel(row))) {
+            val name = key.lowercase(java.util.Locale.ROOT)
+            val score = commandAlignmentScore(name, lowerQuery) ?: continue
+            prefix = prefix || name.startsWith(lowerQuery)
+            best = best?.let { maxOf(it, score) } ?: score
+        }
+        best?.let { Match(row, index, prefix, it) }
+    }.sortedWith(compareByDescending<Match> { it.prefix }.thenByDescending { it.score }.thenBy { it.index }).map { it.row }
+}
+
+private fun commandAlignmentScore(name: String, query: String): Int? {
+    if (query.length > name.length) return null
+    val none = Int.MIN_VALUE
+    fun boundary(index: Int) = if (index == 0 || name[index - 1] == '-' || name[index - 1] == '_') 8 else 0
+    var previous = IntArray(name.length) { index -> if (name[index] == query[0]) 1 + boundary(index) - index else none }
+    var current = IntArray(name.length)
+    for (queryIndex in 1 until query.length) {
+        current.fill(none)
+        var left = none
+        var leftLeft = none
+        var bestGapped = none
+        for (index in name.indices) {
+            val prior = previous[index]
+            if (leftLeft != none) bestGapped = maxOf(bestGapped, leftLeft + index - 2)
+            if (name[index] == query[queryIndex]) {
+                val bonus = 1 + boundary(index)
+                var score = if (left == none) none else left + bonus + 4
+                if (bestGapped != none) score = maxOf(score, bestGapped + bonus + 1 - index)
+                current[index] = score
+            }
+            leftLeft = left
+            left = prior
+        }
+        val swap = previous
+        previous = current
+        current = swap
+    }
+    return previous.maxOrNull()?.takeIf { it != none }
 }
 
 internal fun builtinCommandName(definitionId: String?): String? = when (definitionId) {

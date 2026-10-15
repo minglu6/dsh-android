@@ -124,12 +124,12 @@ fun ModelsSettingsScreen(onBack: () -> Unit) {
                     Column(Modifier.weight(1f)) {
                         if (expanded) {
                             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                Text(row["displayName"].str() ?: route, color = T.Ink, fontSize = 14.sp)
+                                Text(providerDisplayName(row, route), color = T.Ink, fontSize = 14.sp)
                                 Text(route, color = T.Text3, fontSize = 12.sp, modifier = Modifier.weight(1f))
                             }
                         } else {
                             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                                Text(row["displayName"].str() ?: route, color = T.Ink, fontSize = 14.sp)
+                                Text(providerDisplayName(row, route), color = T.Ink, fontSize = 14.sp)
                                 if (row["declared"].bool() == true) Text(st("自定义", "Custom"), color = T.Text2, fontSize = 11.sp,
                                     modifier = Modifier.border(0.5.dp, ThemeState.colors.BorderL3, T.R4).padding(horizontal = 6.dp, vertical = 1.dp))
                                 if (route != "deepseek-account") {
@@ -182,6 +182,14 @@ fun ModelsSettingsScreen(onBack: () -> Unit) {
                     adding = false
                     if (changed) { message = st("已保存；以提供商状态确认是否生效", "Saved; check provider status for activation"); reload() }
                 })
+        }
+        namespaces.firstOrNull { it["ns"].str() == "llm-qoder" }?.let { namespace ->
+            key(host) {
+                ModelProviderCard(false) {
+                    QoderConnectionCard(namespace, online, writable, interactionEnabled = !busy && !loading && error == null,
+                        onBusy = { busy = it }, onChanged = ::reload)
+                }
+            }
         }
         Spacer(Modifier.height(20.dp))
     }

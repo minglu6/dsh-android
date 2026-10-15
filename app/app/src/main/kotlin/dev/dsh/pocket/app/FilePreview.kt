@@ -59,6 +59,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.withContext
 import java.io.File
 
@@ -66,12 +68,14 @@ import java.io.File
 val LocalOpenFilePreview = staticCompositionLocalOf<((String) -> Unit)?> { null }
 private fun previewText(zh: String, en: String) = if (Pocket.prefs.language == AppLanguage.En) en else zh
 
-enum class PreviewKind { Text, Image, Pdf, Unsupported }
+enum class PreviewKind { Text, Image, Pdf, Office, Workbook, Unsupported }
 
 fun previewKindFor(path: String): PreviewKind = when (path.substringAfterLast('.', "").lowercase()) {
     "png", "jpg", "jpeg", "gif", "webp", "bmp", "ico", "avif", "heic", "heif" -> PreviewKind.Image
     "pdf" -> PreviewKind.Pdf
-    "doc", "docx", "xls", "xlsx", "xlsm", "xlsb", "ppt", "pptx", "odt", "ods", "odp", "pages", "numbers", "key",
+    "doc", "docx", "ppt", "pptx" -> PreviewKind.Office
+    "xls", "xlsx" -> PreviewKind.Workbook
+    "xlsm", "xlsb", "odt", "ods", "odp", "pages", "numbers", "key",
     "zip", "gz", "tar", "7z", "rar", "exe", "so", "dylib", "mp4", "mov", "mp3", "wav", "woff", "ttf" -> PreviewKind.Unsupported
     else -> PreviewKind.Text
 }
@@ -80,6 +84,8 @@ private enum class TextPreviewMode { Preview, Code, Plain }
 
 @Composable
 fun FilePreviewSheet(sessionId: String, path: String, onDismiss: () -> Unit, onBack: (() -> Unit)? = null) {
+    val host by Pocket.active.collectAsState()
+    val context = LocalContext.current
     val kind = remember(path) { previewKindFor(path) }
     val extension = path.substringAfterLast('.', "").lowercase()
     val richText = extension in setOf("md", "markdown", "html", "htm", "csv", "tsv")
@@ -91,26 +97,27 @@ fun FilePreviewSheet(sessionId: String, path: String, onDismiss: () -> Unit, onB
             add(TextPreviewMode.Plain)
         }
     }
-    var mode by remember(sessionId, path) { mutableStateOf(modes.first()) }
-    var modeMenu by remember(sessionId, path) { mutableStateOf(false) }
-    var generation by remember(sessionId, path) { mutableIntStateOf(0) }
-    var loading by remember(sessionId, path) { mutableStateOf(true) }
-    var error by remember(sessionId, path) { mutableStateOf<String?>(null) }
-    var text by remember(sessionId, path) { mutableStateOf<String?>(null) }
-    var bytes by remember(sessionId, path) { mutableStateOf<ByteArray?>(null) }
-    var refreshed by remember(sessionId, path) { mutableStateOf<String?>(null) }
-    var copied by remember(sessionId, path) { mutableStateOf(false) }
-    var wrap by remember(sessionId, path) { mutableStateOf(Pocket.prefs.codeWordWrap) }
-    var fullImage by remember(path) { mutableStateOf(false) }
+    var mode by remember(host, sessionId, path) { mutableStateOf(modes.first()) }
+    var modeMenu by remember(host, sessionId, path) { mutableStateOf(false) }
+    var generation by remember(host, sessionId, path) { mutableIntStateOf(0) }
+    var loading by remember(host, sessionId, path) { mutableStateOf(true) }
+    var error by remember(host, sessionId, path) { mutableStateOf<String?>(null) }
+    var text by remember(host, sessionId, path) { mutableStateOf<String?>(null) }
+    var bytes by remember(host, sessionId, path) { mutableStateOf<ByteArray?>(null) }
+    var office by remember(host, sessionId, path) { mutableStateOf<OfficePreviewDownload?>(null) }
+    var refreshed by remember(host, sessionId, path) { mutableStateOf<String?>(null) }
+    var copied by remember(host, sessionId, path) { mutableStateOf(false) }
+    var wrap by remember(host, sessionId, path) { mutableStateOf(Pocket.prefs.codeWordWrap) }
+    var fullImage by remember(host, sessionId, path) { mutableStateOf(false) }
     val clip = LocalClipboardManager.current
-    LaunchedEffect(copied, sessionId, path) {
+    LaunchedEffect(copied, host, sessionId, path) {
         if (copied) {
             delay(1000)
             copied = false
         }
     }
 
-    LaunchedEffect(sessionId, path, generation) {
+    LaunchedEffect(host, sessionId, path, generation) {
         loading = true
         error = null
         copied = false
@@ -125,6 +132,31 @@ fun FilePreviewSheet(sessionId: String, path: String, onDismiss: () -> Unit, onB
                     refreshed = bytes?.let { if (it.contentEquals(next)) previewText("文件未变更", "File unchanged") else previewText("已加载文件的新版本", "Loaded updated file") }
                     bytes = next
                 }
+                PreviewKind.Office -> {
+                    val client = Pocket.clientOrNull() ?: error("Disconnected")
+                    val next = loadOfficePreview(client, sessionId, path, context.cacheDir)
+                    try {
+                        refreshed = office?.let {
+                            if (it.version == next.version && it.generation == next.generation) previewText("文件未变更", "File unchanged")
+                            else previewText("已加载文件的新版本", "Loaded updated file")
+                        }
+                        office = next
+                        loading = false
+                        awaitCancellation()
+                    } finally {
+                        withContext(NonCancellable + Dispatchers.IO) { next.close() }
+                    }
+                }
+                PreviewKind.Workbook -> {
+                    val client = Pocket.clientOrNull() ?: error("Disconnected")
+                    val next = readWorkbookBytes(client, sessionId, path)
+                    val unchanged = bytes?.contentEquals(next) == true
+                    refreshed = bytes?.let {
+                        if (unchanged) previewText("文件未变更", "File unchanged")
+                        else previewText("已加载文件的新版本", "Loaded updated file")
+                    }
+                    if (!unchanged) bytes = next
+                }
                 PreviewKind.Text -> {
                     val next = readAllText(sessionId, path)
                     refreshed = text?.let { if (it == next) previewText("文件未变更", "File unchanged") else previewText("已加载文件的新版本", "Loaded updated file") }
@@ -135,9 +167,15 @@ fun FilePreviewSheet(sessionId: String, path: String, onDismiss: () -> Unit, onB
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (failure: Exception) {
-            error = failure.message ?: L.docErrorUnavailable(failure.toString())
+            if (currentCoroutineContext().isActive) {
+                error = when (kind) {
+                    PreviewKind.Office -> officePreviewErrorMessage(failure)
+                    PreviewKind.Workbook -> workbookPreviewErrorMessage(failure)
+                    else -> failure.message ?: L.docErrorUnavailable(failure.toString())
+                }
+            }
         } finally {
-            loading = false
+            if (currentCoroutineContext().isActive) loading = false
         }
     }
 
@@ -153,6 +191,9 @@ fun FilePreviewSheet(sessionId: String, path: String, onDismiss: () -> Unit, onB
             verticalAlignment = Alignment.CenterVertically,
         ) {
             PreviewPathLabel(path, Modifier.weight(1f))
+            if (kind == PreviewKind.Office && !loading && error == null) {
+                office?.let { OfficeFontWarning(it.missingFonts) }
+            }
             if (kind == PreviewKind.Text && modes.size > 1) {
                 Box {
                     TextButton(
@@ -201,7 +242,7 @@ fun FilePreviewSheet(sessionId: String, path: String, onDismiss: () -> Unit, onB
         HorizontalDivider(color = T.Border, thickness = 0.5.dp)
         refreshed?.let { Text(it, color = T.Text3, fontSize = 12.sp, modifier = Modifier.padding(horizontal = 16.dp)) }
         when {
-            loading && (kind != PreviewKind.Text || text == null) -> Box(Modifier.fillMaxWidth().weight(1f), contentAlignment = Alignment.Center) {
+            loading && (if (kind == PreviewKind.Workbook) bytes == null else kind != PreviewKind.Text || text == null) -> Box(Modifier.fillMaxWidth().weight(1f), contentAlignment = Alignment.Center) {
                 CircularProgressIndicator(color = T.Accent, modifier = Modifier.size(28.dp))
             }
             error != null -> Column(Modifier.fillMaxWidth().weight(1f).verticalScroll(rememberScrollState()).padding(16.dp)) {
@@ -213,6 +254,8 @@ fun FilePreviewSheet(sessionId: String, path: String, onDismiss: () -> Unit, onB
                 ImagePreviewBody(bytes!!, Modifier.fillMaxWidth().weight(1f))
             }
             kind == PreviewKind.Pdf && bytes != null -> PdfPreviewBody(bytes!!, Modifier.fillMaxWidth().weight(1f))
+            kind == PreviewKind.Office && office != null -> PdfPreviewBody(office!!.file, Modifier.fillMaxWidth().weight(1f))
+            kind == PreviewKind.Workbook && bytes != null -> WorkbookPreviewBody(path, bytes!!, Modifier.fillMaxWidth().weight(1f))
             text != null -> {
                 val value = text!!
                 when {
@@ -533,7 +576,7 @@ fun FullScreenImagePreview(bytes: ByteArray, onDismiss: () -> Unit) {
 }
 
 /** Renderer owns only the PDF descriptor. Visible lazy rows own their bounded-size bitmaps. */
-internal class PreviewPdf(val file: File) : AutoCloseable {
+internal class PreviewPdf(val file: File, private val deleteOnClose: Boolean = true) : AutoCloseable {
     private val descriptor = ParcelFileDescriptor.open(file, ParcelFileDescriptor.MODE_READ_ONLY)
     private val renderer = try { PdfRenderer(descriptor) } catch (failure: Throwable) { descriptor.close(); throw failure }
     private var closed = false
@@ -548,7 +591,12 @@ internal class PreviewPdf(val file: File) : AutoCloseable {
             }
         }
     }
-    @Synchronized override fun close() { if (!closed) { closed = true; try { renderer.close() } finally { file.delete() } } }
+    @Synchronized override fun close() {
+        if (!closed) {
+            closed = true
+            try { renderer.close() } finally { if (deleteOnClose) file.delete() }
+        }
+    }
 }
 
 /** Own the descriptor until cancellation and finish cleanup off the UI thread even after disposal. */
@@ -567,6 +615,18 @@ internal suspend fun holdPreviewPdf(bytes: ByteArray, cacheDir: File, onOpened: 
     }
 }
 
+/** A downloaded Office preview owns its file; the renderer only borrows its descriptor. */
+internal suspend fun holdPreviewPdf(file: File, onOpened: (PreviewPdf) -> Unit) {
+    var opened: PreviewPdf? = null
+    try {
+        withContext(Dispatchers.IO) { opened = PreviewPdf(file, deleteOnClose = false) }
+        onOpened(checkNotNull(opened))
+        awaitCancellation()
+    } finally {
+        withContext(NonCancellable + Dispatchers.IO) { opened?.close() }
+    }
+}
+
 @Composable
 private fun PdfPreviewBody(bytes: ByteArray, modifier: Modifier) {
     val context = LocalContext.current
@@ -577,6 +637,23 @@ private fun PdfPreviewBody(bytes: ByteArray, modifier: Modifier) {
         catch (cancelled: CancellationException) { throw cancelled }
         catch (failure: Exception) { error = L.pdfFailed(failure.message.orEmpty()) }
     }
+    PdfPreviewPages(document, error, modifier)
+}
+
+@Composable
+private fun PdfPreviewBody(file: File, modifier: Modifier) {
+    var document by remember(file) { mutableStateOf<PreviewPdf?>(null) }
+    var error by remember(file) { mutableStateOf<String?>(null) }
+    LaunchedEffect(file) {
+        try { holdPreviewPdf(file) { document = it } }
+        catch (cancelled: CancellationException) { throw cancelled }
+        catch (failure: Exception) { error = L.pdfFailed(failure.message.orEmpty()) }
+    }
+    PdfPreviewPages(document, error, modifier)
+}
+
+@Composable
+private fun PdfPreviewPages(document: PreviewPdf?, error: String?, modifier: Modifier) {
     val pdf = document
     when {
         error != null -> Text(error!!, color = T.Err, modifier = modifier.padding(16.dp))

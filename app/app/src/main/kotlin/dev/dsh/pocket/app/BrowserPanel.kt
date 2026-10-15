@@ -18,8 +18,13 @@ import android.webkit.WebResourceResponse
 import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
+import android.view.ViewGroup
+import android.widget.FrameLayout
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
@@ -47,11 +52,10 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import java.io.ByteArrayInputStream
-import java.security.MessageDigest
 
 private fun bt(zh: String, en: String) = if (Pocket.prefs.language == AppLanguage.En) en else zh
 
-private fun browserFailure(reason: BrowserAddressFailure) = when (reason) {
+internal fun browserFailure(reason: BrowserAddressFailure) = when (reason) {
     BrowserAddressFailure.Empty -> bt("请输入地址。", "Enter an address.")
     BrowserAddressFailure.Invalid -> bt("这个地址无效或过长。", "That address is invalid or too long.")
     BrowserAddressFailure.Protocol -> bt("只支持 HTTP 和 HTTPS 地址；本地文件请使用文档预览。", "Only HTTP and HTTPS addresses are supported; use Document Preview for local files.")
@@ -59,23 +63,17 @@ private fun browserFailure(reason: BrowserAddressFailure) = when (reason) {
     BrowserAddressFailure.ApplicationOrigin -> bt("不能在嵌入浏览器中打开 DSH 应用自身。", "The embedded browser cannot open the DSH application itself.")
 }
 
-/** Only a checkpoint, never a saved WebView, cookie, bridge credential or automatic navigation. */
-private class BrowserCheckpoint(context: Context, sessionKey: String) {
-    private val prefs = context.getSharedPreferences("browser_checkpoints", Context.MODE_PRIVATE)
-    private val key = MessageDigest.getInstance("SHA-256").digest(sessionKey.toByteArray(Charsets.UTF_8))
-        .joinToString("") { "%02x".format(it.toInt() and 0xff) }
-    val url: String get() = prefs.getString("$key.url", "").orEmpty()
-    val title: String get() = prefs.getString("$key.title", "").orEmpty()
-    fun save(url: String, title: String) {
-        prefs.edit().putString("$key.url", url).putString("$key.title", title.take(512)).apply()
-    }
-}
-
-private class BrowserPageState(private val checkpoint: BrowserCheckpoint, initialPolicy: BrowserPolicy) {
+internal class BrowserPageState(
+    val id: String,
+    initialUrl: String,
+    initialTitle: String,
+    initialPolicy: BrowserPolicy,
+    private val checkpoint: () -> Unit,
+) {
     @Volatile var policy = initialPolicy
-    var address by mutableStateOf(checkpoint.url)
-    var url by mutableStateOf(checkpoint.url)
-    var title by mutableStateOf(checkpoint.title)
+    var address by mutableStateOf(initialUrl)
+    var url by mutableStateOf(initialUrl)
+    var title by mutableStateOf(initialTitle)
     var started by mutableStateOf(false)
     var loading by mutableStateOf(false)
     var error by mutableStateOf<String?>(null)
@@ -92,7 +90,7 @@ private class BrowserPageState(private val checkpoint: BrowserCheckpoint, initia
                 title = result.title
                 error = null
                 loading = true
-                checkpoint.save(url, title)
+                checkpoint()
                 started = true
                 webView?.loadUrl(url)
             }
@@ -105,13 +103,13 @@ private class BrowserPageState(private val checkpoint: BrowserCheckpoint, initia
         address = target.url
         canBack = view.canGoBack()
         canForward = view.canGoForward()
-        checkpoint.save(url, title)
+        checkpoint()
     }
 
     fun observeTitle(view: WebView, observedTitle: String?) {
         if (error != null || policy.parse(view.url.orEmpty(), allowShorthand = false) !is BrowserAddressResult.Target) return
         title = observedTitle?.take(512).orEmpty()
-        checkpoint.save(url, title)
+        checkpoint()
     }
 
     fun reload() {
@@ -145,19 +143,21 @@ private fun BrowserPanelContent(sessionKey: String, onDismiss: () -> Unit, onBac
             listOf("http://$host:${profile.port}", "https://$host:${profile.port}")
         })
     }
-    val state = remember { BrowserPageState(BrowserCheckpoint(context.applicationContext, sessionKey), policy) }
-    SideEffect { state.policy = policy }
+    val tabs = remember { BrowserTabs(context, sessionKey, policy) }
+    val state = tabs.selected
+    SideEffect { tabs.updatePolicy(policy) }
     val lifecycle = LocalLifecycleOwner.current.lifecycle
-    DisposableEffect(lifecycle, state) {
+    DisposableEffect(lifecycle, tabs) {
+        tabs.setResumed(lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED))
         val observer = LifecycleEventObserver { _, event ->
             when (event) {
-                Lifecycle.Event.ON_RESUME -> state.webView?.onResume()
-                Lifecycle.Event.ON_PAUSE -> state.webView?.onPause()
+                Lifecycle.Event.ON_RESUME -> tabs.setResumed(true)
+                Lifecycle.Event.ON_PAUSE -> tabs.setResumed(false)
                 else -> Unit
             }
         }
         lifecycle.addObserver(observer)
-        onDispose { lifecycle.removeObserver(observer) }
+        onDispose { lifecycle.removeObserver(observer); tabs.dispose() }
     }
     fun external() {
         when (val result = state.policy.parse(state.url, allowShorthand = false)) {
@@ -172,11 +172,42 @@ private fun BrowserPanelContent(sessionKey: String, onDismiss: () -> Unit, onBac
             }
         }
     }
-    RightPanelFrame(state.title.ifBlank { bt("浏览器", "Browser") }, onDismiss, onBack) {
+    fun back() {
+        if (state.webView?.canGoBack() == true) {
+            state.error = null
+            state.webView?.goBack()
+        } else (onBack ?: onDismiss)()
+    }
+    RightPanelFrame(state.title.ifBlank { bt("浏览器", "Browser") }, onDismiss, ::back) {
         val keyboard = LocalSoftwareKeyboardController.current
         val focus = LocalFocusManager.current
         fun go() { focus.clearFocus(); keyboard?.hide(); state.navigate(state.address) }
         Column(Modifier.fillMaxSize().semantics { testTagsAsResourceId = true }.testTag("browserPanel")) {
+            Row(Modifier.fillMaxWidth().height(40.dp).padding(horizontal = 6.dp),
+                verticalAlignment = Alignment.CenterVertically) {
+                Row(Modifier.weight(1f).horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                    tabs.pages.forEachIndexed { index, page ->
+                        Row(
+                            Modifier.widthIn(min = 80.dp, max = 180.dp).height(32.dp)
+                                .background(if (page === state) T.Bg else T.Surface, T.R8)
+                                .border(0.5.dp, if (page === state) T.Border else T.Surface, T.R8)
+                                .clickable { focus.clearFocus(); tabs.select(page) }
+                                .testTag("browserTab_$index").padding(start = 9.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Text(page.title.ifBlank { bt("浏览器", "Browser") }, color = if (page === state) T.Ink else T.Text3,
+                                fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+                            IconButton(onClick = { tabs.close(page) }, modifier = Modifier.size(32.dp).testTag("browserCloseTab_$index")) {
+                                Icon(D.close, bt("关闭", "Close"), tint = T.Text3, modifier = Modifier.size(12.dp))
+                            }
+                        }
+                    }
+                }
+                IconButton(onClick = { focus.clearFocus(); tabs.add() }, modifier = Modifier.size(32.dp).testTag("browserNewTab")) {
+                    Icon(D.plus, bt("新标签页", "New tab"), tint = T.Text2, modifier = Modifier.size(16.dp))
+                }
+            }
             Row(Modifier.fillMaxWidth().height(48.dp).padding(horizontal = 6.dp),
                 verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                 IconButton(onClick = { state.error = null; state.webView?.goBack() }, enabled = state.canBack,
@@ -239,24 +270,19 @@ private fun BrowserPanelContent(sessionKey: String, onDismiss: () -> Unit, onBac
                 }
             } else {
                 AndroidView(
-                    factory = { createBrowserWebView(it, state).also { view ->
-                        state.webView = view
-                        if (!lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)) view.onPause()
-                        val target = state.policy.parse(state.url, allowShorthand = false)
-                        if (target is BrowserAddressResult.Target) view.loadUrl(target.url)
-                        else if (target is BrowserAddressResult.Rejected) { state.loading = false; state.error = browserFailure(target.reason) }
-                    } },
+                    factory = { FrameLayout(it) },
+                    update = { container ->
+                        val view = tabs.viewFor(state)
+                        if (view.parent !== container) {
+                            container.removeAllViews()
+                            (view.parent as? ViewGroup)?.removeView(view)
+                            container.addView(view, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
+                        }
+                    },
                     modifier = Modifier.fillMaxWidth().weight(1f).testTag("browserWebView"),
                     onReset = null,
-                    onRelease = { view ->
-                        state.webView = null
-                        view.stopLoading()
-                        view.onPause()
-                        view.webChromeClient = null
-                        view.webViewClient = WebViewClient()
-                        view.removeAllViews()
-                        view.destroy()
-                    },
+                    // The tab owns its WebView; changing selection only detaches the viewport.
+                    onRelease = { it.removeAllViews() },
                 )
             }
         }
@@ -265,7 +291,7 @@ private fun BrowserPanelContent(sessionKey: String, onDismiss: () -> Unit, onBac
 
 @SuppressLint("SetJavaScriptEnabled")
 @Suppress("DEPRECATION")
-private fun createBrowserWebView(context: Context, state: BrowserPageState): WebView {
+internal fun createBrowserWebView(context: Context, state: BrowserPageState, tabs: BrowserTabs): WebView {
     WebView.setWebContentsDebuggingEnabled(false)
     return WebView(context).apply {
         contentDescription = bt("网页内容", "Web page content")
@@ -305,9 +331,13 @@ private fun createBrowserWebView(context: Context, state: BrowserPageState): Web
                 return true
             }
             override fun onCreateWindow(view: WebView?, isDialog: Boolean, isUserGesture: Boolean, resultMsg: android.os.Message?): Boolean {
-                state.error = bt("已阻止新窗口，请在系统浏览器中打开。", "New windows are blocked; use the system browser.")
-                return false
+                if (!isUserGesture || resultMsg?.obj !is WebView.WebViewTransport) return false
+                val child = tabs.openWindow(state) ?: return false
+                (resultMsg.obj as WebView.WebViewTransport).webView = child
+                resultMsg.sendToTarget()
+                return true
             }
+            override fun onCloseWindow(window: WebView) { tabs.closeWindow(window) }
         }
         webViewClient = object : WebViewClient() {
             override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {

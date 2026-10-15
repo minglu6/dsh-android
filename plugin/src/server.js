@@ -427,7 +427,7 @@ export function createPocketServer(opts) {
         op = adminOps[msg.op]
       }
       if (op === undefined) { fail('unknown-op', `unknown op ${JSON.stringify(msg.op)}`); return }
-      const result = await op(args, AbortSignal.timeout(120_000), client)
+      const result = await op(args, AbortSignal.timeout(msg.op === 'office.render' ? 600_000 : 120_000), client)
       reply({ ok: true, result: result ?? null })
     } catch (error) {
       fail(error?.code ?? 'internal', String(error?.message ?? error), error?.details)

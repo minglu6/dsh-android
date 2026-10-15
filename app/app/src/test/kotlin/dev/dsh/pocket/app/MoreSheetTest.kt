@@ -3,6 +3,8 @@ package dev.dsh.pocket.app
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.performClick
+import org.junit.Assert.assertEquals
 import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
@@ -28,6 +30,45 @@ class MoreSheetTest {
         Pocket.sessions.value = emptyList()
         Pocket.chat.value = null
         Pocket.approvals.value = emptyList()
+    }
+
+    @Test fun settingsKeepsPresetEntryWithoutDuplicatingSidebarAutomation() {
+        Pocket.ops.value += "schedule.catalog"
+        rule.setContent { PocketTheme {
+            SettingsScreen(onBack = {}, onGeneral = {}, onConnections = {})
+        } }
+        rule.onNodeWithText(L.scheduleNav()).assertDoesNotExist()
+        rule.onNodeWithText("Agent 预设").assertIsDisplayed()
+    }
+
+    @Test fun sessionMenuExportsAndOpensFeedbackWithoutDuplicatingSidebarActions() {
+        Pocket.ops.value += setOf("sessions.rename", "sessions.fork")
+        var exports = 0
+        var feedback = 0
+        var dismissed = 0
+        rule.setContent { PocketTheme {
+            MoreSheet(ChatState("s1"), onDismiss = { dismissed++ }, onFeedback = { feedback++ }, onExport = { exports++ })
+        } }
+        rule.onNodeWithText("重命名").assertDoesNotExist()
+        rule.onNodeWithText("在新对话中分支").assertDoesNotExist()
+        rule.onNodeWithText("会话统计").assertDoesNotExist()
+        rule.onNodeWithText("已加载历史统计").assertDoesNotExist()
+        assertEquals(0, exports)
+        assertEquals(0, feedback)
+        rule.onNodeWithText("下载 Session 日志").performClick()
+        assertEquals(1, exports)
+        assertEquals(1, dismissed)
+        rule.onNodeWithText("反馈").performClick()
+        assertEquals(1, feedback)
+    }
+
+    @Test fun offlineSessionActionsCannotDispatch() {
+        Pocket.status.value = mapOf("p1" to Dot.Offline)
+        rule.setContent { PocketTheme {
+            MoreSheet(ChatState("s1"), onDismiss = {}, onFeedback = { error("offline feedback") }, onExport = { error("offline export") })
+        } }
+        rule.onNodeWithText("下载 Session 日志").assertIsNotEnabled()
+        rule.onNodeWithText("反馈").assertIsNotEnabled()
     }
 
     @Test fun commandExecutionDoesNotAdvertiseSessionFeedback() {

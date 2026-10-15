@@ -1,4 +1,4 @@
-import { randomBytes } from 'node:crypto'
+import { createHash, randomBytes } from 'node:crypto'
 import { request as httpRequest } from 'node:http'
 import { request as httpsRequest } from 'node:https'
 import { networkInterfaces } from 'node:os'
@@ -10,6 +10,8 @@ export const UI_TICKET_MS = 60_000
 export const UI_SESSION_MS = 15 * 60_000
 const MAX_GRANTS = 128
 const MAX_HTML_BYTES = 8 * 1024 * 1024
+const MAX_ACCOUNT_SCRIPT_BYTES = 16 * 1024 * 1024
+const MAX_ARTWORK_BYTES = 32 * 1024 * 1024
 const SAFE_RESPONSE_HEADERS = ['content-type', 'content-disposition', 'content-range', 'accept-ranges']
 const SAFE_REQUEST_HEADERS = ['accept', 'accept-language', 'content-type', 'content-length', 'range', 'last-event-id']
 const RECOVERY_KEYS = ['backoffBaseMs', 'backoffFactor', 'backoffMaxMs', 'generationReadyWarnMs', 'generationReadyTimeoutMs']
@@ -109,9 +111,27 @@ function rejectUpgrade(socket, status = 403) {
 
 /** Keep the official module graph; upstream credentials and transport endpoints stay server-side. */
 function browserDocument(html, secrets) {
-  const sanitized = html.replace(/<script\b([^>]*)>([\s\S]*?)<\/script\s*>/giu, (tag, attributes, source) => {
+  const applicationPreloads = new Set()
+  let sanitized = html.replace(/<script\b([^>]*)>([\s\S]*?)<\/script\s*>/giu, (tag, attributes, source) => {
     if (/\bsrc\s*=/iu.test(attributes)) return tag
     if (/__DSH_TRANSPORT__|__DSH_NATIVE__|__DSH_DESKTOP__|\b(?:dshDesktop|dshPlatform|dshNative)\b/u.test(source)) return ''
+    const bootAssignment = /^\s*(?:globalThis|window)(?:\["__DSH_BOOT__"\]|\.__DSH_BOOT__)\s*=\s*(\{[\s\S]*\})\s*;?\s*$/u.exec(source)
+    if (bootAssignment) {
+      const graph = JSON.parse(bootAssignment[1])
+      if (Array.isArray(graph.entries) && Array.isArray(graph.batches)) {
+        const entries = new Map(graph.entries.map(entry => [entry.id, entry]))
+        graph.batches = graph.batches.flatMap((batch) => {
+          if (batch.phase !== 'application') return [batch]
+          applicationPreloads.add(batch.url.replace(/^\.\//u, ''))
+          return batch.entries.map((id) => {
+            const entry = entries.get(id)
+            if (!entry) throw unavailable('Host UI module graph is incomplete')
+            return { ...batch, url: entry.url, rev: entry.rev, entries: [id] }
+          })
+        })
+        return `<script>globalThis.__DSH_BOOT__=${JSON.stringify(graph).replace(/</gu, '\\u003c')}</script>`
+      }
+    }
     if (!source.includes('__DSH_CONNECTION_RECOVERY__')) return tag
     // Official renderIndex emits one JSON global per script. Keep only numeric timing fields.
     const assignment = /^(?:\s*)(?:globalThis|window)(?:\["__DSH_CONNECTION_RECOVERY__"\]|\.__DSH_CONNECTION_RECOVERY__)\s*=\s*(\{[\s\S]*\})\s*;?\s*$/u.exec(source)
@@ -123,6 +143,12 @@ function browserDocument(html, secrets) {
       } catch { /* Unknown recovery format gets official browser defaults, not Host credentials. */ }
     }
     return `<script>globalThis.__DSH_CONNECTION_RECOVERY__=${JSON.stringify(safe)}</script>`
+  })
+  // Large combo preloads would still compete with the per-module boot requests.
+  sanitized = sanitized.replace(/<link\b[^>]*>/giu, (tag) => {
+    if (!/\brel=["']preload["']/iu.test(tag)) return tag
+    const href = /\bhref=["']([^"']*)["']/iu.exec(tag)?.[1].replaceAll('&amp;', '&').replace(/^\.\//u, '')
+    return applicationPreloads.has(href) ? '' : tag
   })
   // Fail closed if a future injection moves a process credential outside recovery.
   for (const secret of secrets) {
@@ -142,6 +168,8 @@ export function createHostUi({ webServer, connection, devices, isClientLive, now
   const origin = hostOrigin(webServer)
   const tickets = new Map()
   const sessions = new Map()
+  const artwork = new Map()
+  let artworkBytes = 0
   const mux = new WebSocketServer({ noServer: true, maxPayload: 32 * 1024 * 1024, perMessageDeflate: false })
   mux.on('headers', (outgoing) => {
     outgoing.push('Cache-Control: no-store', 'Referrer-Policy: no-referrer')
@@ -193,6 +221,33 @@ export function createHostUi({ webServer, connection, devices, isClientLive, now
       return cookie
     })().finally(() => { authentication = undefined })
     return authentication
+  }
+
+  // These official PNG imports are used only as <img src> URLs. Keep their
+  // original pixels, but do not make all eight onboarding images block boot.
+  function accountArtwork(source) {
+    const prefix = /(\b(?:var|let|const)\s+onboarding_(?:welcome|recharge)[\w$]*_default(?:\$\d+)?\s*=\s*)(["'])data:image\/png;base64,/gu
+    const parts = []
+    let cursor = 0
+    for (const match of source.matchAll(prefix)) {
+      const start = match.index + match[0].length
+      const end = source.indexOf(match[2], start)
+      if (end < start + 65_536) continue
+      const encoded = source.slice(start, end)
+      if (/[^A-Za-z\d+/=]/u.test(encoded)) continue
+      const path = `/assets/pocket-artwork/${createHash('sha256').update(encoded).digest('hex')}.png`
+      if (!artwork.has(path)) {
+        const bytes = Buffer.from(encoded, 'base64')
+        if (artworkBytes + bytes.length > MAX_ARTWORK_BYTES) continue
+        artwork.set(path, bytes)
+        artworkBytes += bytes.length
+      }
+      parts.push(source.slice(cursor, match.index), match[1], match[2], path, match[2])
+      cursor = end + 1
+    }
+    if (cursor === 0) return source
+    parts.push(source.slice(cursor))
+    return parts.join('')
   }
 
   function authorized(req) {
@@ -279,6 +334,21 @@ export function createHostUi({ webServer, connection, devices, isClientLive, now
           const output = responseStream(req, res, response)
           res.writeHead(response.statusCode ?? 502)
           output.end(body)
+        } else if (req.method !== 'HEAD' && response.statusCode === 200
+          && req.url.includes('@deepseek-ai/dsh-client-ui-settings-account/client.js')
+          && /(?:java|ecma)script/iu.test(response.headers['content-type'] ?? '')) {
+          if (response.headers['content-encoding'] && response.headers['content-encoding'] !== 'identity') throw unavailable()
+          const chunks = []
+          let size = 0
+          for await (const chunk of response) {
+            size += chunk.length
+            if (size > MAX_ACCOUNT_SCRIPT_BYTES) throw unavailable()
+            chunks.push(chunk)
+          }
+          const body = accountArtwork(Buffer.concat(chunks).toString('utf8'))
+          const output = responseStream(req, res, response)
+          res.writeHead(200)
+          output.end(body)
         } else {
           if (response.headers['content-encoding']) res.setHeader('content-encoding', response.headers['content-encoding'])
           const output = responseStream(req, res, response)
@@ -319,6 +389,17 @@ export function createHostUi({ webServer, connection, devices, isClientLive, now
         const session = authorized(req)
         if (!session) { reject(res, 401); return }
         if (!['GET', 'HEAD'].includes(req.method) && !sameSite(req, session.origin, true)) { reject(res); return }
+        if (parsed.path.startsWith('/assets/pocket-artwork/')) {
+          const bytes = artwork.get(parsed.path)
+          if (!bytes || !['GET', 'HEAD'].includes(req.method)) { reject(res, 404); return }
+          const stop = () => res.destroy()
+          session.resources.add(stop)
+          res.once('close', () => session.resources.delete(stop))
+          headers(res)
+          res.writeHead(200, { 'content-type': 'image/png', 'content-length': bytes.length })
+          res.end(req.method === 'HEAD' ? undefined : bytes)
+          return
+        }
         await proxy(req, res, session)
       } catch { reject(res, 502) }
     },
@@ -366,6 +447,8 @@ export function createHostUi({ webServer, connection, devices, isClientLive, now
       for (const map of [tickets, sessions]) for (const key of map.keys()) remove(map, key)
       cookie = ''
       secrets = []
+      artwork.clear()
+      artworkBytes = 0
       mux.close()
     },
   }
