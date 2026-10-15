@@ -21,6 +21,9 @@ class WorkspaceDisplayInstrumentedTest {
 
     @Test fun workspaceActionsKeepCollapseStateAndDiscardCancelledEdits() {
         Pocket.init(InstrumentationRegistry.getInstrumentation().targetContext)
+        val previousActive = Pocket.active.value
+        val previousStatus = Pocket.status.value
+        val previousOps = Pocket.ops.value
         Pocket.prefs.hostSettings.bind({
             jsonOf("writable" to false, "namespaces" to listOf(
                 jsonOf("ns" to "locale", "revision" to 0, "value" to jsonOf("preference" to "zh")),
@@ -29,35 +32,44 @@ class WorkspaceDisplayInstrumentedTest {
         }, { _, _, _ -> error("This display test must not mutate Host settings") })
         val workspace = WorkspaceView("default", """C:\Users\luming2\Documents\deepseek-harness\default-workspace""",
             "default-workspace", emptyList(), null, null)
-        Pocket.workspaces.value = listOf(workspace)
-        Pocket.chat.value = null
-        Pocket.draftWorkspacePath.value = workspace.path
-        Pocket.ops.value = setOf("workspace.rename", "workspace.delete")
-        var toggles = 0
-        rule.setContent { PocketTheme { Column(Modifier.fillMaxSize()) {
-            WorkspaceNavigationGroups(listOf(workspace), emptyList(), false, emptySet(), { toggles++ }, {}) { _, _ -> }
-        } } }
-        rule.onNodeWithText("默认工作区").assertIsDisplayed()
-        rule.onNodeWithTag("workspaceNewSession:default").assertIsDisplayed()
-        rule.onNodeWithTag("workspaceMenu:default").performClick()
-        rule.onNodeWithText(L.rename()).performClick()
-        rule.onNode(hasSetTextAction()).assertTextEquals("default-workspace")
-        rule.onNode(hasSetTextAction()).performTextReplacement("Cancelled edit")
-        rule.onNodeWithText(L.cancel()).performClick()
-        rule.onNode(hasSetTextAction()).assertDoesNotExist()
-        rule.onNodeWithText("默认工作区").assertIsDisplayed()
-        assertEquals("default-workspace", Pocket.workspaces.value.single().title)
-        rule.onNodeWithTag("workspaceMenu:default").performClick()
-        rule.onNodeWithText(L.rename()).performClick()
-        rule.onNode(hasSetTextAction()).assertTextEquals(workspace.title)
-        rule.onNodeWithText(L.cancel()).performClick()
-        rule.onNodeWithTag("workspaceMenu:default").performClick()
-        rule.onNodeWithText("删除工作区").performClick()
-        rule.onNodeWithText(L.cancel()).performClick()
-        rule.onNodeWithTag("workspaceNewSession:default").assertIsDisplayed()
-        rule.runOnIdle {
-            assertEquals(0, toggles)
-            assertEquals(listOf(workspace), Pocket.workspaces.value)
+        try {
+            Pocket.workspaces.value = listOf(workspace)
+            Pocket.chat.value = null
+            Pocket.draftWorkspacePath.value = workspace.path
+            Pocket.active.value = "workspace-display-instrumented"
+            Pocket.status.value = mapOf("workspace-display-instrumented" to Dot.Online)
+            Pocket.ops.value = setOf("workspace.rename", "workspace.delete")
+            var toggles = 0
+            rule.setContent { PocketTheme { Column(Modifier.fillMaxSize()) {
+                WorkspaceNavigationGroups(listOf(workspace), emptyList(), false, emptySet(), { toggles++ }, {}) { _, _ -> }
+            } } }
+            rule.onNodeWithText("默认工作区").assertIsDisplayed()
+            rule.onNodeWithTag("workspaceNewSession:default").assertIsDisplayed()
+            rule.onNodeWithTag("workspaceMenu:default").performClick()
+            rule.onNodeWithText(L.rename()).performClick()
+            rule.onNode(hasSetTextAction()).assertTextEquals("default-workspace")
+            rule.onNode(hasSetTextAction()).performTextReplacement("Cancelled edit")
+            rule.onNodeWithText(L.cancel()).performClick()
+            rule.onNode(hasSetTextAction()).assertDoesNotExist()
+            rule.onNodeWithText("默认工作区").assertIsDisplayed()
+            assertEquals("default-workspace", Pocket.workspaces.value.single().title)
+            rule.onNodeWithTag("workspaceMenu:default").performClick()
+            rule.onNodeWithText(L.rename()).performClick()
+            rule.onNode(hasSetTextAction()).assertTextEquals(workspace.title)
+            rule.onNodeWithText(L.cancel()).performClick()
+            rule.onNodeWithTag("workspaceMenu:default").performClick()
+            rule.onNodeWithText("删除工作区").performClick()
+            rule.onNodeWithText(L.cancel()).performClick()
+            rule.onNodeWithTag("workspaceNewSession:default").assertIsDisplayed()
+            rule.runOnIdle {
+                assertEquals(0, toggles)
+                assertEquals(listOf(workspace), Pocket.workspaces.value)
+            }
+        } finally {
+            Pocket.ops.value = previousOps
+            Pocket.active.value = previousActive
+            Pocket.status.value = previousStatus
+            Pocket.prefs.hostSettings.clear()
         }
     }
 }
