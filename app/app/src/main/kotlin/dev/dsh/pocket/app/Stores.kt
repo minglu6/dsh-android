@@ -137,7 +137,7 @@ fun migrateLegacyProfiles(raw: List<Profile>, now: Long = System.currentTimeMill
 
 enum class BusySend(val label: String, val mode: String) { Queue("排队发送", "queue"), Steer("插话发送", "steer") }
 
-/** Matches Host `ui-theme.preference`. */
+/** Phone-local theme; not mirrored from or written to Host `ui-theme.preference`. */
 enum class Appearance(val label: String) { Light("浅色"), Dark("深色"), System("跟随系统") }
 
 /** Matches Host `ui-chat.transcriptView`. */
@@ -211,28 +211,9 @@ class AppPrefs(ctx: Context) {
     var language: AppLanguage
         get() = if ((hostSettings.value(SharedSetting.Language).str() ?: java.util.Locale.getDefault().language).startsWith("zh")) AppLanguage.Zh else AppLanguage.En
         set(v) = hostSettings.set(SharedSetting.Language, JsonPrimitive(v.name.lowercase()))
-    /** In-memory device theme while Host is disconnected; never persisted or replayed. */
-    private var appearanceOverride by mutableStateOf<Appearance?>(null)
     var appearance: Appearance
-        get() {
-            val hosted = hostSettings.value(SharedSetting.Appearance).str()
-            return when (hosted) {
-                "light" -> Appearance.Light
-                "dark" -> Appearance.Dark
-                null -> appearanceOverride ?: Appearance.System
-                else -> Appearance.System
-            }
-        }
-        set(v) {
-            if (hostSettings.writable(SharedSetting.Appearance)) {
-                appearanceOverride = null
-                hostSettings.set(SharedSetting.Appearance, JsonPrimitive(v.name.lowercase()))
-            } else if (!hostSettings.online) {
-                appearanceOverride = v
-            } else {
-                hostSettings.set(SharedSetting.Appearance, JsonPrimitive(v.name.lowercase()))
-            }
-        }
+        get() = p.getString("appearance", null)?.let { Appearance.valueOf(it) } ?: Appearance.System
+        set(v) { p.edit().putString("appearance", v.name).apply() }
     var fontSize: Int
         get() = hostSettings.value(SharedSetting.FontSize).int() ?: 14
         set(v) = hostSettings.set(SharedSetting.FontSize, JsonPrimitive(v.coerceIn(10, 22)))

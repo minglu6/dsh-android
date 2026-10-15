@@ -63,6 +63,8 @@ class OfflineSettingsTest {
         rule.onNodeWithText("远程主机未连接，需连接的操作暂不可用").assertExists()
         rule.onNodeWithText(L.dark()).assertIsEnabled().performClick()
         rule.runOnIdle { assertEquals(Appearance.Dark, Pocket.prefs.appearance) }
+        disconnect()
+        rule.runOnIdle { assertEquals(Appearance.Dark, Pocket.prefs.appearance) }
         rule.onNodeWithContentDescription("字号大小：增大字号").assertIsNotEnabled().performClick()
         rule.runOnIdle { assertNull(Pocket.prefs.hostSettings.error) }
         rule.onRoot().captureRoboImage("build/screenshots/settings-offline.png",
@@ -71,6 +73,16 @@ class OfflineSettingsTest {
         rule.onNodeWithTag("textFontFamily").assertIsNotEnabled()
         rule.onNodeWithText("工作步骤收起时机").performScrollTo().assertIsNotEnabled().performClick()
         rule.runOnIdle { assertEquals(CollapseTiming.Completion, Pocket.prefs.collapseTiming) }
+    }
+
+    @Test fun appearanceChosenWhileConnectedSurvivesDisconnect() {
+        rule.setContent { PocketTheme { GeneralSettingsScreen {} } }
+        rule.onNodeWithText(L.dark()).performClick()
+        rule.runOnIdle { assertEquals(Appearance.Dark, Pocket.prefs.appearance) }
+        disconnect()
+        rule.runOnIdle { assertEquals(Appearance.Dark, Pocket.prefs.appearance) }
+        rule.onNodeWithText(L.dark()).assertIsEnabled()
+        rule.onNodeWithText("远程主机未连接，需连接的操作暂不可用").assertExists()
     }
 
     @Test fun openChoiceSheetDisablesOnDisconnectAndRecoversWithoutSubmitting() {

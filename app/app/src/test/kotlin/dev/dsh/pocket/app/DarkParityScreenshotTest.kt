@@ -9,6 +9,7 @@ import com.github.takahirom.roborazzi.ExperimentalRoborazziApi
 import com.github.takahirom.roborazzi.captureRoboImage
 import com.github.takahirom.roborazzi.captureScreenRoboImage
 import dev.dsh.pocket.protocol.*
+import org.junit.After
 import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
@@ -31,8 +32,11 @@ class DarkParityScreenshotTest {
         rule.onRoot().captureRoboImage(out(name))
     }
 
+    private lateinit var previousAppearance: Appearance
+
     @Before fun state() {
         installHostSettingsFixture()
+        previousAppearance = Pocket.prefs.appearance
         runCatching { Pocket.prefs.nearbyWifiDeclined = true }
         runCatching { Pocket.prefs.appearance = Appearance.Dark }
         val p = Profile("p1", "Mac mini", host = "100.106.128.87", port = 7690)
@@ -40,6 +44,10 @@ class DarkParityScreenshotTest {
         Pocket.active.value = "p1"
         Pocket.status.value = mapOf("p1" to Dot.Online, "p2" to Dot.Offline)
         Pocket.ops.value = setOf("models.providers", "plugins.list", "schedule.catalog")
+    }
+
+    @After fun restore() {
+        Pocket.prefs.appearance = previousAppearance
     }
 
     @Test fun dark_connections() = show("05-connections-dark") {

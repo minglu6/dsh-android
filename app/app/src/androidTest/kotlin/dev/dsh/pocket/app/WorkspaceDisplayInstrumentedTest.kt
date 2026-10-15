@@ -24,10 +24,11 @@ class WorkspaceDisplayInstrumentedTest {
         val previousActive = Pocket.active.value
         val previousStatus = Pocket.status.value
         val previousOps = Pocket.ops.value
+        val previousAppearance = Pocket.prefs.appearance
+        Pocket.prefs.appearance = Appearance.Light
         Pocket.prefs.hostSettings.bind({
             jsonOf("writable" to false, "namespaces" to listOf(
                 jsonOf("ns" to "locale", "revision" to 0, "value" to jsonOf("preference" to "zh")),
-                jsonOf("ns" to "ui-theme", "revision" to 0, "value" to jsonOf("preference" to "light")),
             ))
         }, { _, _, _ -> error("This display test must not mutate Host settings") })
         val workspace = WorkspaceView("default", """C:\Users\luming2\Documents\deepseek-harness\default-workspace""",
@@ -69,6 +70,7 @@ class WorkspaceDisplayInstrumentedTest {
             Pocket.ops.value = previousOps
             Pocket.active.value = previousActive
             Pocket.status.value = previousStatus
+            Pocket.prefs.appearance = previousAppearance
             Pocket.prefs.hostSettings.clear()
         }
     }

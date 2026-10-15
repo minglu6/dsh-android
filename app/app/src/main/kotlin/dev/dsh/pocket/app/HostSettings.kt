@@ -7,9 +7,9 @@ import dev.dsh.pocket.protocol.*
 import kotlinx.coroutines.*
 import kotlinx.serialization.json.*
 
-/** Exact fields owned by the official Host settings namespaces. */
+/** Exact fields owned by the official Host settings namespaces. Appearance stays on the device. */
 internal enum class SharedSetting(val namespace: String, val field: String) {
-    Appearance("ui-theme", "preference"), FontSize("ui-theme", "fontSize"),
+    FontSize("ui-theme", "fontSize"),
     CodeFontSize("ui-theme", "codeFontSize"), TerminalFontSize("ui-theme", "terminalFontSize"),
     TextFontFamily("ui-theme", "textFontFamily"), CodeFontFamily("ui-theme", "codeFontFamily"),
     TerminalFontFamily("ui-theme", "terminalFontFamily"), Language("locale", "preference"),
