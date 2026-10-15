@@ -24,6 +24,7 @@ import androidx.compose.ui.unit.sp
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import dev.dsh.pocket.protocol.jsonOf
+import kotlinx.serialization.json.JsonElement
 import org.junit.Assert.assertEquals
 import kotlin.math.abs
 import org.junit.Assert.assertTrue
@@ -100,11 +101,10 @@ class MarkdownRenderingInstrumentedTest {
     private fun checkCodeAndMarkers(appearance: Appearance, fontSize: Int) {
         val context = InstrumentationRegistry.getInstrumentation().targetContext
         Pocket.init(context)
+        val previousAppearance = Pocket.prefs.appearance
+        Pocket.prefs.appearance = appearance
         Pocket.prefs.hostSettings.bind({
-            jsonOf("writable" to false, "namespaces" to listOf(
-                jsonOf("ns" to "ui-theme", "revision" to 0,
-                    "value" to jsonOf("preference" to appearance.name.lowercase())),
-            ))
+            jsonOf("writable" to false, "namespaces" to emptyList<JsonElement>())
         }, { _, _, _ -> error("Rendering regression must not change Host settings") })
         try {
             val code = """403 {"code":"105","message":"Login expired"}"""
@@ -177,6 +177,7 @@ class MarkdownRenderingInstrumentedTest {
             assertEquals("marker must align with the first line, not the whole wrapped item",
                 baseline - fontPx * 0.35f, centerY, 2f)
         } finally {
+            Pocket.prefs.appearance = previousAppearance
             Pocket.prefs.hostSettings.clear()
         }
     }

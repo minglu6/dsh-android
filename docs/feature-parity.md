@@ -54,7 +54,7 @@ Plugin surface: `dsh-plugin-pocket` WebSocket ops (+ optional Cordis injects).
 | Settings → 连接 / 审批通知 | Profiles + notify flag | keep | done | |
 | General → 权限 / 繁忙发送 | Default permission; busyEnter | keep | done | Permission choices use Host `defaultOptions`; auto is current-session-only and cannot become a persistent default. |
 | General → 语言 | `locale.preference` | implement | done | Reads and writes the current Host preference; no separate mobile preference copy. |
-| General → 外观 | `ui-theme.preference` | implement | done | Official Light / Dark / System cards and artwork; the accepted Host preference repaints the active theme. |
+| General → 外观 | Device-local `appearance` | implement | done | Official Light / Dark / System cards and artwork; the phone SharedPreferences value repaints immediately. Not mirrored from or written to Host `ui-theme`. |
 | General → 字号大小 / 字体 | Independent text/code/terminal fonts | implement | done | Centered value pill with stacked arrows, external px and inline expander. Family inputs commit on blur/Enter; empty restores defaults and unavailable local fonts fall through. Typography, Markdown/code, preview and terminal consumers update immediately. |
 | General → 工作步骤展示 | `ui-chat.transcriptView` | implement | done | compact/standard/detailed/verbose. |
 | General → 工作步骤收起时机 | Client-only collapse timing | implement | done | Observable in-memory state for the current app instance; no persistent override. |
