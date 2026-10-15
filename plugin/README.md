@@ -35,6 +35,8 @@ dsh plugin --profile desktop add "$PWD"
 
 本轮文件改动通过 `workspaceChanges.summary {sessionId, seq}` 返回 Host 的完整摘要，通过 `workspaceChanges.diff {sessionId, seq, index}` 返回该轮指定文件的快照差异。`index` 是摘要文件列表的原始下标；只公布 Host 实际提供的方法，并传递请求取消信号。摘要／差异已释放时返回 `null`，不改读当前工作区文件。旧桥接需重启才能启用新增的差异接口。
 
+点赞／点踩通过 `feedback.get`、`feedback.set` 调用 Host `messageFeedback` 的单层业务 Result。成功只返回业务值；失败完整传递 `error.code` 与 `error.details`，版本冲突的 `details.current` 保留权威条目或显式 `null`，供手机更新选中态而不自动重试。使用新版反馈冲突提示时，须同步更新并重启此桥接；仅升级 APK 不足以修复旧桥接丢失冲突详情的问题。
+
 ## 配置与网络
 
 以 Web profile 为例，在 `$DSH_HOME/profiles/web/cordis.patch.yml` 配置（默认 `DSH_HOME` 为 `~/.dsh`）；桌面使用对应的 `desktop` profile。所有配置项均可省略：

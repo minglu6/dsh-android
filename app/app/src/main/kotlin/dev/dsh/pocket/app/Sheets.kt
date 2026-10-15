@@ -5,6 +5,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.selection.toggleable
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.Send
 import androidx.compose.material.icons.outlined.*
@@ -24,15 +25,21 @@ import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.SecureFlagPolicy
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
+import dev.dsh.pocket.protocol.PocketError
 import dev.dsh.pocket.protocol.Item
 import dev.dsh.pocket.protocol.ToolStatus
 import dev.dsh.pocket.protocol.arr
@@ -40,6 +47,7 @@ import dev.dsh.pocket.protocol.get
 import dev.dsh.pocket.protocol.str
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collect
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
@@ -363,7 +371,7 @@ fun GoalSheet(onDismiss: () -> Unit) {
 
 @Composable
 fun FeedbackSheet(onDismiss: () -> Unit) {
-    FeedbackCategorySheet(onDismiss) { category, note, complete ->
+    FeedbackDialog(onDismiss) { category, note, complete ->
         Pocket.recordSessionFeedback(category, note, complete)
     }
 }
@@ -646,39 +654,142 @@ internal fun builtinCommandName(definitionId: String?): String? = when (definiti
     else -> null
 }
 
-/** Dislike → feedback category + optional note (desktop feedback.dialog). */
+/** Shared session/message feedback form, matching the desktop feedback dialog. */
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
-fun FeedbackCategorySheet(onDismiss: () -> Unit, onSubmit: (category: String?, note: String, complete: (Boolean) -> Unit) -> Unit) {
+fun FeedbackDialog(onDismiss: () -> Unit, onSubmit: (category: String?, note: String, complete: (Result<Unit>) -> Unit) -> Unit) {
     val active by Pocket.active.collectAsState()
     val status by Pocket.status.collectAsState()
     val online = status[active] == Dot.Online
     var category by remember { mutableStateOf<String?>(null) }
     var note by remember { mutableStateOf("") }
     var busy by remember { mutableStateOf(false) }
-    var error by remember { mutableStateOf(false) }
-    PocketSheet({ if (!busy) onDismiss() }) {
-        SheetTitle(L.submitFeedback())
-        SectionLabel(L.feedbackCategory())
-        L.feedbackCategories().forEach { (id, label) ->
-            OptionRow(label, selected = category == id, enabled = !busy) { category = if (category == id) null else id }
+    var accepting by remember { mutableStateOf(true) }
+    var failure by remember { mutableStateOf<String?>(null) }
+    var failureSequence by remember { mutableIntStateOf(0) }
+    val scope = rememberCoroutineScope()
+    val dismiss = {
+        accepting = false
+        onDismiss()
+    }
+    DisposableEffect(Unit) {
+        onDispose { accepting = false }
+    }
+    LaunchedEffect(failure, failureSequence) {
+        if (failure != null) {
+            delay(6000)
+            failure = null
         }
-        SectionLabel(L.feedbackDetail())
-        OutlinedTextField(
-            note, { note = it },
-            enabled = !busy,
-            placeholder = { Text(L.feedbackHint()) },
-            shape = T.R12,
-            modifier = Modifier.padding(horizontal = 22.dp).fillMaxWidth(),
-            minLines = 3,
-        )
-        if (error) Text("提交失败，内容已保留，请重试", color = T.Err, modifier = Modifier.padding(horizontal = 22.dp))
-        Button(
-            { if (online && !busy) { busy = true; error = false; onSubmit(category, note.trim()) { success -> busy = false; error = !success; if (success) onDismiss() } } },
-            Modifier.padding(22.dp).fillMaxWidth().height(50.dp),
-            enabled = online && !busy,
-            shape = T.R12,
-            colors = PrimaryColors(),
-        ) { Text(L.submitFeedback()) }
+    }
+    Dialog(
+        onDismissRequest = dismiss,
+        properties = DialogProperties(usePlatformDefaultWidth = false, securePolicy = SecureFlagPolicy.SecureOff),
+    ) {
+        Column(Modifier.widthIn(max = 488.dp).fillMaxWidth().padding(16.dp)) {
+            Surface(modifier = Modifier.weight(1f, fill = false), shape = T.R20, color = T.Surface) {
+                Column(
+                    Modifier.testTag("feedbackDialog").verticalScroll(rememberScrollState()).padding(20.dp),
+                ) {
+                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                        Text(L.submitFeedback(), color = T.Ink, fontSize = 18.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
+                        IconButton(dismiss, Modifier.testTag("feedbackClose")) {
+                            Icon(D.close, L.feedbackClose(), tint = T.Text2, modifier = Modifier.size(16.dp))
+                        }
+                    }
+                    FlowRow(
+                        Modifier.fillMaxWidth().semantics { contentDescription = L.feedbackCategory() },
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        L.feedbackCategories().forEach { (id, label) ->
+                            val selected = category == id
+                            // The visible chip is compact; its transparent touch area stays 48dp high.
+                            Box(
+                                Modifier.heightIn(min = 48.dp)
+                                    .testTag("feedbackCategory:$id")
+                                    .toggleable(selected, enabled = !busy, role = Role.Checkbox) {
+                                        category = if (selected) null else id
+                                    },
+                                contentAlignment = Alignment.Center,
+                            ) {
+                                Text(
+                                    label,
+                                    color = (if (selected) T.OnPrimary else T.Ink).copy(alpha = if (busy) 0.4f else 1f),
+                                    fontSize = 13.sp,
+                                    lineHeight = 18.sp,
+                                    modifier = Modifier.clip(T.R8)
+                                        .background(if (selected) T.PrimaryButton.copy(alpha = if (busy) 0.4f else 1f) else Color.Transparent)
+                                        .border(0.5.dp, if (selected) T.PrimaryButton else T.BorderStrong, T.R8)
+                                        .padding(horizontal = 12.dp, vertical = 5.dp),
+                                )
+                            }
+                        }
+                    }
+                    Spacer(Modifier.height(18.dp))
+                    OutlinedTextField(
+                        note, { note = it },
+                        readOnly = busy,
+                        placeholder = { Text(L.feedbackHint(), fontSize = 14.sp, lineHeight = 22.sp) },
+                        shape = T.R12,
+                        modifier = Modifier.fillMaxWidth().heightIn(max = 280.dp)
+                            .testTag("feedbackDetail")
+                            .semantics { contentDescription = L.feedbackDetail() },
+                        minLines = 3,
+                        maxLines = 10,
+                        textStyle = TextStyle(fontSize = 14.sp, lineHeight = 22.sp),
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedTextColor = T.Ink,
+                            unfocusedTextColor = T.Ink,
+                            focusedBorderColor = T.Border,
+                            unfocusedBorderColor = T.BorderStrong,
+                            focusedPlaceholderColor = T.Caption,
+                            unfocusedPlaceholderColor = T.Caption,
+                            cursorColor = T.Ink,
+                        ),
+                    )
+                    Spacer(Modifier.height(24.dp))
+                    Button(
+                        {
+                            if (online && !busy && accepting) {
+                                busy = true
+                                failure = null
+                                onSubmit(category, note.trim()) { result ->
+                                    scope.launch {
+                                        // A closed/disposed form must not dismiss a subsequently opened one.
+                                        if (!accepting || !busy) return@launch
+                                        busy = false
+                                        if (result.isSuccess) dismiss()
+                                        else {
+                                            failureSequence++
+                                            failure = L.feedbackFailure((result.exceptionOrNull() as? PocketError)?.code)
+                                        }
+                                    }
+                                }
+                            }
+                        },
+                        Modifier.fillMaxWidth().heightIn(min = 48.dp).testTag("feedbackSubmit"),
+                        enabled = online && !busy,
+                        shape = T.R12,
+                        colors = PrimaryColors(),
+                    ) { Text(if (busy) L.feedbackSubmitting() else L.feedbackSubmit()) }
+                }
+            }
+            failure?.let { message ->
+                // Keep the warning in this window, below the form so retry remains reachable.
+                Snackbar(
+                    modifier = Modifier.padding(top = 8.dp)
+                        .testTag("feedbackFailure")
+                        .semantics { liveRegion = LiveRegionMode.Polite },
+                    containerColor = T.Surface2,
+                    contentColor = T.Ink,
+                    shape = T.R12,
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                        Icon(D.warning, null, tint = T.Text2, modifier = Modifier.size(20.dp))
+                        Text(message)
+                    }
+                }
+            }
+        }
     }
 }
 

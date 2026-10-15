@@ -63,9 +63,40 @@ class MessageActionsTest {
         )
         Pocket.approvals.value = emptyList()
         Pocket.feedback.value = emptyMap()
+        Pocket.feedbackPending.value = emptyMap()
+        Pocket.feedbackFailures.value = emptyMap()
+        Pocket.feedbackStatus.value = FeedbackLoadStatus.Cold
     }
 
     @After fun clearInspectorNavigation() { InspectorNavigation.reset() }
+
+    @Test fun ratingControlsExposeSelectionAndDisableTogetherWhilePendingOrOffline() {
+        rule.setContent { PocketTheme { ChatRoot(onMenu = {}) } }
+        rule.runOnIdle {
+            Pocket.feedback.value = mapOf("m1" to dev.dsh.pocket.protocol.MessageFeedback("m1", "positive", "v1"))
+        }
+        rule.onNodeWithTag("messageLike").assertIsSelected().assertIsEnabled()
+        rule.onNodeWithTag("messageDislike").assertIsNotSelected()
+        rule.runOnIdle { Pocket.feedbackPending.value = mapOf("m1" to 1) }
+        rule.onNodeWithTag("messageLike").assertIsNotEnabled()
+        rule.onNodeWithTag("messageDislike").assertIsNotEnabled()
+        rule.runOnIdle {
+            Pocket.feedbackPending.value = emptyMap()
+            Pocket.feedbackFailures.value = mapOf("m1" to "version-conflict")
+            Pocket.ops.value = emptySet()
+        }
+        rule.onNodeWithTag("messageLike").assertIsNotEnabled()
+        rule.runOnIdle { Pocket.status.value = mapOf("p1" to Dot.Offline) }
+        rule.onNodeWithTag("messageFeedbackFailure").assertIsDisplayed()
+        rule.onNodeWithTag("messageLike").assertIsNotEnabled()
+        rule.onNodeWithTag("messageDislike").assertIsNotEnabled()
+        rule.runOnIdle {
+            Pocket.status.value = mapOf("p1" to Dot.Online)
+            Pocket.ops.value = setOf("feedback.get", "feedback.set")
+        }
+        rule.onNodeWithTag("messageLike").assertIsEnabled().assertIsSelected()
+        rule.onNodeWithTag("messageDislike").assertIsEnabled()
+    }
 
     @Test fun inspectorPickerConsumesActualMessageActionsAndOutsideButtons() {
         var like: String? = null

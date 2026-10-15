@@ -48,6 +48,9 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.disabled
 import androidx.compose.ui.semantics.stateDescription
+import androidx.compose.ui.semantics.selected
+import androidx.compose.ui.semantics.liveRegion
+import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -182,8 +185,8 @@ fun ChatRoot(
     val draftCwd by Pocket.draftWorkspacePath.collectAsState()
     var pendingImages by remember { mutableStateOf<List<PromptImage>>(emptyList()) }
     var pendingFiles by remember { mutableStateOf<List<PendingAttach>>(emptyList()) }
-    var feedbackTarget by remember { mutableStateOf<String?>(null) }
-    var feedbackRating by remember { mutableStateOf("negative") }
+    var feedbackTarget by remember(active, chat?.sessionId) { mutableStateOf<String?>(null) }
+    var feedbackRating by remember(active, chat?.sessionId) { mutableStateOf("negative") }
     var hiddenQuestion by remember(active, chat?.sessionId) { mutableStateOf<String?>(null) }
     var composerDraft by rememberSaveable(active, stateSaver = TextFieldValue.Saver) { mutableStateOf(TextFieldValue("")) }
     var mentionDrilled by remember(active) { mutableStateOf(false) }
@@ -430,12 +433,14 @@ fun ChatRoot(
                     onFork = { seq -> Pocket.forkSession(seq) },
                     feedback = feedbackMap,
                     onLike = { id ->
-                        if (feedbackMap[id]?.rating == "positive") Pocket.setMessageFeedback(id, null)
-                        else { feedbackTarget = id; feedbackRating = "positive"; sheet = Sheet.FeedbackCategory }
+                        Pocket.chooseMessageFeedback(id, "positive") {
+                            feedbackTarget = id; feedbackRating = "positive"; sheet = Sheet.FeedbackCategory
+                        }
                     },
                     onDislike = { id ->
-                        if (feedbackMap[id]?.rating == "negative") Pocket.setMessageFeedback(id, null)
-                        else { feedbackTarget = id; feedbackRating = "negative"; sheet = Sheet.FeedbackCategory }
+                        Pocket.chooseMessageFeedback(id, "negative") {
+                            feedbackTarget = id; feedbackRating = "negative"; sheet = Sheet.FeedbackCategory
+                        }
                     },
                 ) else TrajectoryView(st)
             }
@@ -628,13 +633,16 @@ fun ChatRoot(
         Sheet.Workspace -> WorkspaceSheet(draftWorkspacePath, onDismiss = { sheet = Sheet.None }) { Pocket.draftWorkspacePath.value = it }
         Sheet.Goal -> GoalSheet(onDismiss = { sheet = Sheet.None })
         Sheet.Feedback -> FeedbackSheet(onDismiss = { sheet = Sheet.None })
-        Sheet.FeedbackCategory -> FeedbackCategorySheet(
-            onDismiss = { sheet = Sheet.None; feedbackTarget = null },
-            onSubmit = { cat, note, complete ->
-                val target = feedbackTarget
-                if (target == null) complete(false) else Pocket.setMessageFeedback(target, feedbackRating, cat, note, complete)
-            },
-        )
+        Sheet.FeedbackCategory -> key(active, sid, feedbackTarget, feedbackRating) {
+            FeedbackDialog(
+                onDismiss = { sheet = Sheet.None; feedbackTarget = null },
+                onSubmit = { cat, note, complete ->
+                    val target = feedbackTarget
+                    if (target == null) complete(Result.failure(IllegalStateException("Feedback target unavailable")))
+                    else Pocket.setMessageFeedback(target, feedbackRating, cat, note, complete)
+                },
+            )
+        }
         Sheet.Commands -> CommandPopupSheet(
             onDismiss = { sheet = Sheet.None },
             onFile = { pickFiles.launch("*/*") },
@@ -1010,7 +1018,17 @@ private fun MessageActions(
 ) {
     val clip = androidx.compose.ui.platform.LocalClipboardManager.current
     var copied by remember { mutableStateOf(false) }
-    val canFeedback = messageId != null && "feedback.set" in Pocket.ops.value
+    val active by Pocket.active.collectAsState()
+    val statuses by Pocket.status.collectAsState()
+    val ops by Pocket.ops.collectAsState()
+    val pending by Pocket.feedbackPending.collectAsState()
+    val failures by Pocket.feedbackFailures.collectAsState()
+    val loadStatus by Pocket.feedbackStatus.collectAsState()
+    val online = statuses[active] == Dot.Online
+    var supported by remember(active, messageId) { mutableStateOf("feedback.set" in ops) }
+    SideEffect { if (online && ops.isNotEmpty()) supported = "feedback.set" in ops }
+    val canFeedback = messageId != null && supported
+    val feedbackEnabled = online && "feedback.set" in ops && messageId !in pending
     val iconDp = if (clock == MessageClock.End) 17.dp else 15.dp
     LaunchedEffect(copied) {
         if (copied) {
@@ -1058,6 +1076,9 @@ private fun MessageActions(
                     label = likeLabel,
                     tint = T.Text3,
                     iconSize = 15.dp,
+                    modifier = Modifier.semantics { selected = rating == "positive" },
+                    enabled = feedbackEnabled,
+                    alpha = if (feedbackEnabled) 1f else 0.4f,
                     testTag = "messageLike",
                     onClick = onLike,
                 )
@@ -1067,6 +1088,9 @@ private fun MessageActions(
                     label = dislikeLabel,
                     tint = T.Text3,
                     iconSize = 15.dp,
+                    modifier = Modifier.semantics { selected = rating == "negative" },
+                    enabled = feedbackEnabled,
+                    alpha = if (feedbackEnabled) 1f else 0.4f,
                     testTag = "messageDislike",
                     onClick = onDislike,
                 )
@@ -1098,6 +1122,14 @@ private fun MessageActions(
             )
         }
     }
+    if (canFeedback) {
+        val failure = failures[messageId]?.let(L::feedbackFailure) ?: if (loadStatus == FeedbackLoadStatus.Error) L.feedbackLoadFailed() else null
+        failure?.let {
+            Text(it, color = T.Text3, fontSize = 13.sp, lineHeight = 20.sp,
+                modifier = Modifier.padding(start = 4.dp).testTag("messageFeedbackFailure")
+                    .semantics { liveRegion = LiveRegionMode.Polite })
+        }
+    }
 }
 
 /** Compact horizontal rhythm with a 48dp-high touch area and unchanged official glyph sizes. */
@@ -1126,7 +1158,7 @@ private fun ActionIconButton(
                 .width(36.dp)
                 .height(48.dp)
                 .clip(T.R8)
-                .then(if (enabled) Modifier.clickable(role = Role.Button, onClick = onClick) else Modifier)
+                .clickable(enabled = enabled, role = Role.Button, onClick = onClick)
                 .semantics {
                     contentDescription = ariaLabel
                     if (!enabled) disabled()

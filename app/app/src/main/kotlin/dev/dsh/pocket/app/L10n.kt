@@ -46,10 +46,19 @@ object L {
     fun undoRating() = if (en) "Remove rating" else "取消标记"
     fun dislike() = if (en) "Bad response" else "有问题的回答"
     fun submitFeedback() = if (en) "Submit feedback" else "提交反馈"
+    fun feedbackSubmit() = if (en) "Submit" else "提交"
+    fun feedbackSubmitting() = if (en) "Submitting…" else "正在提交…"
+    fun feedbackClose() = if (en) "Close" else "关闭"
     fun feedbackCategory() = if (en) "Feedback category" else "反馈分类"
     fun feedbackDetail() = if (en) "Feedback details" else "反馈详情"
-    fun feedbackHint() = if (en) "Add details to help us improve…" else "填写详情以帮助我们改进…"
+    fun feedbackHint() = if (en) "Add details to help us improve. Your submission will include the current conversation log." else "填写详情以帮助我们改进体验，提交内容会包括当前对话的日志"
     fun thanksFeedback() = if (en) "Thanks for your feedback" else "感谢你的反馈"
+    fun feedbackLoadFailed() = if (en) "Could not load feedback" else "反馈状态加载失败"
+    fun feedbackFailure(code: String?) = when (code) {
+        "version-conflict" -> if (en) "This feedback changed elsewhere; the latest state is shown" else "这条反馈已在别处改动，已显示最新状态"
+        "note-too-large" -> if (en) "The description is too long; shorten it and submit again" else "描述太长，请缩短后再提交"
+        else -> if (en) "Could not save feedback" else "反馈保存失败"
+    }
     fun feedbackCategories(): List<Pair<String, String>> = listOf(
         "task-result" to if (en) "Task result" else "任务结果",
         "instruction-following" to if (en) "Instruction understanding and following" else "指令理解与遵循",

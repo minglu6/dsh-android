@@ -17,6 +17,7 @@ import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicLong
 
 enum class Dot { Online, Connecting, Offline, Unauthorized }
+enum class FeedbackLoadStatus { Cold, Loading, Ready, Error }
 
 /** One submission identity spans session creation, local echo, and the Host prompt. */
 data class FirstPrompt(val requestId: String, val text: String, val error: String? = null)
@@ -103,6 +104,17 @@ object Pocket {
     val pinnedIds = MutableStateFlow<Set<String>>(emptySet())
     /** messageId → feedback for the open session. */
     val feedback = MutableStateFlow<Map<String, MessageFeedback>>(emptyMap())
+    val feedbackStatus = MutableStateFlow(FeedbackLoadStatus.Cold)
+    val feedbackPending = MutableStateFlow<Map<String, Int>>(emptyMap())
+    val feedbackFailures = MutableStateFlow<Map<String, String>>(emptyMap())
+    private val feedbackLock = Mutex()
+    private var feedbackGeneration = 0L
+    private var feedbackLoaded: FeedbackRequest? = null
+    private data class FeedbackRequest(val client: PocketClient, val sessionId: String, val generation: Long, val hostId: String?) {
+        fun sameTarget() = active.value == hostId && chat.value?.sessionId == sessionId
+        fun current() = Pocket.client === client && sameTarget() && feedbackGeneration == generation
+        fun requireCurrent() { check(current()) { "Feedback target changed" } }
+    }
     val catalog = MutableStateFlow<ModelCatalog?>(null)
     private val _catalogLoading = MutableStateFlow(false)
     val catalogLoading: StateFlow<Boolean> = _catalogLoading.asStateFlow()
@@ -274,7 +286,7 @@ object Pocket {
         workspaces.value = emptyList(); presetRoster.value = emptyList(); ops.value = emptySet()
         closeTerminalFollow()
         _terminalPlatform.value = null
-        feedback.value = emptyMap(); attachmentCache.clear()
+        resetFeedback(); attachmentCache.clear()
         invalidatePermissionCatalog()
         invalidateModelCatalog()
         permission.value = emptyMap()
@@ -350,6 +362,7 @@ object Pocket {
             client = null; c.close(); setRoute(profileId, null)
             failFirstPrompt("连接已断开，首条消息未确认发送，请重新编辑")
             prefs.hostSettings.clear()
+            resetFeedback(clearItems = false)
             followEpoch.incrementAndGet()
             detachFollow()
             closeTerminalFollow()
@@ -412,7 +425,7 @@ object Pocket {
         if ("workspace.state" in ops.value) runCatching { refreshWorkspaceState(c) }
         chat.value?.let { st ->
             refollow(c, st.sessionId, reducer.cursor.takeIf { s -> s >= 0 })
-            if ("feedback.get" in ops.value) runCatching { loadFeedback(st.sessionId) }
+            if ("feedback.get" in ops.value) loadFeedback(st.sessionId)
         }
     }
 
@@ -926,7 +939,7 @@ object Pocket {
         permissionProjectionSeq = -1L
         modelProjectionSeq = -1L
         modelUsesDefault = false
-        feedback.value = emptyMap()
+        resetFeedback()
         seed?.let { reducer.echo(it.text, it.requestId) }
         chat.value = ChatState(sessionId, items = reducer.items(), running = reducer.running,
             title = sessions.value.firstOrNull { it.sessionId == sessionId }?.title)
@@ -949,7 +962,7 @@ object Pocket {
             val current = c.permission(sessionId)
             if (client === c && chat.value?.sessionId == sessionId) permission.value = permission.value + (sessionId to current)
         }
-        if ("feedback.get" in ops.value) runCatching { loadFeedback(sessionId) }
+        if ("feedback.get" in ops.value) loadFeedback(sessionId)
     }
 
     /**
@@ -1028,6 +1041,7 @@ object Pocket {
         followEpoch.incrementAndGet()
         val old = detachFollow()
         chat.value = null
+        resetFeedback()
         inspectorLog = SessionInspectorLog()
         if (old != null) client?.let { c ->
             try { c.unfollow(old) }
@@ -1432,11 +1446,28 @@ object Pocket {
         result["text"].str()?.takeIf { it.isNotBlank() }?.let { notices.tryEmit(it) }
     }
 
-    fun recordSessionFeedback(category: String?, note: String, onResult: (Boolean) -> Unit = {}) = mutation(onResult) { c ->
-        val st = chat.value ?: error("无会话")
-        val receipt = c.call("sessionFeedback.record", jsonOf("sessionId" to st.sessionId, "category" to category, "text" to note))
-        check(receipt["recorded"].bool() == true) { "反馈未被主机记录" }
-        notices.tryEmit(L.thanksFeedback())
+    fun recordSessionFeedback(category: String?, note: String, onResult: (Result<Unit>) -> Unit) : Job {
+        val request = feedbackRequest()
+        return main.launch {
+            if (request == null) {
+                onResult(Result.failure(PocketError("disconnected", "Host disconnected")))
+                return@launch
+            }
+            val result = try {
+                request.requireCurrent()
+                val receipt = request.client.call("sessionFeedback.record", jsonOf(
+                    "sessionId" to request.sessionId, "category" to category,
+                    "text" to note.trim().takeIf { it.isNotEmpty() },
+                ))
+                check(receipt["recorded"].bool() == true) { "Feedback was not recorded" }
+                Result.success(Unit)
+            } catch (e: CancellationException) { throw e }
+            catch (e: Exception) { Result.failure(e) }
+            if (request.sameTarget()) {
+                if (request.current() && result.isSuccess) notices.tryEmit(L.thanksFeedback())
+                onResult(if (request.current()) result else Result.failure(PocketError("disconnected", "Host disconnected")))
+            }
+        }
     }
 
     fun exportSession(onBytes: (filename: String, bytes: ByteArray) -> Unit) = main.launch {
@@ -1522,28 +1553,128 @@ object Pocket {
             .onFailure { errors.tryEmit(it.message ?: "取消置顶失败") }
     }
 
-    private suspend fun loadFeedback(sessionId: String) {
-        val c = client ?: return
-        val r = c.getFeedback(sessionId)
-        val items = r["items"].arr().orEmpty().mapNotNull(MessageFeedback::parse)
-        feedback.value = items.associateBy { it.messageId }
+    private fun resetFeedback(clearItems: Boolean = true) {
+        feedbackGeneration++
+        feedbackLoaded = null
+        feedbackStatus.value = FeedbackLoadStatus.Cold
+        feedbackPending.value = emptyMap()
+        feedbackFailures.value = emptyMap()
+        if (clearItems) feedback.value = emptyMap()
     }
+
+    private fun feedbackRequest(): FeedbackRequest? {
+        val c = client ?: return null
+        val sessionId = chat.value?.sessionId ?: return null
+        return FeedbackRequest(c, sessionId, feedbackGeneration, active.value)
+    }
+
+    private suspend fun loadFeedback(sessionId: String) {
+        val request = feedbackRequest()?.takeIf { it.sessionId == sessionId } ?: return
+        feedbackLock.withLock { if (request.current()) ensureFeedback(request) }
+    }
+
+    /** Reads and writes share one lock: a late list must not overwrite a newer committed rating. */
+    private suspend fun ensureFeedback(request: FeedbackRequest): Result<Unit> {
+        if (feedbackLoaded == request && feedbackStatus.value == FeedbackLoadStatus.Ready) return Result.success(Unit)
+        feedbackStatus.value = FeedbackLoadStatus.Loading
+        return try {
+            val rows = request.client.getFeedback(request.sessionId)["items"].arr()
+                ?: throw PocketError("bad-reply", "Host did not return feedback items")
+            request.requireCurrent()
+            feedback.value = rows.associate { row ->
+                val item = MessageFeedback.parse(row) ?: throw PocketError("bad-reply", "Invalid feedback item")
+                item.messageId to item
+            }
+            feedbackLoaded = request
+            feedbackStatus.value = FeedbackLoadStatus.Ready
+            Result.success(Unit)
+        } catch (e: CancellationException) { throw e }
+        catch (e: Exception) {
+            if (request.current()) feedbackStatus.value = FeedbackLoadStatus.Error
+            Result.failure(e)
+        }
+    }
+
+    private fun feedbackAction(
+        messageId: String,
+        onResult: (Result<Unit>) -> Unit,
+        queue: Boolean = false,
+        action: suspend (FeedbackRequest) -> Unit,
+    ): Job {
+        val request = feedbackRequest()
+        return main.launch {
+            if (request == null || !request.current() || status.value[active.value] != Dot.Online) {
+                if (request == null || request.sameTarget()) onResult(Result.failure(PocketError("disconnected", "Host disconnected")))
+                return@launch
+            }
+            if (!queue && messageId in feedbackPending.value) return@launch
+            feedbackPending.update { it + (messageId to ((it[messageId] ?: 0) + 1)) }
+            feedbackFailures.value = feedbackFailures.value - messageId
+            val result = try {
+                feedbackLock.withLock { request.requireCurrent(); action(request) }
+                Result.success(Unit)
+            } catch (e: CancellationException) { throw e }
+            catch (e: Exception) { Result.failure(e) }
+            finally {
+                if (request.current()) feedbackPending.update {
+                    val remaining = (it[messageId] ?: 1) - 1
+                    if (remaining == 0) it - messageId else it + (messageId to remaining)
+                }
+            }
+            if (request.sameTarget()) {
+                onResult(if (request.current()) result else Result.failure(PocketError("disconnected", "Host disconnected")))
+            }
+        }
+    }
+
+    /** A cold click waits for the stored rating before deciding whether to open or retract. */
+    fun chooseMessageFeedback(messageId: String, rating: String, onDialog: () -> Unit) =
+        feedbackAction(messageId, { result ->
+            result.exceptionOrNull()?.let { error ->
+                feedbackFailures.value = feedbackFailures.value + (messageId to
+                    if ((error as? PocketError)?.code == "version-conflict") "version-conflict" else "error")
+            }
+        }) { request ->
+            val loaded = ensureFeedback(request)
+            request.requireCurrent()
+            if (loaded.isFailure || feedback.value[messageId]?.rating != rating) onDialog()
+            else commitMessageFeedback(request, messageId, null, null, null)
+        }
 
     fun setMessageFeedback(
         messageId: String,
-        rating: String?,
+        rating: String,
         category: String? = null,
         note: String? = null,
-        onResult: (Boolean) -> Unit = {},
-    ) = mutation(onResult) { c ->
-        val st = chat.value ?: error("无会话")
-        val prev = feedback.value[messageId]
-        val result = c.setFeedback(st.sessionId, messageId, rating, category, note, prev?.version)
-        feedback.value = if (rating == null) feedback.value - messageId else {
-            val next = MessageFeedback.parse(result) ?: throw PocketError("bad-reply", "主机未返回已保存的反馈")
-            feedback.value + (messageId to next)
+        onResult: (Result<Unit>) -> Unit,
+    ) = feedbackAction(messageId, onResult, queue = true) { request ->
+        ensureFeedback(request).getOrThrow()
+        commitMessageFeedback(request, messageId, rating, category, note?.trim()?.takeIf { it.isNotEmpty() })
+        notices.tryEmit(L.thanksFeedback())
+    }
+
+    private suspend fun commitMessageFeedback(
+        request: FeedbackRequest, messageId: String, rating: String?, category: String?, note: String?,
+    ) {
+        try {
+            val result = request.client.setFeedback(request.sessionId, messageId, rating, category, note, feedback.value[messageId]?.version)
+            request.requireCurrent()
+            feedback.value = if (rating == null) feedback.value - messageId else {
+                val next = MessageFeedback.parse(result) ?: throw PocketError("bad-reply", "Host did not return the saved feedback")
+                feedback.value + (messageId to next)
+            }
+        } catch (e: PocketError) {
+            if (request.current() && e.code == "version-conflict") {
+                val current = e.details["current"]
+                    ?: throw PocketError("bad-reply", "Feedback conflict did not include the current item")
+                feedback.value = if (current == JsonNull) feedback.value - messageId else {
+                    val item = MessageFeedback.parse(current)
+                        ?: throw PocketError("bad-reply", "Invalid current feedback item")
+                    feedback.value + (messageId to item)
+                }
+            }
+            throw e
         }
-        if (rating != null) notices.tryEmit(L.thanksFeedback())
     }
 
     fun answerUserQuestion(callId: String, answers: List<JsonObject>, onResult: (Boolean) -> Unit = {}) = mutation(onResult) { c ->
@@ -1845,6 +1976,7 @@ object Pocket {
             detachFollow()
             active.value = null; prefs.activeProfile = null
             sessions.value = emptyList(); chat.value = null
+            resetFeedback()
             draftWorkspacePath.value = null
             workspaces.value = emptyList(); presetRoster.value = emptyList(); ops.value = emptySet()
             approvals.value = emptyList(); userQuestions.value = emptyList()

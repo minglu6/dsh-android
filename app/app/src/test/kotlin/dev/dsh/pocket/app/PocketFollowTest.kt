@@ -39,10 +39,11 @@ class PocketFollowTest {
         (get("transcriptPublisher") as TranscriptPublisher).cancel()
         val fields = listOf("client", "subId", "pendingFollowEpoch", "reducer", "inspectorLog", "permissionProjectionSeq",
             "modelProjectionSeq", "modelUsesDefault", "firstPromptSessionId", "continuityRepairAttempts",
-            "desiredViewedSession", "completionReadySession", "completionViewClient", "completionViewSession").associateWith(::get)
+            "desiredViewedSession", "completionReadySession", "completionViewClient", "completionViewSession",
+            "feedbackGeneration", "feedbackLoaded").associateWith(::get)
         val modelEpochs = listOf("modelCatalogEpoch", "modelSelectionEpoch").associateWith { (get(it) as AtomicLong).get() }
         val modelFlows = listOf("catalog", "model", "_catalogLoading", "_catalogError", "_modelPending",
-            "_firstPrompt", "permissionCatalog", "permissionCatalogLoading")
+            "_firstPrompt", "permissionCatalog", "permissionCatalogLoading", "feedbackStatus", "feedbackPending", "feedbackFailures")
             .associateWith { (get(it) as MutableStateFlow<Any?>).value }
         val epoch = get("followEpoch") as AtomicLong
         val originalEpoch = epoch.get()

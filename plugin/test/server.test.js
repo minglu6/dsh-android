@@ -6,6 +6,7 @@ import { join } from 'node:path'
 import WebSocket from 'ws'
 import { createPocketServer } from '../src/server.js'
 import { loadOrCreateToken } from '../src/token.js'
+import { feedbackOps } from '../src/parity-ops.js'
 
 const TOKEN = 'test-token-0123456789abcdef'
 
@@ -72,6 +73,53 @@ async function authed() {
   assert.equal(r.ok, true)
   return c
 }
+
+test('feedback wire replies contain values on success and complete business failures on rejection', async () => {
+  const item = {
+    messageId: 'm1', rating: 'positive', note: 'another client', category: 'task-result',
+    version: 'v2', createdAt: 1, updatedAt: 2,
+  }
+  const cases = [
+    { method: 'list', value: { items: [item] } },
+    { method: 'put', value: item },
+    { method: 'delete', value: { absent: true } },
+    { method: 'list', error: { code: 'session-not-found', sessionId: 's1' } },
+    { method: 'put', error: { code: 'version-conflict', current: item } },
+    { method: 'put', error: { code: 'version-conflict', current: null } },
+    { method: 'delete', error: { code: 'version-conflict', current: item } },
+    { method: 'put', error: { code: 'note-too-large', maxBytes: 100, actualBytes: 101 } },
+  ]
+  const c = await authed()
+  try {
+    for (const { method, value, error } of cases) {
+      const unregister = server.registerOps(feedbackOps({
+        [method]: async () => error ? { ok: false, error } : { ok: true, value },
+      }))
+      try {
+        const frame = await c.call(method === 'list' ? 'feedback.get' : 'feedback.set', {
+          sessionId: 's1', messageId: 'm1', rating: method === 'delete' ? null : 'negative', ifVersion: 'v1',
+        })
+        if (error) {
+          assert.equal(frame.ok, false)
+          assert.equal(Object.hasOwn(frame, 'result'), false)
+          assert.deepEqual(frame.error, { code: error.code, message: error.code, details: error })
+          if (Object.hasOwn(error, 'current')) {
+            assert.equal(Object.hasOwn(frame.error.details, 'current'), true)
+            assert.deepEqual(frame.error.details.current, error.current)
+          }
+        } else {
+          assert.equal(frame.ok, true)
+          assert.equal(Object.hasOwn(frame, 'error'), false)
+          assert.deepEqual(frame.result, value)
+        }
+      } finally {
+        unregister()
+      }
+    }
+  } finally {
+    c.ws.close()
+  }
+})
 
 test('permission catalog invalidation reaches only authenticated clients', async () => {
   const authenticated = await authed()

@@ -91,55 +91,41 @@ export function goalOps(goals, agents) {
 /**
  * Message like/dislike — Host `messageFeedback.list|put|delete`.
  * Pocket names: feedback.get / feedback.set (set deletes when rating is null).
+ * The injected Host service returns the business Result directly, without a
+ * Typert RemoteResult carrier. Preserve the complete failure for Pocket clients.
  */
 export function feedbackOps(messageFeedback) {
+  const unwrap = (result) => {
+    if (!result.ok) {
+      throw Object.assign(new Error(result.error.code), { code: result.error.code, details: result.error })
+    }
+    return result.value
+  }
   return {
     'feedback.get': async (a) => {
       if (!str(a.sessionId)) throw bad('sessionId required')
-      const r = await messageFeedback.list({ sessionId: a.sessionId })
-      // RemoteResult shape `{ok,value}` or plain `{items}`.
-      if (r && typeof r === 'object' && 'ok' in r) {
-        if (!r.ok) {
-          const err = r.error ?? {}
-          throw Object.assign(new Error(err.message ?? 'feedback list failed'), { code: err.code ?? 'error' })
-        }
-        return r.value
-      }
-      return r
+      return unwrap(await messageFeedback.list({ sessionId: a.sessionId }))
     },
     'feedback.set': async (a) => {
       if (!str(a.sessionId) || !str(a.messageId)) throw bad('sessionId and messageId required')
       if (a.rating == null) {
-        const r = await messageFeedback.delete({
+        return unwrap(await messageFeedback.delete({
           sessionId: a.sessionId,
           messageId: a.messageId,
           ifVersion: a.ifVersion ?? null,
-        })
-        if (r && typeof r === 'object' && 'ok' in r && !r.ok) {
-          const err = r.error ?? {}
-          throw Object.assign(new Error(err.message ?? 'feedback delete failed'), { code: err.code ?? 'error' })
-        }
-        return r?.value ?? r ?? { absent: true }
+        }))
       }
       if (a.rating !== 'positive' && a.rating !== 'negative') {
         throw bad('rating must be positive, negative, or null')
       }
-      const r = await messageFeedback.put({
+      return unwrap(await messageFeedback.put({
         sessionId: a.sessionId,
         messageId: a.messageId,
         rating: a.rating,
         ...(a.note !== undefined ? { note: a.note } : {}),
         ...(a.category !== undefined ? { category: a.category } : {}),
         ifVersion: a.ifVersion ?? null,
-      })
-      if (r && typeof r === 'object' && 'ok' in r) {
-        if (!r.ok) {
-          const err = r.error ?? {}
-          throw Object.assign(new Error(err.message ?? 'feedback put failed'), { code: err.code ?? 'error' })
-        }
-        return r.value
-      }
-      return r
+      }))
     },
   }
 }

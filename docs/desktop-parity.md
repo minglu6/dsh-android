@@ -145,7 +145,7 @@ The mention menu follows desktop ordering (files, direct subagents, other sessio
 
 New-chat mentions prepare a blank Host session with the selected workspace/model/permission/preset and preserve the live draft, then wait for the initial history before discovering references; browsing never sends a prompt. Selected references render as native atomic icon/label spans while copying and sending retain the canonical file/session token. File references open the existing preview; deletion and selection keep the full reference identity intact.
 
-Slash menu pick consumes the typed `/` (desktop `slash/input-consume-token`) then runs the same actions as Plus / desktop: file picker, Goal/Feedback sheets, `/plan` toggle (+ PlanChip from host `plan` projection), `/compact`, permission/model pickers, session export. Connection status green dot stays in the **drawer** only — not the chat top bar (desktop session header has no pocket status dot).
+Slash menu pick consumes the typed `/` (desktop `slash/input-consume-token`) then runs the same actions as Plus / desktop: file picker, Goal sheet / Feedback dialog, `/plan` toggle (+ PlanChip from host `plan` projection), `/compact`, permission/model pickers, session export. Connection status green dot stays in the **drawer** only — not the chat top bar (desktop session header has no pocket status dot).
 
 ### 1.8 Message actions (copy / like / retry / fork)
 
@@ -172,6 +172,8 @@ When the Host supports branching, a later running turn does not hide the fork ic
 Turn usage follows the desktop token meter's durable attempt lifecycle, including billed failed attempts and retries. Final message usage overrides streaming samples; missing boundaries, unsafe counts or contradictory totals hide the entire disclosure. Optional cache/reasoning buckets and model routes appear only when every attempt reports them. History paging can complete a partial turn; snapshots and duplicate events never reuse or double-count old totals. Switching to Compact removes both the pill and any open details dialog. The phone bridge is unchanged.
 
 **Icon chrome (desktop MessageIconActions / MessageFeedbackActions):** Android uses the official ui-primitives Regular SVG paths. User messages show clock → copy, without a branch control. Assistant messages show copy → like/dislike → branch → optional usage → clock; copy/branch are 17dp and feedback icons 15dp, with tertiary `T.Text3` tint. Feedback selection swaps outline/fill rather than inventing blue/red colors. Icon controls occupy 36dp horizontally with no extra inter-button gap, retain a 48dp-high touch area, and leave 8dp before/after the clock; unavailable branch actions retain their disabled state and reason. Icon labels remain accessibility labels/tooltips. The usage pill shares the row's remaining width without pushing the clock off a narrow screen. No standalone “本轮用量” row is appended below answers; composer statistics and trajectory usage details remain available. Process/reasoning chevrons use vector artwork and rotate on expansion instead of text glyphs.
+
+**Feedback parity:** Either unrecorded rating opens the same centered native dialog as session feedback; the rating is saved only on submission. Categories are compact, optional single-select chips that can be deselected, and the full hint states that the conversation log is included. Empty submissions are valid. The cold click first loads the stored judgment; clicking the committed rating retracts it. Both icons disable while their operation is pending or offline and expose the selected state to accessibility. Reads and writes serialize against the observed version; `version-conflict` reconciles the authoritative item (including removal) without retrying. Load/retraction failures appear next to the message controls. Dialog failures retain the draft and show the official conflict/oversize/generic copy in a six-second warning below the form, without obscuring retry. Closing during submission is allowed; late replies cannot close a new form or overwrite another session. Success retains the existing acknowledgement Snackbar.
 
 The usage action is transparent at rest, like the adjacent shortcut icons. Its rounded background appears only while the details dialog is expanded; native press feedback remains enabled, and dismissing the dialog restores transparency. Its 14dp icon uses an 11dp leading inset to continue the shortcuts' 36dp center-to-center rhythm, with a 4dp icon-to-label gap. Narrow layouts retain the clock and ellipsize the usage label instead of compressing the icon spacing.
 
@@ -357,7 +359,7 @@ Model settings use the desktop UI, not the mere existence of Host APIs, as their
 | Empty transcript | 开始对话 (phone) | align if desktop adds official string |
 | Empty sessions | `empty.none` 暂无会话 | done |
 | Toasts | `toast.archived*`, `toast.recorded` 感谢你的反馈, connection toasts | Snackbar OK; no AlertDialog |
-| Dialogs | archive confirm, full-access confirm, feedback dialog, stats | bottom sheets |
+| Dialogs | archive confirm, full-access confirm, feedback dialog, stats | feedback uses a centered native dialog; other surfaces retain their existing phone presentation |
 | Full access | 「启用完全权限？」 ack | done |
 
 ---
@@ -387,7 +389,7 @@ Model settings use the desktop UI, not the mere existence of Host APIs, as their
 | `@` file/session mentions | **done** (anchored completion, directory drill/breadcrumbs, atomic canonical references; `references.files` / `references.sessions`) | was needs-plugin |
 | Copy on messages | **done** (icon-only; was text) | feasible |
 | Branch / fork from message | **done** (icon-only + `sessions.fork`) | was needs-plugin |
-| Like / dislike | **done** (icon-only + feedback sheet) | was needs-plugin |
+| Like / dislike | **done** (icon-only + centered feedback dialog; versioned submit/retract and localized errors) | Host bridge must preserve conflict details |
 | Message clock | **done** (nowrap beside icons) | feasible |
 | Retry / turn-error / maxTokens rows | **done** (this PR) | feasible |
 | Stopped / interrupted copy | **done** (`message.stopped` 已停止) | feasible |

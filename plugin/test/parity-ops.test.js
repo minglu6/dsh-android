@@ -190,8 +190,50 @@ test('feedback.get/set map to messageFeedback list/put/delete', async () => {
   assert.equal(put.rating, 'negative')
   const cleared = await ops['feedback.set']({ sessionId: 's1', messageId: 'm1', rating: null, ifVersion: 'v2' })
   assert.equal(cleared.absent, true)
-  assert.equal(calls[1][0], 'put')
-  assert.equal(calls[2][0], 'delete')
+  assert.deepEqual(calls, [
+    ['list', { sessionId: 's1' }],
+    ['put', { sessionId: 's1', messageId: 'm1', rating: 'negative', category: 'task-result', ifVersion: 'v1' }],
+    ['delete', { sessionId: 's1', messageId: 'm1', ifVersion: 'v2' }],
+  ])
+})
+
+test('feedback mutations preserve creation fences and verbatim notes', async () => {
+  const calls = []
+  const item = { messageId: 'm1', rating: 'negative', note: '  explanation  ', category: 'task-result', version: 'v1', createdAt: 1, updatedAt: 1 }
+  const ops = feedbackOps({
+    put: async (request) => { calls.push(request); return { ok: true, value: item } },
+  })
+  assert.deepEqual(await ops['feedback.set']({
+    sessionId: 's1', messageId: 'm1', rating: 'negative', note: item.note, category: item.category,
+  }), item)
+  assert.deepEqual(calls, [{
+    sessionId: 's1', messageId: 'm1', rating: 'negative', note: item.note, category: item.category, ifVersion: null,
+  }])
+})
+
+test('feedback business rejections retain code and complete authoritative details', async () => {
+  const current = { messageId: 'm1', rating: 'positive', note: 'another client', category: 'task-result', version: 'v2', createdAt: 1, updatedAt: 2 }
+  const cases = [
+    ['list', { code: 'session-not-found', sessionId: 's1' }],
+    ['put', { code: 'version-conflict', current }],
+    ['put', { code: 'version-conflict', current: null }],
+    ['delete', { code: 'version-conflict', current }],
+    ['put', { code: 'note-too-large', maxBytes: 100, actualBytes: 101 }],
+  ]
+  for (const [method, failure] of cases) {
+    const ops = feedbackOps({ [method]: async () => ({ ok: false, error: failure }) })
+    await assert.rejects(
+      () => ops[method === 'list' ? 'feedback.get' : 'feedback.set']({
+        sessionId: 's1', messageId: 'm1', rating: method === 'delete' ? null : 'negative', ifVersion: 'v1',
+      }),
+      (error) => {
+        assert.equal(error.code, failure.code)
+        assert.equal(error.message, failure.code)
+        assert.deepEqual(error.details, failure)
+        return true
+      },
+    )
+  }
 })
 
 test('workspaceChanges.summary forwards Host summary', () => {
