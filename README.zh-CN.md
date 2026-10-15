@@ -234,6 +234,8 @@ npm run build:iroh
 
 推送到 `main` 时会强制更新 `dsh-android-latest` 预发布（APK 以及上述两个 `pocket-host` 二进制）。PR 运行相同检查，但不发布该 tag。
 
+推送 `v*` tag（例如 `v0.1.0`）会跑同一套任务；通过后创建非 prerelease 的 GitHub Release，标题为 `dsh-android vX.Y.Z`，并上传 `dsh-android-vX.Y.Z.apk`（R8 release）以及可选的 `pocket-host` 二进制。tag 去掉 `v` 后必须与 `app/app/build.gradle.kts` 中的 `appVersionName` 一致。请先把版本改动合入 `main`，再推 version tag。
+
 发布签名需在仓库 Actions Secrets 配齐 `ANDROID_KEYSTORE_B64`、`ANDROID_KEYSTORE_PASSWORD`、`ANDROID_KEY_ALIAS`、`ANDROID_KEY_PASSWORD`。任务写入临时 keystore，结束后删除。不要将 keystore 提交到仓库。
 
 ## 目录结构

@@ -6,7 +6,7 @@ import kotlin.test.assertNull
 
 class VersionCompatibilityTest {
     @Test fun acceptsTheCurrentAppAndPlugin() {
-        assertNull(VersionCompatibility.evaluate("0.1.0-m3", handshake()))
+        assertNull(VersionCompatibility.evaluate("0.1.0", handshake()))
     }
 
     @Test fun requestsPluginUpdateWhenPluginIsTooOld() {

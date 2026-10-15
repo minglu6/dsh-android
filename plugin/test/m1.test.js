@@ -81,14 +81,14 @@ test('pair over ws issues device token; owner-only pairing.open; revoke kicks de
   await owner.call('hello', { token: OWNER })
   const { code } = (await owner.call('pairing.open')).result
   const phone = client(url); await phone.open
-  const paired = await phone.call('pair', { code, name: 'Pixel 9', app: 'dsh-android', appVersion: '0.1.0-m3' })
+  const paired = await phone.call('pair', { code, name: 'Pixel 9', app: 'dsh-android', appVersion: '0.1.0' })
   assert.equal(paired.ok, true)
   assert.ok(paired.result.token && paired.result.deviceId)
   assert.equal(paired.result.version, '0.1.0')
   assert.equal(paired.result.minimumAppVersion, '0.1.0')
   assert.equal((await phone.call('pairing.open')).error.code, 'auth/forbidden')
   const phone2 = client(url); await phone2.open
-  const hello = await phone2.call('hello', { token: paired.result.token, app: 'dsh-android', appVersion: '0.1.0-m3' })
+  const hello = await phone2.call('hello', { token: paired.result.token, app: 'dsh-android', appVersion: '0.1.0' })
   assert.equal(hello.result.device.name, 'Pixel 9')
   assert.equal(hello.result.version, '0.1.0')
   assert.equal(hello.result.minimumAppVersion, '0.1.0')
