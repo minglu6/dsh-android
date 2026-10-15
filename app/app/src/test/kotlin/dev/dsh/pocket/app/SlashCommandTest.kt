@@ -1,6 +1,8 @@
 package dev.dsh.pocket.app
 
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertIsEnabled
+import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.assertTextContains
 import androidx.compose.ui.test.hasSetTextAction
 import androidx.compose.ui.test.hasText
@@ -62,6 +64,17 @@ class SlashCommandTest {
         rule.setContent { PocketTheme { ChatRoot(onMenu = {}) } }
         rule.waitForIdle()
         rule.onNodeWithTag("planChip").assertDoesNotExist()
+    }
+
+    @Test fun disconnectDisablesModelCommandWithoutOpeningPicker() {
+        rule.setContent { PocketTheme { ChatRoot(onMenu = {}) } }
+        rule.onNodeWithTag("composerInput").performTextInput("/")
+        rule.mainClock.advanceTimeBy(1500)
+        rule.waitForIdle()
+        rule.onNodeWithText("模型").assertIsEnabled()
+        rule.runOnIdle { Pocket.status.value = mapOf("p1" to Dot.Offline) }
+        rule.onNodeWithText("模型").assertIsNotEnabled().performClick()
+        rule.onNodeWithTag("modelPicker").assertDoesNotExist()
     }
 
     @Test fun slashSearchUsesHostCatalogAndInsertsSelectedCommand() = withHostCatalog {

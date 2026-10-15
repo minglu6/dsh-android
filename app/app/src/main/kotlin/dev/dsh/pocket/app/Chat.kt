@@ -493,7 +493,10 @@ fun ChatRoot(
                 queueAttached = visibleChat?.queuedPrompts?.isNotEmpty() == true,
                 pendingImages = pendingImages, pendingFiles = pendingFiles,
                 permissionName = currentPermissionLabel,
-                onPlus = { if (firstPrompt == null) sheet = Sheet.Plus }, onPerm = { if (firstPrompt == null) sheet = Sheet.Permission }, onModel = { if (firstPrompt == null) { modelDirect = false; sheet = Sheet.Model } },
+                onPlus = { if (firstPrompt == null) sheet = Sheet.Plus },
+                onPerm = { if (firstPrompt == null && dot == Dot.Online) sheet = Sheet.Permission },
+                onModel = { if (firstPrompt == null && dot == Dot.Online) { modelDirect = false; sheet = Sheet.Model } },
+                modelEnabled = dot == Dot.Online, permissionEnabled = dot == Dot.Online,
                 modelMenu = modelMenu, modelEffort = modelEffortLabel(catalog, curModel),
                 modelBusy = modelPending != null, modelExpanded = sheet == Sheet.Model,
                 onRemoveImage = { i -> pendingImages = pendingImages.toMutableList().also { it.removeAt(i) } },
@@ -612,8 +615,8 @@ fun ChatRoot(
         Sheet.Preset -> PresetSheet(if (sid == null) effectivePreset else chat?.agentPreset.orEmpty(), editable = sid == null, onDismiss = { sheet = Sheet.None }) { draftPreset = it }
         Sheet.Plus -> PlusSheet(
             onDismiss = { sheet = Sheet.None },
-            onPerm = { sheet = Sheet.Permission },
-            onModel = { modelDirect = true; sheet = Sheet.Model },
+            onPerm = { if (dot == Dot.Online) sheet = Sheet.Permission },
+            onModel = { if (dot == Dot.Online) { modelDirect = true; sheet = Sheet.Model } },
             onFile = { pickFiles.launch("*/*") },
             onGoal = { sheet = Sheet.Goal },
             onPlan = { Pocket.executeCommand("/plan") },
@@ -650,8 +653,8 @@ fun ChatRoot(
             onPlan = { Pocket.executeCommand("/plan") },
             onFeedback = { sheet = Sheet.Feedback },
             onCompact = { Pocket.executeCommand("/compact") },
-            onPerm = { sheet = Sheet.Permission },
-            onModel = { modelDirect = true; sheet = Sheet.Model },
+            onPerm = { if (dot == Dot.Online) sheet = Sheet.Permission },
+            onModel = { if (dot == Dot.Online) { modelDirect = true; sheet = Sheet.Model } },
             onExport = { doExport() },
             initialQuery = composerTrigger(composerDraft.text, composerDraft.selection.end)?.query.orEmpty(),
         )
@@ -1764,6 +1767,8 @@ private fun Composer(
     onPlus: () -> Unit,
     onPerm: () -> Unit,
     onModel: () -> Unit,
+    modelEnabled: Boolean = true,
+    permissionEnabled: Boolean = true,
     modelMenu: @Composable () -> Unit = {},
     modelEffort: String? = null,
     modelBusy: Boolean = false,
@@ -1845,6 +1850,7 @@ private fun Composer(
                 // Keep the current mode accessible without taking width from the model name.
                 if (perm.isNotEmpty()) IconButton(
                     onClick = onPerm,
+                    enabled = permissionEnabled,
                     modifier = Modifier.size(48.dp).testTag("composerPermission")
                         .semantics { contentDescription = permissionName },
                 ) {
@@ -1856,16 +1862,18 @@ private fun Composer(
                     }
                 }
                 Box(Modifier.weight(1f), contentAlignment = Alignment.CenterEnd) {
+                    val modelAlpha = if (modelEnabled) 1f else 0.45f
                     Row(
-                        Modifier.heightIn(min = 48.dp).clip(T.R8).clickable(onClick = onModel).testTag("composerModel")
+                        Modifier.heightIn(min = 48.dp).clip(T.R8)
+                            .clickable(enabled = modelEnabled, onClick = onModel).testTag("composerModel")
                             .semantics { contentDescription = listOfNotNull(model?.name ?: "选择模型", modelEffort).joinToString(" · ") }
                             .padding(horizontal = 6.dp, vertical = 6.dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
-                        Text(model?.name ?: "选择模型", fontSize = 14.sp, color = T.Text2, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false).testTag("composerModelName"))
-                        modelEffort?.let { Spacer(Modifier.width(4.dp)); Text(it, fontSize = 12.sp, color = T.Caption, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.widthIn(max = 48.dp)) }
+                        Text(model?.name ?: "选择模型", fontSize = 14.sp, color = T.Text2.copy(alpha = modelAlpha), maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false).testTag("composerModelName"))
+                        modelEffort?.let { Spacer(Modifier.width(4.dp)); Text(it, fontSize = 12.sp, color = T.Caption.copy(alpha = modelAlpha), maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.widthIn(max = 48.dp)) }
                         if (modelBusy) CircularProgressIndicator(Modifier.padding(start = 4.dp).size(14.dp), strokeWidth = 1.5.dp, color = T.Text3)
-                        else Icon(D.chevronDown, null, tint = T.Text2, modifier = Modifier.size(16.dp).rotate(if (modelExpanded) 180f else 0f))
+                        else Icon(D.chevronDown, null, tint = T.Text2.copy(alpha = modelAlpha), modifier = Modifier.size(16.dp).rotate(if (modelExpanded) 180f else 0f))
                     }
                     modelMenu()
                 }

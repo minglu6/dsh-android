@@ -608,8 +608,8 @@ fun CommandPopupSheet(
         if ("file".contains(query, true) || L.file().contains(query, true)) OptionRow(L.file(), icon = D.paperclip, code = "file", enabled = online && chat != null && "attachments.upload" in ops) {
             Pocket.consumeComposerSlash(); onFile(); onDismiss()
         }
-        if ("model".contains(query, true) || "模型".contains(query)) OptionRow("模型", icon = D.data, code = "model") { Pocket.consumeComposerSlash(); onModel() }
-        if (chat == null && ("permission".contains(query, true) || "权限".contains(query))) OptionRow("权限", icon = D.permission("danger-full-access"), code = "permission") {
+        if ("model".contains(query, true) || "模型".contains(query)) OptionRow("模型", icon = D.data, code = "model", enabled = online) { Pocket.consumeComposerSlash(); onModel() }
+        if (chat == null && ("permission".contains(query, true) || "权限".contains(query))) OptionRow("权限", icon = D.permission("danger-full-access"), code = "permission", enabled = online) {
             Pocket.consumeComposerSlash(); onPerm()
         }
         SectionLabel(L.sectionCommands())
@@ -618,7 +618,7 @@ fun CommandPopupSheet(
         filtered.forEach { command ->
             val name = command["name"].str() ?: return@forEach
             val builtin = builtinCommandName(command["definitionId"].str())
-            val requiresHost = builtin == "plan" || builtin == "compact" || builtin == "export"
+            val requiresHost = builtin == "plan" || builtin == "compact" || builtin == "export" || builtin == "permission"
             OptionRow("/$name", command["description"].str(), enabled = online || !requiresHost) {
                 // Only decorate commands that the Host actually advertised. Others return
                 // the real token to the composer so arguments can be reviewed before send.

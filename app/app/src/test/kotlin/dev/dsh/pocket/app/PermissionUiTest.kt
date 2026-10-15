@@ -151,6 +151,21 @@ class PermissionUiTest {
         rule.onNodeWithTag("composerInput").assertTextContains("preserved draft")
     }
 
+    @Test fun disconnectDisablesComposerPermissionWithoutOpeningPicker() {
+        Pocket.init(RuntimeEnvironment.getApplication())
+        installHostSettingsFixture()
+        Pocket.active.value = "permission-session-test"
+        Pocket.status.value = mapOf("permission-session-test" to Dot.Online)
+        Pocket.chat.value = ChatState("s1", loaded = true)
+        Pocket.permission.value = mapOf("s1" to "workspace-write")
+        Pocket.ops.value = setOf("permissions.catalog", "permissions.set")
+        rule.setContent { PocketTheme { ChatRoot({}) } }
+        rule.onNodeWithTag("composerPermission").assertIsEnabled()
+        rule.runOnIdle { Pocket.status.value = mapOf("permission-session-test" to Dot.Offline) }
+        rule.onNodeWithTag("composerPermission").assertIsNotEnabled().performClick()
+        rule.onNodeWithText("访问模式").assertDoesNotExist()
+    }
+
     @Test fun autoChosenForOneConversationDoesNotBecomeNextConversationDefault() {
         Pocket.init(RuntimeEnvironment.getApplication())
         installHostSettingsFixture()
