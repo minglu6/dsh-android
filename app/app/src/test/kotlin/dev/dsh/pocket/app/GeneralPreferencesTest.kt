@@ -45,7 +45,8 @@ class GeneralPreferencesTest {
             assertEquals(BusySend.Queue, prefs.busySend)
             assertEquals("workspace-write", prefs.defaultPermission)
             prefs.appearance = Appearance.Light
-            assertEquals(Appearance.System, prefs.appearance)
+            assertEquals(Appearance.Light, prefs.appearance)
+            assertEquals("Dark", storage.getString("appearance", null))
             installHostSettingsFixture(prefs)
             assertEquals(Appearance.Light, prefs.appearance)
             assertEquals(TranscriptView.Standard, prefs.transcriptView)

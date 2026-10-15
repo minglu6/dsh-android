@@ -211,9 +211,28 @@ class AppPrefs(ctx: Context) {
     var language: AppLanguage
         get() = if ((hostSettings.value(SharedSetting.Language).str() ?: java.util.Locale.getDefault().language).startsWith("zh")) AppLanguage.Zh else AppLanguage.En
         set(v) = hostSettings.set(SharedSetting.Language, JsonPrimitive(v.name.lowercase()))
+    /** In-memory device theme while Host is disconnected; never persisted or replayed. */
+    private var appearanceOverride by mutableStateOf<Appearance?>(null)
     var appearance: Appearance
-        get() = when (hostSettings.value(SharedSetting.Appearance).str()) { "light" -> Appearance.Light; "dark" -> Appearance.Dark; else -> Appearance.System }
-        set(v) = hostSettings.set(SharedSetting.Appearance, JsonPrimitive(v.name.lowercase()))
+        get() {
+            val hosted = hostSettings.value(SharedSetting.Appearance).str()
+            return when (hosted) {
+                "light" -> Appearance.Light
+                "dark" -> Appearance.Dark
+                null -> appearanceOverride ?: Appearance.System
+                else -> Appearance.System
+            }
+        }
+        set(v) {
+            if (hostSettings.writable(SharedSetting.Appearance)) {
+                appearanceOverride = null
+                hostSettings.set(SharedSetting.Appearance, JsonPrimitive(v.name.lowercase()))
+            } else if (!hostSettings.online) {
+                appearanceOverride = v
+            } else {
+                hostSettings.set(SharedSetting.Appearance, JsonPrimitive(v.name.lowercase()))
+            }
+        }
     var fontSize: Int
         get() = hostSettings.value(SharedSetting.FontSize).int() ?: 14
         set(v) = hostSettings.set(SharedSetting.FontSize, JsonPrimitive(v.coerceIn(10, 22)))

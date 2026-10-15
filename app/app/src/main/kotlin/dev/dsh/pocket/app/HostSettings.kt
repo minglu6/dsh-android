@@ -88,7 +88,7 @@ internal class HostSettings(private val scope: CoroutineScope) {
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            if (connection === c && generation == readGeneration) error = e.message ?: "无法读取 Host 设置"
+            if (connection === c && generation == readGeneration) error = e.message ?: "无法读取远程主机设置"
         } finally {
             if (connection === c && generation == readGeneration) loading = false
         }
@@ -100,7 +100,7 @@ internal class HostSettings(private val scope: CoroutineScope) {
         val c = connection
         val revision = namespace(setting)["revision"].int()
         if (c == null || !writable(setting) || revision == null) {
-            error = if (saving) "正在保存，请稍后再试" else "Host 设置尚未连接、不可用或只读，未保存"
+            error = if (saving) "正在保存，请稍后再试" else "远程主机设置尚未连接、不可用或只读，未保存"
             return
         }
         saving = true
@@ -108,7 +108,7 @@ internal class HostSettings(private val scope: CoroutineScope) {
         pendingValue = setting to value
         scope.launch(start = CoroutineStart.UNDISPATCHED) {
             try {
-                check(connection === c) { "Host 已切换，未保存" }
+                check(connection === c) { "远程主机已切换，未保存" }
                 val ops = buildJsonArray { add(buildJsonObject {
                     put("op", "set"); put("path", JsonArray(listOf(JsonPrimitive(setting.field)))); put("value", value)
                 }) }
@@ -121,7 +121,7 @@ internal class HostSettings(private val scope: CoroutineScope) {
                 if (connection !== c) return@launch
                 adopt(accepted)
                 loading = false
-                check(this@HostSettings.value(setting) == value) { "Host 未应用此值（可能被配置覆盖），请检查主机设置" }
+                check(this@HostSettings.value(setting) == value) { "远程主机未应用此值（可能被配置覆盖），请检查主机设置" }
                 onSaved()
             } catch (e: CancellationException) {
                 throw e
@@ -129,7 +129,7 @@ internal class HostSettings(private val scope: CoroutineScope) {
                 if (connection === c) {
                     // Conflicts are never retried or queued; refresh the next explicit edit's revision.
                     read(c)
-                    if (connection === c) error = e.message ?: "Host 设置保存失败"
+                    if (connection === c) error = e.message ?: "远程主机设置保存失败"
                 }
             } finally {
                 if (connection === c) {

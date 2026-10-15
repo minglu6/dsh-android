@@ -24,6 +24,7 @@ class OfflineSettingsTest {
     private var previousActive: String? = null
     private var previousStatus = emptyMap<String, Dot>()
     private var previousCollapse = CollapseTiming.Completion
+    private var previousAppearance = Appearance.System
     private var previousOps = emptySet<String>()
 
     @Before fun setup() {
@@ -31,6 +32,7 @@ class OfflineSettingsTest {
         previousActive = Pocket.active.value
         previousStatus = Pocket.status.value
         previousCollapse = Pocket.prefs.collapseTiming
+        previousAppearance = Pocket.prefs.appearance
         previousOps = Pocket.ops.value
         Pocket.active.value = "offline-settings-test"
         Pocket.status.value = mapOf("offline-settings-test" to Dot.Online)
@@ -40,6 +42,7 @@ class OfflineSettingsTest {
 
     @After fun restore() {
         Pocket.prefs.collapseTiming = previousCollapse
+        Pocket.prefs.appearance = previousAppearance
         Pocket.prefs.hostSettings.clear()
         Pocket.active.value = previousActive
         Pocket.status.value = previousStatus
@@ -57,16 +60,17 @@ class OfflineSettingsTest {
         rule.onNodeWithText(L.language()).assertIsEnabled()
         disconnect()
         rule.onNodeWithText(L.language()).assertIsNotEnabled().performClick()
-        rule.onNodeWithText(L.dark()).assertIsNotEnabled().performClick()
+        rule.onNodeWithText("远程主机未连接，需连接的操作暂不可用").assertExists()
+        rule.onNodeWithText(L.dark()).assertIsEnabled().performClick()
+        rule.runOnIdle { assertEquals(Appearance.Dark, Pocket.prefs.appearance) }
         rule.onNodeWithContentDescription("字号大小：增大字号").assertIsNotEnabled().performClick()
         rule.runOnIdle { assertNull(Pocket.prefs.hostSettings.error) }
         rule.onRoot().captureRoboImage("build/screenshots/settings-offline.png",
             roborazziOptions = RoborazziOptions(taskType = RoborazziTaskType.Record))
         rule.onNodeWithTag("fontSettingsToggle").performScrollTo().assertIsEnabled().performClick()
         rule.onNodeWithTag("textFontFamily").assertIsNotEnabled()
-        rule.onNodeWithText("工作步骤收起时机").performScrollTo().assertIsEnabled().performClick()
-        rule.onNodeWithText(collapseText(CollapseTiming.NextInput)).performClick()
-        rule.runOnIdle { assertEquals(CollapseTiming.NextInput, Pocket.prefs.collapseTiming) }
+        rule.onNodeWithText("工作步骤收起时机").performScrollTo().assertIsNotEnabled().performClick()
+        rule.runOnIdle { assertEquals(CollapseTiming.Completion, Pocket.prefs.collapseTiming) }
     }
 
     @Test fun openChoiceSheetDisablesOnDisconnectAndRecoversWithoutSubmitting() {
@@ -84,6 +88,15 @@ class OfflineSettingsTest {
         rule.runOnIdle { assertEquals(AppLanguage.Zh, Pocket.prefs.language) }
         rule.onNodeWithText(AppLanguage.En.label).performClick()
         rule.runOnIdle { assertEquals(AppLanguage.En, Pocket.prefs.language) }
+    }
+
+    @Test fun collapseTimingSheetDisablesOnDisconnectWithoutSubmitting() {
+        rule.setContent { PocketTheme { GeneralSettingsScreen {} } }
+        rule.onNodeWithText("工作步骤收起时机").performScrollTo().performClick()
+        rule.onNodeWithText(collapseText(CollapseTiming.NextInput)).assertIsEnabled()
+        disconnect()
+        rule.onNodeWithText(collapseText(CollapseTiming.NextInput)).assertIsNotEnabled().performClick()
+        rule.runOnIdle { assertEquals(CollapseTiming.Completion, Pocket.prefs.collapseTiming) }
     }
 
     @Test fun fontDraftSurvivesDisconnectWithoutBlurSavingAndRequiresExplicitCommit() {
