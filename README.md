@@ -234,6 +234,8 @@ npm run build:iroh
 
 Pushes to `main` force-update the `dsh-android-latest` prerelease (APKs plus the two `pocket-host` binaries). Pull requests run the same checks and do not publish that tag.
 
+Pushing a `v*` tag (for example `v0.1.0`) runs the same jobs and, when they pass, creates a non-prerelease GitHub Release titled `dsh-android vX.Y.Z`. The release uploads `dsh-android-vX.Y.Z.apk` (R8 release) plus the optional `pocket-host` binaries. The tag without the leading `v` must match `appVersionName` in `app/app/build.gradle.kts`. Do not push the version tag until that version bump is on `main`.
+
 Release signing Secrets, when all four are set: `ANDROID_KEYSTORE_B64`, `ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_ALIAS`, `ANDROID_KEY_PASSWORD`. The job writes a temporary keystore and deletes it afterwards. Do not commit keystore files.
 
 ## Repository layout

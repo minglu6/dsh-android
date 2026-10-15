@@ -1,6 +1,8 @@
 name: ci
 on:
-  push: { branches: [main] }
+  push:
+    branches: [main]
+    tags: ['v*']
   pull_request:
 
 env:
@@ -204,7 +206,7 @@ jobs:
           name: dsh-android-release
           path: app/app/build/outputs/apk/release/app-release.apk
       - uses: actions/download-artifact@v4
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
         with:
           name: pocket-host-darwin-arm64
           path: /tmp/host-prebuilts
@@ -226,6 +228,40 @@ jobs:
             /tmp/host-prebuilts/pocket-host-linux-x64 \
             /tmp/host-prebuilts/pocket-host-darwin-arm64 \
             --clobber
+      - name: publish versioned GitHub Release
+        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+        env: { GH_TOKEN: "${{ github.token }}" }
+        run: |
+          tag="${GITHUB_REF_NAME}"
+          case "$tag" in
+            v*) ;;
+            *) echo "Unexpected ref for versioned release: $tag" >&2; exit 1 ;;
+          esac
+          version="${tag#v}"
+          if [ -z "$version" ]; then
+            echo "Empty version from tag $tag" >&2
+            exit 1
+          fi
+          recorded="$(sed -n 's/^val appVersionName = "\(.*\)"$/\1/p' app/app/build.gradle.kts)"
+          if [ -z "$recorded" ] || [ "$(printf '%s\n' "$recorded" | wc -l)" -ne 1 ]; then
+            echo "Could not read a single appVersionName from app/app/build.gradle.kts" >&2
+            exit 1
+          fi
+          if [ "$recorded" != "$version" ]; then
+            echo "Tag $tag does not match appVersionName $recorded" >&2
+            exit 1
+          fi
+          apk="dsh-android-${tag}.apk"
+          cp app/app/build/outputs/apk/release/app-release.apk "$apk"
+          cp /tmp/host/pocket-host-linux-x64 /tmp/host-prebuilts/pocket-host-linux-x64
+          chmod 755 /tmp/host-prebuilts/*
+          notes="dsh-android ${tag} @ ${GITHUB_SHA}. Signed release APK (R8/minify). WS-only (Tailscale/LAN); no libpocket_iroh.so. Signing=${DSH_RELEASE_SIGNING}. Optional desktop sidecars: pocket-host-linux-x64, pocket-host-darwin-arm64 (config.iroh=true)."
+          gh release create "$tag" \
+            --title "dsh-android ${tag}" \
+            --notes "$notes" \
+            "$apk" \
+            /tmp/host-prebuilts/pocket-host-linux-x64 \
+            /tmp/host-prebuilts/pocket-host-darwin-arm64
 
   emulator:
     runs-on: ubuntu-latest

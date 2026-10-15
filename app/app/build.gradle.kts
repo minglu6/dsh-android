@@ -22,7 +22,9 @@ val releaseSigningConfigured = listOf(
     releaseKeyPassword,
 ).all { it.isPresent && it.get().isNotBlank() }
 
-val appVersionName = "0.1.0-m3"
+val appVersionName = "0.1.0"
+// Above the last rolling-latest GITHUB_RUN_NUMBER (206). Bump with each tagged release.
+val appVersionCode = 210
 
 android {
     namespace = "dev.dsh.pocket.app"
@@ -31,7 +33,7 @@ android {
         applicationId = "dev.dsh.pocket"
         minSdk = 26
         targetSdk = 35
-        versionCode = (System.getenv("GITHUB_RUN_NUMBER") ?: "1").toInt()
+        versionCode = appVersionCode
         versionName = appVersionName
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         buildConfigField("String", "APP_VERSION", "\"$appVersionName\"")
