@@ -1,7 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { zipSync, strToU8, unzipSync, strFromU8 } from 'fflate'
-import { commandOps, filesOps, jobsOps, exportOps, terminalOps } from '../src/extra-ops.js'
+import { commandOps, skillOps, filesOps, jobsOps, exportOps, terminalOps } from '../src/extra-ops.js'
 
 test('commands.execute prefixes slash and returns Host result', async () => {
   const calls = []
@@ -26,6 +26,33 @@ test('commands catalog is scoped to the requested live agent', () => {
   assert.equal(ops['commands.list']({ sessionId: 'minimal' }).commands.length, 0)
   assert.equal(ops['commands.list']({ sessionId: 'standard' }).commands[0].input.hint, 'text')
   assert.throws(() => ops['commands.list']({ sessionId: 'gone' }), /no live agent/)
+})
+
+test('skills.list forwards Host sessionSkillCatalog and returns { skills }', async () => {
+  const catalog = [
+    { name: 'commit-helper', description: 'Git commits', modelInvocable: true },
+    { name: 'manual-review', description: 'Ask a person', whenToUse: 'after a patch', modelInvocable: false },
+  ]
+  const calls = []
+  const ops = skillOps({
+    list: async (request, signal) => {
+      calls.push({ request, aborted: signal?.aborted })
+      if (request.sessionId === 'gone') {
+        throw Object.assign(new Error('session "gone" not found'), { code: 'session/not-found' })
+      }
+      return { skills: request.sessionId === 'empty' ? [] : catalog }
+    },
+  })
+  const signal = AbortSignal.timeout(1000)
+  assert.deepEqual(await ops['skills.list']({ sessionId: 's1' }, signal), { skills: catalog })
+  assert.deepEqual(calls[0].request, { sessionId: 's1' })
+  assert.equal(calls[0].aborted, false)
+  assert.deepEqual(await ops['skills.list']({ sessionId: 'empty' }, signal), { skills: [] })
+  await assert.rejects(() => ops['skills.list']({}), /sessionId required/)
+  await assert.rejects(
+    () => ops['skills.list']({ sessionId: 'gone' }, signal),
+    (err) => err.code === 'session/not-found',
+  )
 })
 
 test('files.list builds scope from session header cwd', async () => {
