@@ -69,6 +69,7 @@ Plugin surface: `dsh-plugin-pocket` WebSocket ops (+ optional Cordis injects).
 | Op | Host inject | Purpose |
 |---|---|---|
 | `commands.list` / `execute` | `commands` + `agents` | Agent-scoped dynamic command directory and official command execution |
+| `skills.list` | `sessionSkillCatalog` | Session-addressed user-invocable skill catalog (Host `skills/list`); `{ skills: [...] }` |
 | `session.export` | `sessionController.page` + fflate | ZIP bytes for phone share/save |
 | `files.list` / `files.read` | `workspaceFiles` + `sessions` | Right-panel files |
 | `jobs.list` / `jobs.follow` / `unfollow` / `jobs.kill` | `jobController` | Task rows, live output subscription with shared cancellation, and confirmed termination |

@@ -76,6 +76,20 @@ export function commandOps(commands, agents) {
 }
 
 /**
+ * User-invocable skill catalog for the `/` menu.
+ * Forwards Host `sessionSkillCatalog.list` — the same `skills/list` Remote
+ * desktop `ui-skill` calls — and returns that `{ skills: [...] }` value as-is.
+ */
+export function skillOps(sessionSkillCatalog) {
+  return {
+    'skills.list': async (a, signal) => {
+      if (!str(a.sessionId)) throw bad('sessionId required')
+      return sessionSkillCatalog.list({ sessionId: a.sessionId }, signal)
+    },
+  }
+}
+
+/**
  * Read-only workspace file browse for the phone right panel.
  * Scope is built from the live (or persisted) session header cwd.
  */

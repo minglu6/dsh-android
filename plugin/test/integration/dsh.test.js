@@ -66,6 +66,7 @@ test('real dsh: permissions + presets ops', { skip: !hasDsh, timeout: 240_000 },
   const c = await pocketClient(`ws://127.0.0.1:${port}`)
   const h = await c.ok('hello', { token: TOKEN })
   assert.ok(h.ops.includes('permissions.set') && h.ops.includes('presets.list'), h.ops.join())
+  assert.ok(h.ops.includes('skills.list'), h.ops.join())
   const cat = await c.ok('permissions.catalog')
   assert.ok(cat.options.length > 0)
   for (const option of cat.options) {
@@ -76,6 +77,14 @@ test('real dsh: permissions + presets ops', { skip: !hasDsh, timeout: 240_000 },
   assert.ok(cat.defaultOptions.some((option) => option.value === cat.defaultPreset))
   assert.ok(cat.defaultOptions.every((option) => option.value !== 'auto' && option.value !== 'custom'))
   const { sessionId } = await c.ok('sessions.create', {})
+  const skills = await c.ok('skills.list', { sessionId })
+  assert.ok(Array.isArray(skills.skills), JSON.stringify(skills))
+  for (const skill of skills.skills) {
+    assert.equal(typeof skill.name, 'string')
+    assert.ok(skill.name.length > 0)
+    if ('description' in skill) assert.equal(typeof skill.description, 'string')
+    if ('modelInvocable' in skill) assert.equal(typeof skill.modelInvocable, 'boolean')
+  }
   const other = cat.defaultOptions.find((option) => option.value !== cat.defaultPreset)?.value ?? cat.defaultPreset
   const set = await c.ok('permissions.set', { sessionId, name: other })
   assert.equal(set.current, other)

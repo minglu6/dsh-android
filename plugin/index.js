@@ -11,7 +11,7 @@ import { TaskEventHub, watchTaskCompletions } from './src/task-events.js'
 import { TaskFallbackTracker } from './src/task-fallback.js'
 import { loadOrCreateToken } from './src/token.js'
 import { zipSync, strToU8 } from 'fflate'
-import { permissionOps, presetOps, commandOps, filesOps, jobsOps, exportOps, terminalOps } from './src/extra-ops.js'
+import { permissionOps, presetOps, commandOps, skillOps, filesOps, jobsOps, exportOps, terminalOps } from './src/extra-ops.js'
 import {
   searchOps, workspaceOps, feedbackOps, fileReferenceOps, sessionReferenceOps,
   attachmentOps, workspaceChangesOps, uploadOps, userQuestionOps, directoryOps, goalOps,
@@ -179,6 +179,7 @@ export function apply(ctx, config = {}) {
     })
   })
   ctx.inject(['commands', 'agents'], (c) => { c.effect(() => server.registerOps(commandOps(c.commands, c.agents))) })
+  ctx.inject(['sessionSkillCatalog'], (c) => { c.effect(() => server.registerOps(skillOps(c.sessionSkillCatalog))) })
   ctx.inject(['workspaceFiles', 'sessions'], (c) => {
     c.effect(() => server.registerOps(filesOps(c.workspaceFiles, c.sessions, c.get?.('sandboxPolicy'))))
   })
