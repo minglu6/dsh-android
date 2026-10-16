@@ -178,8 +178,26 @@ export function apply(ctx, config = {}) {
       }))
     })
   })
-  ctx.inject(['commands', 'agents'], (c) => { c.effect(() => server.registerOps(commandOps(c.commands, c.agents))) })
-  ctx.inject(['sessionSkillCatalog'], (c) => { c.effect(() => server.registerOps(skillOps(c.sessionSkillCatalog))) })
+  ctx.inject(['commands', 'agents'], (c) => {
+    c.effect(() => server.registerOps(commandOps(c.commands, c.agents, c.get?.('agentPresets'))))
+    c.inject(['agentPresets'], (p) => {
+      p.effect(() => server.registerOps(commandOps(p.commands, p.agents, p.agentPresets)))
+    })
+  })
+  ctx.inject(['sessionSkillCatalog'], (c) => {
+    c.effect(() => server.registerOps(skillOps(c.sessionSkillCatalog, {
+      skills: c.get?.('skills'),
+      workingDirectory: c.get?.('workingDirectory'),
+      agentPresets: c.get?.('agentPresets'),
+    })))
+    c.inject(['skills', 'workingDirectory', 'agentPresets'], (full) => {
+      full.effect(() => server.registerOps(skillOps(full.sessionSkillCatalog, {
+        skills: full.skills,
+        workingDirectory: full.workingDirectory,
+        agentPresets: full.agentPresets,
+      })))
+    })
+  })
   ctx.inject(['workspaceFiles', 'sessions'], (c) => {
     c.effect(() => server.registerOps(filesOps(c.workspaceFiles, c.sessions, c.get?.('sandboxPolicy'))))
   })

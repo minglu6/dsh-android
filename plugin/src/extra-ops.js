@@ -57,12 +57,81 @@ export function presetOps(agentPresets, settingsController) {
 }
 
 /**
+ * Standing scope of the default agent preset — the same key desktop uses to
+ * read a new-conversation catalog before a Session exists.
+ * Prefer `acquireScope()` (SessionSkillCatalog's Host lease); `standingKeyFor()`
+ * is the same preset package's older name for that key.
+ */
+async function defaultProfileScope(agentPresets) {
+  if (typeof agentPresets?.acquireScope === 'function') return agentPresets.acquireScope()
+  if (typeof agentPresets?.standingKeyFor === 'function') {
+    return { key: await agentPresets.standingKeyFor() }
+  }
+  throw Object.assign(new Error('default agent profile is unavailable'), { code: 'unavailable' })
+}
+
+async function withDefaultProfileScope(agentPresets, fn) {
+  const lease = await defaultProfileScope(agentPresets)
+  try {
+    return await fn(lease.key)
+  } finally {
+    await lease?.[Symbol.asyncDispose]?.()
+  }
+}
+
+/**
+ * Map a Host `SkillSummary` to the pocket `skills.list` entry SessionSkillCatalog
+ * returns. Invocation policy is required; user-only filtering matches desktop.
+ */
+function userInvocableSkillEntry(skill) {
+  const invocation = skill?.invocation
+  if (!invocation || typeof invocation.userInvocable !== 'boolean'
+    || typeof invocation.modelInvocable !== 'boolean') {
+    throw Object.assign(new Error('skill catalog entry is missing invocation policy'), { code: 'internal' })
+  }
+  if (!invocation.userInvocable) return undefined
+  if (!str(skill.name)) throw Object.assign(new Error('skill catalog entry is missing name'), { code: 'internal' })
+  if (typeof skill.description !== 'string') {
+    throw Object.assign(new Error('skill catalog entry is missing description'), { code: 'internal' })
+  }
+  return {
+    name: skill.name,
+    ...skill.path === undefined ? {} : { path: skill.path },
+    description: skill.description,
+    ...skill.whenToUse === undefined ? {} : { whenToUse: skill.whenToUse },
+    modelInvocable: invocation.modelInvocable,
+  }
+}
+
+/** New-conversation skill catalog: default workspace cwd + default preset scope. */
+async function listDefaultSkills({ skills, workingDirectory, agentPresets }, signal) {
+  const cwd = workingDirectory?.defaultDirectory
+  if (!str(cwd)) throw Object.assign(new Error('default workspace is unavailable'), { code: 'unavailable' })
+  if (typeof skills?.list !== 'function') {
+    throw Object.assign(new Error('skill registry is absent'), { code: 'unavailable' })
+  }
+  return withDefaultProfileScope(agentPresets, async (scope) => {
+    const listed = await skills.list({ cwd, scope, ...(signal === undefined ? {} : { signal }) })
+    if (!Array.isArray(listed)) {
+      throw Object.assign(new Error('skill registry list did not return an array'), { code: 'internal' })
+    }
+    return { skills: listed.map(userInvocableSkillEntry).filter((entry) => entry !== undefined) }
+  })
+}
+
+/**
  * Slash commands (`/compact`, `/plan`, `/goal …`, `/feedback …`) via Host commands service.
  * Line may be with or without a leading `/`.
+ *
+ * `commands.list` without `sessionId` uses the default preset standing scope —
+ * the same composition desktop shows on a new conversation.
  */
-export function commandOps(commands, agents) {
+export function commandOps(commands, agents, agentPresets) {
   return {
-    'commands.list': (a) => ({ commands: commands.list(agentOf(agents, a.sessionId)) }),
+    'commands.list': async (a) => {
+      if (str(a.sessionId)) return { commands: commands.list(agentOf(agents, a.sessionId)) }
+      return { commands: await withDefaultProfileScope(agentPresets, (scope) => commands.list(scope)) }
+    },
     'commands.execute': async (a, signal) => {
       if (!str(a.sessionId) || !str(a.line)) throw bad('sessionId and line required')
       const agent = agents.get(a.sessionId)
@@ -77,14 +146,16 @@ export function commandOps(commands, agents) {
 
 /**
  * User-invocable skill catalog for the `/` menu.
- * Forwards Host `sessionSkillCatalog.list` — the same `skills/list` Remote
- * desktop `ui-skill` calls — and returns that `{ skills: [...] }` value as-is.
+ * With `sessionId`, forwards Host `sessionSkillCatalog.list` — the same
+ * `skills/list` Remote desktop `ui-skill` calls — as `{ skills: [...] }`.
+ * Without `sessionId`, lists through the Host skill registry with the default
+ * workspace cwd and default preset standing scope (desktop new conversation).
  */
-export function skillOps(sessionSkillCatalog) {
+export function skillOps(sessionSkillCatalog, host = {}) {
   return {
     'skills.list': async (a, signal) => {
-      if (!str(a.sessionId)) throw bad('sessionId required')
-      return sessionSkillCatalog.list({ sessionId: a.sessionId }, signal)
+      if (str(a.sessionId)) return sessionSkillCatalog.list({ sessionId: a.sessionId }, signal)
+      return listDefaultSkills(host, signal)
     },
   }
 }
