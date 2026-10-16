@@ -17,15 +17,62 @@ test('commands.execute prefixes slash and returns Host result', async () => {
   await assert.rejects(() => ops['commands.execute']({ sessionId: 'missing', line: '/plan' }), /no live agent/)
 })
 
-test('commands catalog is scoped to the requested live agent', () => {
+test('commands catalog is scoped to the requested live agent', async () => {
   const ops = commandOps({
     list: (agent) => agent.id === 'standard'
       ? [{ name: 'goal', definitionId: '@deepseek-ai/dsh-command-goal', description: 'Objective', input: { hint: 'text' } }]
       : [],
   }, { get: (id) => ['standard', 'minimal'].includes(id) ? { id } : undefined })
-  assert.equal(ops['commands.list']({ sessionId: 'minimal' }).commands.length, 0)
-  assert.equal(ops['commands.list']({ sessionId: 'standard' }).commands[0].input.hint, 'text')
-  assert.throws(() => ops['commands.list']({ sessionId: 'gone' }), /no live agent/)
+  assert.equal((await ops['commands.list']({ sessionId: 'minimal' })).commands.length, 0)
+  assert.equal((await ops['commands.list']({ sessionId: 'standard' })).commands[0].input.hint, 'text')
+  await assert.rejects(() => ops['commands.list']({ sessionId: 'gone' }), /no live agent/)
+})
+
+test('commands.list without sessionId uses the default preset standing scope', async () => {
+  const listed = []
+  const released = []
+  const catalog = [{ name: 'compact', description: 'Compact' }]
+  const ops = commandOps({
+    list: (scope) => {
+      listed.push(scope)
+      return catalog
+    },
+  }, { get: () => undefined }, {
+    acquireScope: async (id) => {
+      assert.equal(id, undefined)
+      return {
+        key: { agentPreset: 'standard' },
+        async [Symbol.asyncDispose]() { released.push('acquireScope') },
+      }
+    },
+  })
+  assert.deepEqual(await ops['commands.list']({}), { commands: catalog })
+  assert.deepEqual(listed, [{ agentPreset: 'standard' }])
+  assert.deepEqual(released, ['acquireScope'])
+})
+
+test('commands.list without sessionId keeps a given sessionId on the live-agent path', async () => {
+  const listed = []
+  const ops = commandOps({
+    list: (agent) => {
+      listed.push(agent)
+      return [{ name: 'plan', description: 'Plan' }]
+    },
+  }, { get: (id) => id === 's1' ? { id: 's1' } : undefined }, {
+    acquireScope: async () => {
+      throw new Error('default profile must not be used when sessionId is given')
+    },
+  })
+  assert.equal((await ops['commands.list']({ sessionId: 's1' })).commands[0].name, 'plan')
+  assert.deepEqual(listed, [{ id: 's1' }])
+})
+
+test('commands.list without sessionId throws when the default profile cannot be resolved', async () => {
+  const ops = commandOps({ list: () => [] }, { get: () => undefined })
+  await assert.rejects(
+    () => ops['commands.list']({}),
+    (err) => err.code === 'unavailable' && /default agent profile/.test(err.message),
+  )
 })
 
 test('skills.list forwards Host sessionSkillCatalog and returns { skills }', async () => {
@@ -42,16 +89,96 @@ test('skills.list forwards Host sessionSkillCatalog and returns { skills }', asy
       }
       return { skills: request.sessionId === 'empty' ? [] : catalog }
     },
+  }, {
+    skills: { list: async () => { throw new Error('default catalog must not be used when sessionId is given') } },
+    workingDirectory: { defaultDirectory: '/unused' },
+    agentPresets: { acquireScope: async () => { throw new Error('default profile must not be used when sessionId is given') } },
   })
   const signal = AbortSignal.timeout(1000)
   assert.deepEqual(await ops['skills.list']({ sessionId: 's1' }, signal), { skills: catalog })
   assert.deepEqual(calls[0].request, { sessionId: 's1' })
   assert.equal(calls[0].aborted, false)
   assert.deepEqual(await ops['skills.list']({ sessionId: 'empty' }, signal), { skills: [] })
-  await assert.rejects(() => ops['skills.list']({}), /sessionId required/)
   await assert.rejects(
     () => ops['skills.list']({ sessionId: 'gone' }, signal),
     (err) => err.code === 'session/not-found',
+  )
+})
+
+test('skills.list without sessionId uses default workspace cwd and default preset scope', async () => {
+  const signal = AbortSignal.timeout(1000)
+  const listed = []
+  const released = []
+  const ops = skillOps({
+    list: async () => { throw new Error('sessionSkillCatalog must not be used without sessionId') },
+  }, {
+    workingDirectory: { defaultDirectory: '/default/ws' },
+    agentPresets: {
+      acquireScope: async (id) => {
+        assert.equal(id, undefined)
+        return {
+          key: { agentPreset: 'standard' },
+          async [Symbol.asyncDispose]() { released.push('acquireScope') },
+        }
+      },
+    },
+    skills: {
+      list: async (options) => {
+        listed.push(options)
+        return [
+          {
+            name: 'commit-helper', description: 'Git commits', path: '/skills/commit.md',
+            whenToUse: 'after edits', invocation: { modelInvocable: true, userInvocable: true },
+          },
+          {
+            name: 'hidden', description: 'model only',
+            invocation: { modelInvocable: true, userInvocable: false },
+          },
+        ]
+      },
+    },
+  })
+  assert.deepEqual(await ops['skills.list']({}, signal), {
+    skills: [{
+      name: 'commit-helper', path: '/skills/commit.md', description: 'Git commits',
+      whenToUse: 'after edits', modelInvocable: true,
+    }],
+  })
+  assert.equal(listed.length, 1)
+  assert.equal(listed[0].cwd, '/default/ws')
+  assert.deepEqual(listed[0].scope, { agentPreset: 'standard' })
+  assert.equal(listed[0].signal, signal)
+  assert.deepEqual(released, ['acquireScope'])
+})
+
+test('commands.list without sessionId accepts standingKeyFor when acquireScope is absent', async () => {
+  const listed = []
+  const ops = commandOps({
+    list: (scope) => {
+      listed.push(scope)
+      return [{ name: 'goal', description: 'Goal' }]
+    },
+  }, { get: () => undefined }, {
+    standingKeyFor: async (id) => {
+      assert.equal(id, undefined)
+      return { agentPreset: 'standard' }
+    },
+  })
+  assert.equal((await ops['commands.list']({})).commands[0].name, 'goal')
+  assert.deepEqual(listed, [{ agentPreset: 'standard' }])
+})
+
+test('skills.list without sessionId throws when the default workspace is missing', async () => {
+  const ops = skillOps({
+    list: async () => { throw new Error('sessionSkillCatalog must not be used without sessionId') },
+  }, {
+    workingDirectory: {},
+    agentPresets: { acquireScope: async () => ({ key: { agentPreset: 'standard' } }) },
+    skills: { list: async () => [] },
+  })
+  await assert.rejects(
+    () => ops['skills.list']({}),
+    (err) => err.code === 'unavailable' && /default workspace/.test(err.message),
   )
 })
 
