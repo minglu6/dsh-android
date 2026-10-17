@@ -304,27 +304,74 @@ test('job output subscription forwards retained offsets and cancels its source o
   assert.equal(pushed.some((frame) => frame.ev === 'job.end'), false)
 })
 
-test('terminal.create/write/follow pumps frames then unfollow aborts', async () => {
-  const frames = [
-    { type: 'snapshot', sequence: 1, screen: '$ ', info: { id: 'term1', state: 'running' } },
-    { type: 'output', sequence: 2, data: 'hi\n' },
-  ]
-  const wrote = []
-  const ops = terminalOps({
+function waitAbort(signal) {
+  return new Promise((resolve) => {
+    if (signal.aborted) resolve()
+    else signal.addEventListener('abort', resolve, { once: true })
+  })
+}
+
+/** Desktop TerminalController surface: retain + attach, no follow/write/resize. */
+function desktopTerminalController({ frames = [], onInput } = {}) {
+  const retained = []
+  const attached = []
+  const controller = {
+    ctx: {},
     list: () => [{ id: 'term1', state: 'running' }],
     create: async (_agent, req) => ({ id: req.id, state: 'running', cols: req.cols, rows: req.rows }),
-    write: async (_a, id, att, data) => { wrote.push({ id, att, data }) },
-    resize: async () => {},
     close: async () => {},
-    follow: async function* (_agent, id, attachmentId, signal) {
-      for (const f of frames) {
-        if (signal.aborted) return
-        yield f
-        await new Promise((r) => setTimeout(r, 5))
-      }
-      await new Promise((r) => signal.addEventListener('abort', r))
+    follow() { throw new Error('desktop TerminalController has no follow()') },
+    write() { throw new Error('desktop TerminalController has no write()') },
+    resize() { throw new Error('desktop TerminalController has no resize()') },
+    retain: async function* (sessionId, id, signal) {
+      retained.push({ sessionId, id })
+      yield { type: 'retained' }
+      await waitAbort(signal)
     },
-  }, { get: (id) => id === 's1' ? { session: {} } : undefined })
+    attach(agent, id, signal) {
+      const uplink = controller.ctx.invocation?.uplink()
+      if (uplink === undefined) throw new Error('Terminal attachment requires a Remote invocation')
+      attached.push({ agent, id })
+      const input = uplink[Symbol.asyncIterator]()
+      return (async function* () {
+        for (const frame of frames) {
+          signal.throwIfAborted()
+          yield frame
+        }
+        try {
+          while (!signal.aborted) {
+            const next = await Promise.race([
+              input.next(),
+              waitAbort(signal).then(() => ({ done: true })),
+            ])
+            if (next.done === true) break
+            const command = next.value
+            onInput?.(command)
+            yield { type: 'ack', sequence: command.sequence }
+            if (command.type === 'write') {
+              yield { type: 'output', sequence: command.sequence + 100, data: command.data }
+            }
+          }
+        } finally {
+          await input.return?.()
+        }
+      })()
+    },
+  }
+  return { controller, retained, attached }
+}
+
+test('terminal.create/write/follow pumps frames then unfollow aborts', async () => {
+  const frames = [
+    { type: 'snapshot', sequence: 1, screen: '$ ', info: { id: 'term1', state: 'running' }, writable: true },
+    { type: 'output', sequence: 2, data: 'hi\n' },
+  ]
+  const inputs = []
+  const { controller, retained, attached } = desktopTerminalController({
+    frames,
+    onInput: (command) => inputs.push(command),
+  })
+  const ops = terminalOps(controller, { get: (id) => id === 's1' ? { session: {} } : undefined })
 
   assert.equal((await ops['terminal.list']({ sessionId: 's1' })).terminals[0].id, 'term1')
   assert.equal((await ops['terminal.list']({ sessionId: 's1' })).platform, process.platform)
@@ -342,13 +389,46 @@ test('terminal.create/write/follow pumps frames then unfollow aborts', async () 
   assert.ok(sub.subId.startsWith('t'))
   assert.ok(sub.attachmentId)
   await new Promise((r) => setTimeout(r, 40))
+  assert.deepEqual(retained, [{ sessionId: 's1', id: created.terminal.id }])
+  assert.equal(attached.length, 1)
+  assert.equal(attached[0].id, created.terminal.id)
   assert.ok(pushed.some((m) => m.ev === 'terminal' && m.frame?.type === 'snapshot'))
   assert.ok(pushed.some((m) => m.ev === 'terminal' && m.frame?.type === 'output'))
+  assert.equal(pushed.some((m) => m.frame?.type === 'ack'), false)
 
   await ops['terminal.write']({ sessionId: 's1', id: created.terminal.id, attachmentId: sub.attachmentId, data: 'ls\r' })
-  assert.equal(wrote[0].data, 'ls\r')
+  assert.deepEqual(inputs[0], { type: 'write', sequence: 1, data: 'ls\r' })
+  await new Promise((r) => setTimeout(r, 20))
+  assert.ok(pushed.some((m) => m.ev === 'terminal' && m.frame?.type === 'output' && m.frame.data === 'ls\r'))
+
+  await ops['terminal.resize']({ sessionId: 's1', id: created.terminal.id, attachmentId: sub.attachmentId, cols: 40, rows: 12 })
+  assert.deepEqual(inputs[1], { type: 'resize', sequence: 2, cols: 40, rows: 12 })
 
   client.subs.get(sub.subId).abort()
+  await new Promise((r) => setTimeout(r, 20))
+  assert.equal(client.subs.has(sub.subId), false)
+})
+
+test('terminal.follow uses attach/retain and never calls Host follow()', async () => {
+  const { controller, retained, attached } = desktopTerminalController({
+    frames: [{ type: 'snapshot', sequence: 1, screen: '', info: { id: 'term1', state: 'running' }, writable: true }],
+  })
+  const ops = terminalOps(controller, { get: (id) => id === 's1' ? { session: {} } : undefined })
+  const client = { nextSub: 1, subs: new Map(), push: () => {} }
+  const sub = await ops['terminal.follow']({ sessionId: 's1', id: 'term1' }, null, client)
+  await new Promise((r) => setTimeout(r, 20))
+  assert.deepEqual(retained, [{ sessionId: 's1', id: 'term1' }])
+  assert.equal(attached.length, 1)
+  client.subs.get(sub.subId).abort()
+})
+
+test('terminal.write without an attach throws instead of calling Host write()', async () => {
+  const { controller } = desktopTerminalController()
+  const ops = terminalOps(controller, { get: (id) => id === 's1' ? { session: {} } : undefined })
+  await assert.rejects(
+    () => ops['terminal.write']({ sessionId: 's1', id: 'term1', attachmentId: 'missing', data: 'x' }),
+    (err) => err.code === 'terminal/unavailable' && /not attached/.test(err.message),
+  )
 })
 
 test('terminal roster keeps owner scope and retained metadata without requiring a live agent', () => {
