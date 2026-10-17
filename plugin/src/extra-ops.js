@@ -246,14 +246,132 @@ export function filesOps(workspaceFiles, sessions, sandboxPolicy) {
 }
 
 /**
+ * In-process Client→Host uplink for `TerminalController.attach`.
+ * Desktop attach is a duplex RemoteStream: Host reads `ctx.invocation.uplink()`.
+ */
+function createTerminalUplink() {
+  const pending = []
+  let notify
+  let closed = false
+  const wake = () => {
+    const resolve = notify
+    notify = undefined
+    resolve?.()
+  }
+  const iterator = {
+    async next() {
+      while (!closed && pending.length === 0) {
+        await new Promise((resolve) => { notify = resolve })
+      }
+      if (pending.length > 0) return { done: false, value: pending.shift() }
+      return { done: true, value: undefined }
+    },
+    async return() {
+      closed = true
+      wake()
+      return { done: true, value: undefined }
+    },
+    [Symbol.asyncIterator]() { return this },
+  }
+  return {
+    [Symbol.asyncIterator]() { return iterator },
+    push(item) {
+      if (closed) {
+        throw Object.assign(new Error('terminal attachment is closed'), { code: 'terminal/unavailable' })
+      }
+      pending.push(item)
+      wake()
+    },
+    close() {
+      closed = true
+      wake()
+    },
+  }
+}
+
+/** Bind the in-process uplink the same way Typert Gateway binds `ctx.invocation`. */
+function attachWithUplink(controller, agent, id, signal, uplink) {
+  const ctx = controller.ctx
+  if (ctx === undefined) {
+    throw Object.assign(new Error('terminalController.ctx is required for attach'), { code: 'internal' })
+  }
+  const previous = ctx.invocation
+  ctx.invocation = { uplink: () => uplink, uplinkWindow: undefined }
+  try {
+    return controller.attach(agent, id, signal)
+  } finally {
+    ctx.invocation = previous
+  }
+}
+
+/**
+ * Desktop window hold: `retain(sessionId, id, signal)` yields `{type:'retained'}`
+ * then stays open until cancellation. Attach waits for that acknowledgement.
+ */
+function startRetain(controller, sessionId, id, signal) {
+  const ready = Promise.withResolvers()
+  const done = (async () => {
+    try {
+      let acknowledged = false
+      for await (const frame of controller.retain(sessionId, id, signal)) {
+        if (frame?.type !== 'retained') {
+          throw Object.assign(new Error('terminal retain yielded an unexpected frame'), { code: 'internal' })
+        }
+        if (!acknowledged) {
+          acknowledged = true
+          ready.resolve()
+        }
+      }
+      if (!acknowledged) {
+        throw Object.assign(new Error('terminal retain ended without acknowledgement'), { code: 'terminal/unavailable' })
+      }
+    } catch (error) {
+      ready.reject(error)
+      throw error
+    }
+  })()
+  return { ready: ready.promise, done }
+}
+
+function sendTerminalInput(attachment, command) {
+  const sequence = ++attachment.nextSeq
+  const done = Promise.withResolvers()
+  attachment.acks.set(sequence, done)
+  try {
+    attachment.send({ ...command, sequence })
+  } catch (error) {
+    attachment.acks.delete(sequence)
+    throw error
+  }
+  return done.promise
+}
+
+function failAttachment(attachment, error) {
+  attachment.ready.reject(error)
+  for (const waiter of attachment.acks.values()) waiter.reject(error)
+  attachment.acks.clear()
+}
+
+/**
  * Host shell on the desktop machine (`terminalController`). Remote PTY is useful
  * on the phone; only local-app/editor launchers stay hidden.
  *
- * `terminal.follow` starts a background pump and returns `{subId, attachmentId}`
- * immediately; frames arrive as `{ev:"terminal", subId, frame}`. Cancel with
- * the existing `unfollow {subId}` (shared abort map on the WS client).
+ * Desktop `TerminalController` (0.2.1-alpha.5+) exposes `retain` / `attach`, not
+ * `follow` / `write` / `resize`. Pocket `terminal.follow` still returns
+ * `{subId, attachmentId}` immediately; frames arrive as `{ev:"terminal"}`.
+ * Write/resize ride the attach uplink as sequenced `{type:'write'|'resize'}`.
+ * Cancel with the existing `unfollow {subId}` (shared abort map on the WS client).
  */
 export function terminalOps(terminalController, agents) {
+  const attachments = new Map()
+  const requireAttachment = (a) => {
+    if (!str(a.id) || !str(a.attachmentId)) throw bad('sessionId, id, attachmentId required')
+    const attachment = attachments.get(a.attachmentId)
+    if (attachment === undefined || attachment.sessionId !== a.sessionId || attachment.id !== a.id) {
+      throw Object.assign(new Error('terminal attachment is not attached'), { code: 'terminal/unavailable' })
+    }
+    return attachment
+  }
   return {
     'terminal.list': (a) => {
       if (!str(a.sessionId)) throw bad('sessionId required')
@@ -271,19 +389,20 @@ export function terminalOps(terminalController, agents) {
       return { terminal: info, platform: process.platform }
     },
     'terminal.write': async (a) => {
-      const agent = agentOf(agents, a.sessionId)
-      if (!str(a.id) || !str(a.attachmentId) || typeof a.data !== 'string') {
-        throw bad('sessionId, id, attachmentId, data required')
-      }
-      await terminalController.write(agent, a.id, a.attachmentId, a.data)
+      agentOf(agents, a.sessionId)
+      if (typeof a.data !== 'string') throw bad('sessionId, id, attachmentId, data required')
+      const attachment = requireAttachment(a)
+      await attachment.ready.promise
+      await sendTerminalInput(attachment, { type: 'write', data: a.data })
       return { accepted: true }
     },
     'terminal.resize': async (a) => {
-      const agent = agentOf(agents, a.sessionId)
-      if (!str(a.id) || !str(a.attachmentId)) throw bad('sessionId, id, attachmentId required')
+      agentOf(agents, a.sessionId)
+      const attachment = requireAttachment(a)
       const cols = Number.isSafeInteger(a.cols) ? a.cols : 80
       const rows = Number.isSafeInteger(a.rows) ? a.rows : 24
-      await terminalController.resize(agent, a.id, a.attachmentId, cols, rows)
+      await attachment.ready.promise
+      await sendTerminalInput(attachment, { type: 'resize', cols, rows })
       return { accepted: true }
     },
     'terminal.close': async (a) => {
@@ -301,15 +420,48 @@ export function terminalOps(terminalController, agents) {
       const attachmentId = str(a.attachmentId) ? a.attachmentId : randomUUID().replace(/-/g, '').slice(0, 16)
       const subId = `t${client.nextSub++}`
       const ac = new AbortController()
+      const uplink = createTerminalUplink()
+      const attachment = {
+        sessionId: a.sessionId,
+        id: a.id,
+        nextSeq: 0,
+        acks: new Map(),
+        send: (item) => uplink.push(item),
+        ready: Promise.withResolvers(),
+      }
+      attachment.ready.promise.catch(() => {})
+      attachments.set(attachmentId, attachment)
       client.subs.set(subId, ac)
+      const hold = startRetain(terminalController, a.sessionId, a.id, ac.signal)
       void (async () => {
         try {
-          for await (const frame of terminalController.follow(agent, a.id, attachmentId, ac.signal)) {
+          await hold.ready
+          ac.signal.throwIfAborted()
+          const stream = attachWithUplink(terminalController, agent, a.id, ac.signal, uplink)
+          attachment.ready.resolve()
+          for await (const frame of stream) {
             if (ac.signal.aborted) break
+            if (frame?.type === 'ack') {
+              const waiter = attachment.acks.get(frame.sequence)
+              if (waiter === undefined) {
+                throw Object.assign(new Error('terminal input acknowledgement is out of order'), { code: 'internal' })
+              }
+              attachment.acks.delete(frame.sequence)
+              if (frame.refusal !== undefined) {
+                waiter.reject(Object.assign(new Error(`terminal input refused: ${frame.refusal}`), {
+                  code: 'terminal/control-unavailable',
+                  details: { reason: frame.refusal },
+                }))
+              } else {
+                waiter.resolve()
+              }
+              continue
+            }
             client.push({ ev: 'terminal', subId, frame })
           }
           if (!ac.signal.aborted) client.push({ ev: 'terminal.end', subId })
         } catch (error) {
+          failAttachment(attachment, error)
           if (!ac.signal.aborted) {
             client.push({
               ev: 'terminal.error', subId,
@@ -317,7 +469,12 @@ export function terminalOps(terminalController, agents) {
             })
           }
         } finally {
+          ac.abort()
+          uplink.close()
+          failAttachment(attachment, Object.assign(new Error('terminal attachment is closed'), { code: 'terminal/unavailable' }))
+          attachments.delete(attachmentId)
           client.subs.delete(subId)
+          await hold.done.catch(() => {})
         }
       })()
       return { subId, attachmentId }
