@@ -142,6 +142,8 @@ WebSocket 管理操作要求 owner 身份。管理 UI 通过受本机信任边�
 
 - `follow` 支持 `afterSeq`，断线重连携带上次 cursor 续订，Host 按序补帧。手机的排队消息以 Host 收件箱为准；`queue` 等待后续轮次，`steer` 引导当前轮次，详见 [发送语义](../app/README.md#排队与插话)。
 - Host 发起 `approval/request` 时向在线设备推送 `approval`。`approval.answer` 接受 `allowed-once` 或 `rejected`，手机与网页谁先答谁生效；另一端收到关闭／取消通知。工具取消对应 `cancelled`，新连接补发待审批项，也可用 `approval.pending` 查询。
+- `user-questions/request` 同时保留手机与桌面的应答通道；`user-question` 推送与重连重放使用 `sessionId` + `questionId/callId` 标识。`userQuestions.answer` 提交完整 `answers` 批次，每题恰好一项；同一实时请求只接受一次，另一端结算、取消或超时会推送带 `sessionId` 的 `user-question.closed`。
+- 提问状态与已排队回复分别由 `userQuestions`、`inbox` 投影同步。已继续的问题通过官方 `userQuestions.answer` 提交，必要时由 `sessionController.resolveAgent` 恢复会话；不伪造普通聊天消息。手机连接对限时等待使用官方 `attachWait` 剩余时长，断线释放接手，不将限时问题无限挂起。
 - 用量与权限来自 `sessionStats`、`tokenUsage`、`contextPressure`、`contextBreakdown`、`permissions` 等 Host 投影，仅推送给已认证且订阅该会话的客户端。
 - 首个 snapshot/resume 前的投影变更按 key 暂存，先发基线再发较新投影。**投影 `seq` 是投影水位，不用于推进历史 cursor。**
 - `permissions.catalog` 返回 `options/defaultOptions/defaultPreset`；自动审查只在 Host 注册 `auto` 时可选，且不能作为默认权限。`permissions.get/set` 保持 `{current:"…"}` 格式，目录变更通过 `permission-presets/catalog-changed` 通知客户端重新读取。

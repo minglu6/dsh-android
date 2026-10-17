@@ -130,7 +130,6 @@ export function apply(ctx, config = {}) {
   })
   // prepend: run outside the web UI forwarder so we can race it.
   ctx.on('approval/request', createApprovalHook(server, { log }), { prepend: true })
-  ctx.on('user-questions/request', createUserQuestionHook(server, { log }), { prepend: true })
 
   /** Optional legacy desktop iroh sidecar — off unless config.iroh === true. Not on the phone path. */
   let iroh = null
@@ -270,9 +269,10 @@ export function apply(ctx, config = {}) {
   ctx.inject(['fileUploads', 'agents'], (c) => {
     c.effect(() => server.registerOps(uploadOps(c.fileUploads, c.agents)))
   })
-  ctx.inject(['userQuestions', 'agents'], (c) => {
-    c.effect(() => server.registerOps(userQuestionOps(c.userQuestions, c.agents, {
-      settleOffer: (callId, answer) => server.settleUserQuestion(callId, answer),
+  ctx.inject(['userQuestions', 'sessionController'], (c) => {
+    c.on('user-questions/request', createUserQuestionHook(server, { userQuestions: c.userQuestions }), { prepend: true })
+    c.effect(() => server.registerOps(userQuestionOps(c.userQuestions, c.sessionController, {
+      settleOffer: (sessionId, callId, answer, deviceId) => server.settleUserQuestion(sessionId, callId, answer, deviceId),
     })))
   })
   // Desktop settings surfaces (models providers / plugins / schedules).

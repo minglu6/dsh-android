@@ -216,14 +216,17 @@ export function createPocketServer(opts) {
   const clients = new Set()
   /** approvalId -> { payload, settle(outcome) } */
   const approvals = new Map()
-  /** callId (or synthetic id) -> { payload, settle(answer), close } */
+  /** [sessionId, callId (or synthetic id)] -> live mobile offer. */
   const userQuestions = new Map()
+  const devicePresenceListeners = new Set()
+  const notifyDevicePresence = () => { for (const listener of devicePresenceListeners) listener() }
+  const questionKey = (sessionId, callId) => JSON.stringify([sessionId, callId])
   /** Session ids explicitly marked as delegated subagents; a fork is still a root. */
   const childSessions = new Set()
   const authedClients = () => [...clients].filter((c) => c.device)
   const broadcast = (m) => { for (const c of authedClients()) c.push(m) }
   const unsubscribeCompletion = completion.subscribe((snapshot) => broadcast({ ev: 'completion', ...snapshot }))
-  const projectionKeys = new Set(['sessionStats', 'tokenUsage', 'contextPressure', 'contextBreakdown', 'permissions', 'modelSelection', 'agentPreset', 'goal', 'plan'])
+  const projectionKeys = new Set(['sessionStats', 'tokenUsage', 'contextPressure', 'contextBreakdown', 'permissions', 'modelSelection', 'agentPreset', 'goal', 'plan', 'userQuestions', 'inbox'])
   // Follow's snapshot is the baseline. Hold newer projections until it is sent,
   // including while a reconnect snapshot is paged or trimmed for the wire.
   const followProjections = new WeakMap()
@@ -315,6 +318,7 @@ export function createPocketServer(opts) {
       hostUi?.revoke(client)
       completion.disconnect(client)
       for (const ac of client.subs.values()) ac.abort()
+      notifyDevicePresence()
     }
     const client = {
       device: undefined, subs: new Map(), lastSeen: Date.now(), nextSub: 1,
@@ -364,6 +368,7 @@ export function createPocketServer(opts) {
         client.device = device; clearTimeout(helloTimer)
         reply({ ok: true, result: { proto: PROTO, device: { id: device.id, name: device.name }, ...(opts.info ?? {}), ops: allOps() } })
         sendPending(client)
+        notifyDevicePresence()
         return
       }
       void handle(client, msg, reply, fail)
@@ -519,6 +524,10 @@ export function createPocketServer(opts) {
     },
     broadcastEvent(ev, payload = {}) { broadcast({ ...payload, ev }) },
     hasDevices: () => authedClients().length > 0,
+    onDevicePresence(listener) {
+      devicePresenceListeners.add(listener)
+      return () => devicePresenceListeners.delete(listener)
+    },
     /** Device ids currently authenticated on a live connection. */
     onlineDeviceIds: () => new Set(authedClients().filter((c) => !c.device.owner).map((c) => c.device.id)),
     /** Revoke a paired device and kick any live connection. */
@@ -588,22 +597,36 @@ export function createPocketServer(opts) {
      * Offer one user-question batch to connected devices.
      * @returns {{ questionId: string, answer: Promise<{answer: object, by: string}>, close(status: string, by: string): void }}
      */
-    offerUserQuestion(payload) {
+    offerUserQuestion(payload, { isActive = () => true } = {}) {
       const questionId = str(payload?.callId) ? payload.callId : randomUUID()
       const full = { questionId, ...payload }
+      const key = questionKey(full.sessionId, questionId)
       let resolve
       const answer = new Promise((r) => { resolve = r })
       const close = (status, by) => {
-        if (!userQuestions.has(questionId)) return
-        userQuestions.delete(questionId)
-        broadcast({ ev: 'user-question.closed', questionId, status, by })
+        if (userQuestions.get(key) !== entry) return
+        userQuestions.delete(key)
+        broadcast({ ev: 'user-question.closed', questionId, sessionId: full.sessionId, status, by })
       }
-      userQuestions.set(questionId, {
+      const entry = {
         payload: full,
-        settle: (ans, deviceId) => { resolve({ answer: ans, by: `device:${deviceId}` }) },
-      })
+        settle: (ans, deviceId) => {
+          if (userQuestions.get(key) !== entry || !isActive()) {
+            close('aborted', 'host')
+            return false
+          }
+          const ids = new Set(ans.answers.map((item) => item.id))
+          if (ids.size !== ans.answers.length || full.questions.length !== ids.size ||
+            !full.questions.every((item) => ids.has(item.id))) {
+            throw Object.assign(new Error('answer must name each question exactly once'), { code: 'BAD_ANSWER' })
+          }
+          close('answered', `device:${deviceId}`)
+          resolve({ answer: ans, by: `device:${deviceId}` })
+          return true
+        },
+      }
+      userQuestions.set(key, entry)
       broadcast({ ev: 'user-question', ...full })
-      // Minimal task event so phones can build a local "waiting for your answer" notification.
       if (str(full.sessionId) && !childSessions.has(full.sessionId)) {
         pushTaskEvent({ sessionId: full.sessionId, kind: 'question', questionId })
       }
@@ -648,14 +671,11 @@ export function createPocketServer(opts) {
       return false
     },
     /** Settle a pending waterfall offer from `userQuestions.answer` (returns false if none). */
-    settleUserQuestion(callId, answer, deviceId = 'phone') {
-      const p = userQuestions.get(callId)
-      if (!p) return false
-      p.settle(answer, deviceId)
-      return true
+    settleUserQuestion(sessionId, callId, answer, deviceId = 'phone') {
+      return userQuestions.get(questionKey(sessionId, callId))?.settle(answer, deviceId) ?? false
     },
-    hasPendingUserQuestion(callId) {
-      return userQuestions.has(callId)
+    hasPendingUserQuestion(sessionId, callId) {
+      return userQuestions.has(questionKey(sessionId, callId))
     },
     listen: () => new Promise((resolve, reject) => {
       http.once('error', reject)

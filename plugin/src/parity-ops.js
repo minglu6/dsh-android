@@ -226,23 +226,24 @@ export function uploadOps(fileUploads, agents) {
  * - If a phone waterfall offer is pending for `callId`, settle it (open ask).
  * - Else forward to Host `userQuestions.answer` (continued projection).
  */
-export function userQuestionOps(userQuestions, agents, { settleOffer } = {}) {
+export function userQuestionOps(userQuestions, sessionController, { settleOffer } = {}) {
   return {
-    'userQuestions.answer': (a) => {
+    'userQuestions.answer': async (a, signal, client) => {
       if (!str(a.sessionId) || !str(a.callId)) throw bad('sessionId and callId required')
-      if (!a.answers || !Array.isArray(a.answers.answers ?? a.answers)) {
-        throw bad('answers required')
+      const items = a.answers?.answers ?? a.answers
+      if (!Array.isArray(items) || !items.every((item) => item && str(item.id) &&
+        Array.isArray(item.selected) && item.selected.every((label) => typeof label === 'string') &&
+        (item.custom === undefined || typeof item.custom === 'string'))) throw bad('answers required')
+      const answer = { answers: items }
+      signal?.throwIfAborted()
+      if (settleOffer?.(a.sessionId, a.callId, answer, client?.device?.id)) {
+        return { accepted: true, via: 'waterfall' }
       }
-      const answer = Array.isArray(a.answers.answers) ? a.answers : { answers: a.answers }
-      if (typeof settleOffer === 'function') {
-        const settled = settleOffer(a.callId, answer)
-        if (settled) return { accepted: true, via: 'waterfall' }
-      }
-      const agent = agentOf(agents, a.sessionId)
+      const agent = await resolveReferenceAgent(sessionController, a.sessionId, signal)
       if (!userQuestions?.answer) {
         throw Object.assign(new Error('userQuestions unavailable'), { code: 'unavailable' })
       }
-      const ok = userQuestions.answer(agent, a.callId, answer)
+      const ok = await userQuestions.answer(agent, a.callId, answer)
       return { accepted: Boolean(ok), via: 'host' }
     },
   }

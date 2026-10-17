@@ -7,6 +7,7 @@ import WebSocket from 'ws'
 import { createPocketServer } from '../src/server.js'
 import { loadOrCreateToken } from '../src/token.js'
 import { feedbackOps } from '../src/parity-ops.js'
+import { createUserQuestionHook } from '../src/user-question-hook.js'
 
 const TOKEN = 'test-token-0123456789abcdef'
 
@@ -249,4 +250,144 @@ test('token created once with 0600', () => {
   assert.equal(b.token, a.token)
   assert.equal(readFileSync(a.path, 'utf8').trim(), a.token)
   assert.equal(loadOrCreateToken(dir, 'fixed-token-value').token, 'fixed-token-value')
+})
+
+test('question offers isolate sessions and atomically reject duplicate, incomplete and expired replies', async () => {
+  const questions = [{ id: 'q', question: 'Choose' }]
+  const answer = { answers: [{ id: 'q', selected: ['A'] }] }
+  const first = server.offerUserQuestion({ sessionId: 's1', callId: 'shared-call', questions })
+  const second = server.offerUserQuestion({ sessionId: 's2', callId: 'shared-call', questions })
+  assert.equal(server.settleUserQuestion('wrong-session', 'shared-call', answer), false)
+  assert.throws(() => server.settleUserQuestion('s1', 'shared-call', { answers: [] }), { code: 'BAD_ANSWER' })
+  assert.equal(server.settleUserQuestion('s1', 'shared-call', answer), true)
+  assert.equal(server.settleUserQuestion('s1', 'shared-call', answer), false)
+  assert.equal(server.hasPendingUserQuestion('s2', 'shared-call'), true)
+  assert.deepEqual((await first.answer).answer, answer)
+  let active = true
+  const expired = server.offerUserQuestion({ sessionId: 's3', callId: 'expired', questions }, { isActive: () => active })
+  active = false
+  assert.equal(server.settleUserQuestion('s3', 'expired', answer), false)
+  assert.equal(server.hasPendingUserQuestion('s3', 'expired'), false)
+  second.close('aborted', 'test')
+  expired.close('aborted', 'test')
+})
+
+test('an offline-created question replays after hello and reconnect, then closes only its owning session', async () => {
+  const ac = new AbortController()
+  const hook = createUserQuestionHook(server)
+  const pending = hook({
+    agent: { id: 's1' }, wait: { callId: 'reconnect' }, signal: ac.signal,
+    questions: [{ id: 'q', question: 'Choose' }],
+  }, () => new Promise(() => {}))
+  const first = await authed()
+  assert.equal((await first.next(m => m.ev === 'user-question')).sessionId, 's1')
+  first.ws.close()
+  await first.closed
+  const second = await authed()
+  assert.equal((await second.next(m => m.ev === 'user-question')).callId, 'reconnect')
+  assert.equal(server.settleUserQuestion('s1', 'reconnect', { answers: [{ id: 'q', selected: ['phone'] }] }), true)
+  assert.equal((await pending).answers[0].selected[0], 'phone')
+  assert.equal((await second.next(m => m.ev === 'user-question.closed')).sessionId, 's1')
+  second.ws.close()
+})
+
+test('desktop timeout and cancellation propagate even while mobile is connected', async () => {
+  const client = await authed()
+  for (const code of ['ASK_TIMED_OUT', 'ASK_CANCELLED']) {
+    const failure = Object.assign(new Error(code), { name: 'UserQuestionError', code })
+    const hook = createUserQuestionHook(server)
+    await assert.rejects(hook({
+      agent: { id: 's1' }, wait: { callId: code }, questions: [{ id: 'q', question: 'Choose' }],
+    }, async () => { throw failure }), (error) => error === failure)
+    assert.equal(server.hasPendingUserQuestion('s1', code), false)
+  }
+  client.ws.close()
+})
+
+test('timed mobile claim uses Host remaining duration and releases after disconnect', async () => {
+  const client = await authed()
+  const opened = Promise.withResolvers()
+  const released = Promise.withResolvers()
+  const ac = new AbortController()
+  const hook = createUserQuestionHook(server, {
+    userQuestions: {
+      async *attachWait(agent, callId, signal) {
+        assert.equal(agent.id, 's1')
+        assert.equal(callId, 'timed')
+        signal.addEventListener('abort', () => released.resolve(), { once: true })
+        opened.resolve()
+        yield { remainingMs: 60_000 }
+        await released.promise
+      },
+    },
+  })
+  const pending = hook({
+    agent: { id: 's1' }, signal: ac.signal, wait: { callId: 'timed', timed: true },
+    questions: [{ id: 'q', question: 'Choose' }],
+  }, async () => { throw Object.assign(new Error('no desktop'), { code: 'NO_PROVIDER' }) })
+  const rejection = assert.rejects(pending, { code: 'ASK_ABORTED' })
+  await opened.promise
+  client.ws.close()
+  await client.closed
+  await released.promise
+  ac.abort(Object.assign(new Error('cancelled'), { code: 'ASK_ABORTED' }))
+  await rejection
+})
+
+test('timed mobile claim expires instead of holding the Host indefinitely', async () => {
+  const client = await authed()
+  const ac = new AbortController()
+  let claimSignal
+  const hook = createUserQuestionHook(server, {
+    userQuestions: {
+      async *attachWait(_agent, _callId, signal) {
+        claimSignal = signal
+        yield { remainingMs: 10 }
+        await new Promise(resolve => signal.addEventListener('abort', resolve, { once: true }))
+      },
+    },
+  })
+  await assert.rejects(hook({
+    agent: { id: 's1' }, signal: ac.signal, wait: { callId: 'deadline', timed: true },
+    questions: [{ id: 'q', question: 'Choose' }],
+  }, async () => { throw Object.assign(new Error('no desktop'), { code: 'NO_PROVIDER' }) }), { code: 'ASK_TIMED_OUT' })
+  assert.equal(server.hasPendingUserQuestion('s1', 'deadline'), false)
+  // askTimed closes the business signal after consuming the waterfall result.
+  ac.abort()
+  assert.equal(claimSignal.aborted, true)
+  client.ws.close()
+})
+
+test('offline timed offers do not claim, and each reconnect attaches a fresh bounded claim', async () => {
+  const claims = []
+  const ac = new AbortController()
+  const hook = createUserQuestionHook(server, {
+    userQuestions: {
+      async *attachWait(_agent, _callId, signal) {
+        claims.push(signal)
+        yield { remainingMs: 60_000 }
+        await new Promise(resolve => signal.addEventListener('abort', resolve, { once: true }))
+      },
+    },
+  })
+  const pending = hook({
+    agent: { id: 's1' }, signal: ac.signal, wait: { callId: 'offline-timed', timed: true },
+    questions: [{ id: 'q', question: 'Choose' }],
+  }, () => new Promise(() => {}))
+  const rejection = assert.rejects(pending, { code: 'ASK_ABORTED' })
+  assert.equal(claims.length, 0)
+  const first = await authed()
+  await first.next(m => m.ev === 'user-question')
+  assert.equal(claims.length, 1)
+  first.ws.close()
+  await first.closed
+  assert.equal(claims[0].aborted, true)
+  const second = await authed()
+  await second.next(m => m.ev === 'user-question')
+  assert.equal(claims.length, 2)
+  assert.equal(claims[1].aborted, false)
+  ac.abort(Object.assign(new Error('cancelled'), { code: 'ASK_ABORTED' }))
+  await rejection
+  assert.equal(claims[1].aborted, true)
+  second.ws.close()
 })

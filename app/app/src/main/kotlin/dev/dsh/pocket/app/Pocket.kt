@@ -100,6 +100,7 @@ object Pocket {
     private var completionViewSession: String? = null
     val approvals = MutableStateFlow<List<Approval>>(emptyList())
     val userQuestions = MutableStateFlow<List<UserQuestion>>(emptyList())
+    private val questionStore = UserQuestionStore()
     val archivedIds = MutableStateFlow<Set<String>>(emptySet())
     val pinnedIds = MutableStateFlow<Set<String>>(emptySet())
     /** messageId → feedback for the open session. */
@@ -282,6 +283,7 @@ object Pocket {
         sessions.value = emptyList(); chat.value = null; approvals.value = emptyList()
         draftWorkspacePath.value = null
         inspectorLog = SessionInspectorLog()
+        questionStore.clear()
         userQuestions.value = emptyList(); archivedIds.value = emptySet(); pinnedIds.value = emptySet()
         workspaces.value = emptyList(); presetRoster.value = emptyList(); ops.value = emptySet()
         closeTerminalFollow()
@@ -331,6 +333,8 @@ object Pocket {
                 reducer.clearComposerProjections()
                 permissionProjectionSeq = -1L
                 modelProjectionSeq = -1L
+                questionStore.clear()
+                userQuestions.value = emptyList()
                 setRoute(p.id, c.route ?: hello.route)
                 setDot(p.id, Dot.Online); backoffMs.set(ReconnectBackoffPolicy.reset())
                 val remoteInstance = hello.raw["instanceId"].str()
@@ -622,12 +626,13 @@ object Pocket {
             }
             "approval" -> { val a = Approval.parse(m); approvals.value = approvals.value.filter { it.approvalId != a.approvalId } + a }
             "approval.closed" -> approvals.value = approvals.value.filter { it.approvalId != m["approvalId"].str() }
-            "user-question" -> UserQuestion.parse(m)?.let { q ->
-                userQuestions.value = userQuestions.value.filter { it.questionId != q.questionId } + q
+            "user-question" -> {
+                questionStore.offer(m)
+                userQuestions.value = questionStore.questions()
             }
             "user-question.closed" -> {
-                val id = m["questionId"].str()
-                userQuestions.value = userQuestions.value.filter { it.questionId != id }
+                m["questionId"].str()?.let { questionStore.close(it, m["sessionId"].str()) }
+                userQuestions.value = questionStore.questions()
             }
             "task" -> TaskEvent.parse(m)?.let { taskEvents.tryEmit(it) }
             "terminal", "terminal.end", "terminal.error" -> {
@@ -694,6 +699,11 @@ object Pocket {
         }
         inspectorLog.apply(f)
         val frameType = f["type"].str()
+        if (frameType == "snapshot" || frameType == "resume" ||
+            frameType == "projection" && (f["key"].str() == "userQuestions" || f["key"].str() == "inbox")) {
+            questionStore.apply(st.sessionId, f)
+            userQuestions.value = questionStore.questions()
+        }
         if (changed && (frameType == "event" ||
                 frameType == "assistant-stream" && f["frame"]["type"].str() == "chunk")) {
             continuityRepairAttempts = 0
@@ -1680,7 +1690,10 @@ object Pocket {
     fun answerUserQuestion(callId: String, answers: List<JsonObject>, onResult: (Boolean) -> Unit = {}) = mutation(onResult) { c ->
         val st = chat.value ?: error("无会话")
         check(c.answerUserQuestion(st.sessionId, callId, answers)["accepted"].bool() == true) { "提问已变化或答案未被接受" }
-        userQuestions.value = userQuestions.value.filter { it.callId != callId && it.questionId != callId }
+        if (client === c) {
+            questionStore.submitted(st.sessionId, callId)
+            userQuestions.value = questionStore.questions()
+        }
     }
 
     /** Insert a mention token into the open composer (`@path` / session mention). */
@@ -1979,6 +1992,7 @@ object Pocket {
             resetFeedback()
             draftWorkspacePath.value = null
             workspaces.value = emptyList(); presetRoster.value = emptyList(); ops.value = emptySet()
+            questionStore.clear()
             approvals.value = emptyList(); userQuestions.value = emptyList()
             archivedIds.value = emptySet(); pinnedIds.value = emptySet()
             closeTerminalFollow()

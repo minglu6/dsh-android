@@ -105,3 +105,26 @@ test('live projection withdrawal is scoped to the matching authenticated follow'
   ])
   assert.equal(b.frames.length, 1)
 })
+
+test('question continuation and queued reply projections reach only the owning session', { timeout: 10000 }, async t => {
+  const { server, url } = await start(t)
+  const a = await connect(url)
+  const b = await connect(url)
+  t.after(() => { a.ws.terminate(); b.ws.terminate() })
+  await a.call('follow', { sessionId: 'a' })
+  await b.call('follow', { sessionId: 'b' })
+  await Promise.all([a.frameCount(1), b.frameCount(1)])
+  const active = { active: [{ callId: 'choice', state: 'continued', questions: [{ id: 'q', question: 'Choose' }] }], settled: [] }
+  const queued = { 'next-step': [{ id: 'reply', source: { kind: 'user-question-reply', callId: 'choice' } }], 'next-turn': [] }
+  server.broadcastProjection('a', 'userQuestions', active, 11)
+  server.broadcastProjection('a', 'inbox', queued, 12)
+  server.broadcastProjection('a', 'userQuestions', { active: [], settled: [{ callId: 'choice', answers: [{ id: 'q', selected: ['A'] }] }] }, 13)
+  await Promise.all([a.barrier(), b.barrier()])
+  assert.deepEqual(a.frames.slice(1).map(({ frame }) => [frame.key, frame.seq]), [
+    ['userQuestions', 11], ['inbox', 12], ['userQuestions', 13],
+  ])
+  assert.deepEqual(a.frames[1].frame.value, active)
+  assert.deepEqual(a.frames[2].frame.value, queued)
+  assert.deepEqual(a.frames[3].frame.value.active, [])
+  assert.equal(b.frames.length, 1)
+})

@@ -328,24 +328,25 @@ test('session.attachment and attachments.upload forward', async () => {
   assert.equal(u.file.name, 'note.bin')
 })
 
-test('userQuestions.answer prefers waterfall settle then Host', () => {
+test('userQuestions.answer prefers a session-scoped offer then resolves the Host agent', async () => {
   const hostCalls = []
-  const agents = { get: (id) => id === 's1' ? { id: 's1' } : undefined }
+  const controller = { resolveAgent: async (id) => ({ agent: { id } }) }
   const settled = []
   const ops = userQuestionOps({
     answer: (agent, callId, answer) => { hostCalls.push({ agent, callId, answer }); return true },
-  }, agents, {
-    settleOffer: (callId, answer) => {
+  }, controller, {
+    settleOffer: (sessionId, callId, answer) => {
+      assert.equal(sessionId, 's1')
       if (callId === 'open1') { settled.push(answer); return true }
       return false
     },
   })
-  const viaWaterfall = ops['userQuestions.answer']({
+  const viaWaterfall = await ops['userQuestions.answer']({
     sessionId: 's1', callId: 'open1', answers: { answers: [{ id: 'q1', selected: ['A'] }] },
   })
   assert.equal(viaWaterfall.via, 'waterfall')
   assert.equal(hostCalls.length, 0)
-  const viaHost = ops['userQuestions.answer']({
+  const viaHost = await ops['userQuestions.answer']({
     sessionId: 's1', callId: 'cont1', answers: [{ id: 'q1', selected: ['B'] }],
   })
   assert.equal(viaHost.via, 'host')
@@ -370,4 +371,30 @@ test('user-question hook races phone against chain', async () => {
   resolveOffer({ answer: { answers: [{ id: 'q1', selected: ['phone'] }] }, by: 'device:d1' })
   const result = await pending
   assert.equal(result.answers[0].selected[0], 'phone')
+})
+
+test('continued question answers await Host acceptance and preserve stale/queued failures', async () => {
+  const agent = { id: 'cold-session' }
+  const controller = { resolveAgent: async () => ({ agent }) }
+  let accept = false
+  const ops = userQuestionOps({
+    async answer(actual) { assert.equal(actual, agent); return accept },
+  }, controller)
+  const args = { sessionId: agent.id, callId: 'continued', answers: [{ id: 'q1', selected: ['A'] }] }
+  assert.deepEqual(await ops['userQuestions.answer'](args), { accepted: false, via: 'host' })
+  accept = true
+  assert.equal((await ops['userQuestions.answer'](args)).accepted, true)
+  const failure = Object.assign(new Error('reply queued'), { code: 'REPLY_QUEUED' })
+  const queued = userQuestionOps({ answer() { throw failure } }, controller)
+  await assert.rejects(queued['userQuestions.answer'](args), (error) => error === failure)
+  const missing = userQuestionOps({}, { resolveAgent: async () => ({ error: failure }) })
+  await assert.rejects(missing['userQuestions.answer'](args), (error) => error === failure)
+})
+
+test('question answers reject malformed batches before resolving or settling', async () => {
+  const unexpected = () => assert.fail('invalid answer reached Host')
+  const ops = userQuestionOps({}, { resolveAgent: unexpected }, { settleOffer: unexpected })
+  for (const answers of [null, [{ id: 'q', selected: 'A' }], [{ id: 'q', selected: [1] }], [null]]) {
+    await assert.rejects(ops['userQuestions.answer']({ sessionId: 's', callId: 'c', answers }), { code: 'bad-request' })
+  }
 })
