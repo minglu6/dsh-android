@@ -1746,7 +1746,13 @@ private fun Composer(
                             .padding(horizontal = 6.dp, vertical = 6.dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
-                        Text(model?.name ?: "选择模型", fontSize = 14.sp, color = T.Text2.copy(alpha = modelAlpha), maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false).testTag("composerModelName"))
+                        ModelLabel(
+                            model?.name ?: "选择模型",
+                            modelReleaseBadge(model?.provider, model?.model, model?.name),
+                            modifier = Modifier.weight(1f, fill = false),
+                            color = T.Text2.copy(alpha = modelAlpha),
+                            nameModifier = Modifier.testTag("composerModelName"),
+                        )
                         modelEffort?.let { Spacer(Modifier.width(4.dp)); Text(it, fontSize = 12.sp, color = T.Caption.copy(alpha = modelAlpha), maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.widthIn(max = 48.dp)) }
                         if (modelBusy) CircularProgressIndicator(Modifier.padding(start = 4.dp).size(14.dp), strokeWidth = 1.5.dp, color = T.Text3)
                         else Icon(D.chevronDown, null, tint = T.Text2.copy(alpha = modelAlpha), modifier = Modifier.size(16.dp).rotate(if (modelExpanded) 180f else 0f))

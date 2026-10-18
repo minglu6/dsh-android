@@ -891,7 +891,7 @@ fun ConnectionsScreen(
             )
             ConnActionRow(
                 title = L.enterAddress(),
-                icon = D.link,
+                icon = Icons.Outlined.Keyboard,
                 divider = false,
                 onClick = { openAddressSheet() },
             )

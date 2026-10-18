@@ -6,6 +6,8 @@ import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.assertIsSelected
 import androidx.compose.ui.test.assertIsNotSelected
 import androidx.compose.ui.test.assertTextEquals
+import androidx.compose.ui.test.assertContentDescriptionEquals
+import androidx.compose.ui.test.assertTextContains
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performClick
@@ -59,6 +61,20 @@ class ComposerTest {
         Pocket.chat.value = null
         Pocket.approvals.value = emptyList()
         Pocket.userQuestions.value = emptyList()
+    }
+
+    @Test fun composerReleaseBadgeTracksModelChangesWithoutChangingDraftOrAccessibleName() {
+        Pocket.chat.value = ChatState("badge-session", running = false, loaded = true)
+        val flash = ModelChoice("deepseek-account", "deepseek-flash", "DeepSeek-V4.1-Flash", null)
+        Pocket.model.value = mapOf("badge-session" to flash)
+        rule.setContent { PocketTheme { ChatRoot(onMenu = {}) } }
+        rule.onNodeWithTag("composerInput").performTextInput("保留草稿")
+        rule.onNodeWithTag("modelReleaseBadge", useUnmergedTree = true).assertIsDisplayed()
+        rule.onNodeWithTag("composerModel").assertContentDescriptionEquals(flash.name)
+        rule.runOnIdle { Pocket.model.value = mapOf("badge-session" to flash.copy(provider = "custom")) }
+        rule.onNodeWithTag("modelReleaseBadge", useUnmergedTree = true).assertDoesNotExist()
+        rule.onNodeWithTag("composerModelName", useUnmergedTree = true).assertTextEquals(flash.name)
+        rule.onNodeWithTag("composerInput").assertTextContains("保留草稿")
     }
 
     @Test fun newSessionSendStaysEnabledWhenDraftNonEmpty() {

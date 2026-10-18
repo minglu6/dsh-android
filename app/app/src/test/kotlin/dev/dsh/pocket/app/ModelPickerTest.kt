@@ -168,6 +168,24 @@ class ModelPickerTest {
         assertEquals("pro", picked?.model)
     }
 
+    @Test fun releaseBadgeFollowsCatalogIdentityWithoutChangingSelectionPayload() {
+        val flash = ModelInfo("deepseek-official", "deepseek-flash", "DeepSeek-V4.1-Flash", null, emptyList(), null)
+        val pro = flash.copy(id = "deepseek-pro", name = "DeepSeek-V4.1-Pro")
+        val models = catalog.copy(groups = listOf(ModelGroup(flash.provider, "DeepSeek", listOf(flash, pro))))
+        var picked: ModelChoice? = null
+        val selected = mutableStateOf(ModelChoice(flash.provider, flash.id, flash.name, null))
+        mount {
+            ModelPicker(models, selected.value, {}, { choice, done -> picked = choice; selected.value = choice; done(true) })
+        }
+        rule.onNodeWithTag("modelReleaseBadge", useUnmergedTree = true).assertIsDisplayed()
+        rule.onNodeWithText("模型").performClick()
+        rule.onNodeWithTag("modelReleaseBadge", useUnmergedTree = true).assertIsDisplayed()
+        rule.onNodeWithText(pro.name).performClick()
+        assertEquals(ModelChoice(pro.provider, pro.id, pro.name, null), picked)
+        rule.onNodeWithText(flash.name).performClick()
+        assertEquals(ModelChoice(flash.provider, flash.id, flash.name, null), picked)
+    }
+
     @Test
     @OptIn(com.github.takahirom.roborazzi.ExperimentalRoborazziApi::class)
     fun composerPickerAppliesDraftAndReopensAtItsCurrentEffort() {

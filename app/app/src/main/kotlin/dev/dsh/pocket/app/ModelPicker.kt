@@ -30,7 +30,6 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.TextStyle
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.*
 import androidx.compose.ui.window.Popup
 import androidx.compose.ui.window.PopupPositionProvider
@@ -171,7 +170,11 @@ internal fun ModelPicker(
             Column(Modifier.padding(4.dp)) {
                 selectionError?.let { Text(it, color = T.Err, fontSize = 13.sp, modifier = Modifier.padding(12.dp)) }
                 if (pane == ModelPane.Root) {
-                    ModelMenuCell(mt("模型", "Model"), if (loading && catalog == null) mt("加载中…", "Loading…") else modelLabel) { pane = ModelPane.Models }
+                    ModelMenuCell(
+                        mt("模型", "Model"),
+                        if (loading && catalog == null) mt("加载中…", "Loading…") else modelLabel,
+                        badge = modelReleaseBadge(current?.provider, selectedModel?.id, selectedModel?.name),
+                    ) { pane = ModelPane.Models }
                     if (selectedModel?.hasReasoning == true) {
                         ModelMenuCell(mt("推理等级", "Reasoning effort"), effortLabel.orEmpty()) { pane = ModelPane.Effort }
                     }
@@ -226,7 +229,8 @@ internal fun ModelPicker(
                             items(group.models, key = { "model:${group.id}:${it.id}" }) { model ->
                                 val selected = current?.provider == group.id && current.model == model.id
                                 ModelMenuOption(model.name, selected, busy?.provider == group.id && busy.model == model.id,
-                                    enabled && !loading && busy == null, highlighted = showSearch && model == highlightedModel) {
+                                    enabled && !loading && busy == null, highlighted = showSearch && model == highlightedModel,
+                                    badge = modelReleaseBadge(group.id, model.id, model.name)) {
                                     // Switching models uses that provider's default, never carries an unrelated effort.
                                     pick(ModelChoice(group.id, model.id, model.name, null), selected)
                                 }
@@ -256,23 +260,24 @@ internal fun ModelPicker(
 }
 
 @Composable
-private fun ModelMenuCell(label: String, value: String, onClick: () -> Unit) {
+private fun ModelMenuCell(label: String, value: String, badge: String? = null, onClick: () -> Unit) {
     Row(Modifier.fillMaxWidth().clip(T.R8).clickable(role = Role.Button, onClick = onClick).padding(horizontal = 12.dp).heightIn(min = 48.dp),
         verticalAlignment = Alignment.CenterVertically) {
         Text(label, fontSize = 14.sp, color = T.Ink)
         Spacer(Modifier.width(16.dp))
-        Text(value, fontSize = 14.sp, color = T.Text3, maxLines = 1, overflow = TextOverflow.Ellipsis,
-            textAlign = androidx.compose.ui.text.style.TextAlign.End, modifier = Modifier.weight(1f))
+        Box(Modifier.weight(1f), contentAlignment = Alignment.CenterEnd) {
+            ModelLabel(value, badge, color = T.Text3)
+        }
         Icon(D.chevronRight, null, tint = T.Caption, modifier = Modifier.padding(start = 6.dp).size(16.dp))
     }
 }
 
 @Composable
-private fun ModelMenuOption(label: String, selected: Boolean, pending: Boolean, enabled: Boolean, highlighted: Boolean = false, onClick: () -> Unit) {
+private fun ModelMenuOption(label: String, selected: Boolean, pending: Boolean, enabled: Boolean, highlighted: Boolean = false, badge: String? = null, onClick: () -> Unit) {
     Row(Modifier.fillMaxWidth().clip(T.R8).background(if (selected || highlighted) T.Fill2 else Color.Transparent)
         .selectable(selected, enabled = enabled, role = Role.RadioButton, onClick = onClick)
         .padding(horizontal = 12.dp, vertical = 8.dp).heightIn(min = 32.dp), verticalAlignment = Alignment.CenterVertically) {
-        Text(label, fontSize = 14.sp, lineHeight = 20.sp, color = if (enabled || selected) T.Ink else T.Text3, modifier = Modifier.weight(1f))
+        ModelLabel(label, badge, modifier = Modifier.weight(1f), color = if (enabled || selected) T.Ink else T.Text3)
         Box(Modifier.padding(start = 8.dp).size(18.dp), contentAlignment = Alignment.Center) {
             if (pending) CircularProgressIndicator(Modifier.size(14.dp), strokeWidth = 1.5.dp, color = T.Text3)
             else if (selected) Icon(D.check, null, tint = T.Ink, modifier = Modifier.size(16.dp))
