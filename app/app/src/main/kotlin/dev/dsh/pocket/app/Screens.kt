@@ -737,6 +737,7 @@ fun ConnectionsScreen(
     var pairPrefName by remember { mutableStateOf("") }
     var showPair by remember { mutableStateOf(false) }
     var showScan by remember { mutableStateOf(false) }
+    var showPairLink by remember { mutableStateOf(false) }
     var showOverflow by remember { mutableStateOf(false) }
     var showDiagnostics by remember { mutableStateOf(false) }
     var manageId by remember { mutableStateOf<String?>(null) }
@@ -883,6 +884,12 @@ fun ConnectionsScreen(
                 onClick = { showScan = true },
             )
             ConnActionRow(
+                title = L.pairingLink(),
+                icon = D.link,
+                divider = true,
+                onClick = { showPairLink = true },
+            )
+            ConnActionRow(
                 title = L.enterAddress(),
                 icon = D.link,
                 divider = false,
@@ -910,6 +917,16 @@ fun ConnectionsScreen(
         )
     }
     if (showDiagnostics) DiagnosticsSheet(onDismiss = { showDiagnostics = false })
+    if (showPairLink) PairLinkSheet(
+        onDismiss = { showPairLink = false },
+        onResult = { link ->
+            showPairLink = false
+            openAddressSheet(
+                seed = link,
+                tab = if (classifyWsRoute(link.host) == Route.WsTailscale) PeerTransport.Tailscale else PeerTransport.Lan,
+            )
+        },
+    )
     if (showPair) PairSheet(
         link = pairing,
         prefName = repairTarget?.name?.takeIf { it.isNotBlank() } ?: pairPrefName,
@@ -1194,6 +1211,52 @@ fun NearbyWifiPermissionSheet(onDismiss: () -> Unit, onAllow: () -> Unit) {
             Button(onAllow, Modifier.weight(1f).height(48.dp), shape = Conn.R12, colors = ConnPrimaryColors()) {
                 Text(L.allowNearby(), color = T.OnPrimary)
             }
+        }
+    }
+}
+
+@Composable
+private fun PairLinkSheet(onDismiss: () -> Unit, onResult: (PairingLink) -> Unit) {
+    val clipboard = LocalClipboardManager.current
+    var text by remember { mutableStateOf("") }
+    var pasted by remember { mutableStateOf(false) }
+    val link = remember(text) { PairingLink.parse(text) }
+    ConnSheet(onDismiss) {
+        ConnSheetTitle(L.pairingLink())
+        Text(
+            L.pairingLinkHint(),
+            color = Conn.FgMute,
+            fontSize = 13.sp,
+            modifier = Modifier.padding(horizontal = 22.dp, vertical = 8.dp),
+        )
+        ConnField(L.pairingLink(), text, "dshpocket://pair?h=…&c=…", mono = true) {
+            text = it
+            pasted = false
+        }
+        if (link == null && (text.isNotBlank() || pasted)) {
+            Text(
+                L.invalidPairingLink(),
+                color = Conn.Err,
+                fontSize = 12.sp,
+                modifier = Modifier.padding(horizontal = 22.dp, vertical = 8.dp),
+            )
+        }
+        Row(
+            Modifier.padding(horizontal = 22.dp, vertical = 14.dp),
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            OutlinedButton(
+                onClick = { text = clipboard.getText()?.text.orEmpty(); pasted = true },
+                modifier = Modifier.weight(1f).height(48.dp),
+                shape = Conn.R12,
+            ) { Text(L.pastePairingLink()) }
+            Button(
+                onClick = { link?.let(onResult) },
+                modifier = Modifier.weight(1f).height(48.dp),
+                enabled = link != null,
+                shape = Conn.R12,
+                colors = ConnPrimaryColors(),
+            ) { Text(L.reviewPairingLink()) }
         }
     }
 }

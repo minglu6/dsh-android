@@ -1,5 +1,14 @@
 package dev.dsh.pocket.app
 
+import androidx.compose.ui.platform.ClipboardManager
+import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.semantics.SemanticsProperties
+import androidx.compose.ui.test.SemanticsMatcher
+import androidx.compose.ui.test.assert
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.test.assertIsEnabled
+import androidx.compose.ui.test.assertTextEquals
+import androidx.compose.ui.test.performTextReplacement
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.assertIsNotEnabled
@@ -75,5 +84,64 @@ class ConnectionsUiTest {
         rule.setContent { PocketTheme { ConnectionsScreen(null, {}, true, {}, {}) } }
         rule.onNodeWithText("切换").assertIsNotEnabled()
         rule.runOnIdle { assertEquals(current.id, Pocket.active.value) }
+    }
+    @Test fun pastedLinkPrefillsConfirmationWithoutConnecting() {
+        lateinit var clipboard: ClipboardManager
+        var navigations = 0
+        rule.setContent {
+            clipboard = LocalClipboardManager.current
+            PocketTheme { ConnectionsScreen(null, {}, true, {}, { navigations++ }) }
+        }
+        rule.runOnIdle {
+            clipboard.setText(AnnotatedString("  dshpocket://pair?h=mac.tail.ts.net%3A7690&c=012345  "))
+        }
+        rule.onNodeWithText("配对链接").performClick()
+        rule.onNodeWithText("下一步").assertIsNotEnabled()
+        rule.onNodeWithText("粘贴链接").performClick()
+        rule.onNodeWithText("下一步").performClick()
+        rule.onNodeWithContentDescription("地址").assertTextEquals("mac.tail.ts.net:7690")
+        rule.onNodeWithContentDescription("六位配对码")
+            .assert(SemanticsMatcher.expectValue(SemanticsProperties.EditableText, AnnotatedString("012345")))
+        rule.onNodeWithText("开始配对").assertIsEnabled()
+        rule.runOnIdle {
+            assertEquals(current.id, Pocket.active.value)
+            assertEquals(listOf(current, target), Pocket.profiles.value)
+            assertEquals(0, navigations)
+        }
+    }
+
+    @Test fun invalidLinkCanBeCorrectedBeforeContinuing() {
+        rule.setContent { PocketTheme { ConnectionsScreen(null, {}, true, {}, {}) } }
+        rule.onNodeWithText("配对链接").performClick()
+        val input = rule.onNodeWithContentDescription("配对链接")
+        for (text in listOf(
+            "https://example.com",
+            "dshpocket://pair?h=mac%&c=012345",
+            "dshpocket://pair?h=mac:7690&c=123",
+            "dshpocket://pair?n=legacy&c=123456",
+        )) {
+            input.performTextReplacement(text)
+            rule.onNodeWithText("下一步").assertIsNotEnabled()
+            rule.onNodeWithText(L.invalidPairingLink()).assertIsDisplayed()
+        }
+        input.performTextReplacement("dshpocket://pair?h=192.168.1.20:7690&c=654321")
+        rule.onNodeWithText(L.invalidPairingLink()).assertDoesNotExist()
+        rule.onNodeWithText("下一步").performClick()
+        rule.onNodeWithContentDescription("地址").assertTextEquals("192.168.1.20:7690")
+        rule.onNodeWithContentDescription("六位配对码")
+            .assert(SemanticsMatcher.expectValue(SemanticsProperties.EditableText, AnnotatedString("654321")))
+    }
+
+    @Test fun emptyClipboardKeepsPairingDisabled() {
+        lateinit var clipboard: ClipboardManager
+        rule.setContent {
+            clipboard = LocalClipboardManager.current
+            PocketTheme { ConnectionsScreen(null, {}, true, {}, {}) }
+        }
+        rule.runOnIdle { clipboard.setText(AnnotatedString("")) }
+        rule.onNodeWithText("配对链接").performClick()
+        rule.onNodeWithText("粘贴链接").performClick()
+        rule.onNodeWithText(L.invalidPairingLink()).assertIsDisplayed()
+        rule.onNodeWithText("下一步").assertIsNotEnabled()
     }
 }

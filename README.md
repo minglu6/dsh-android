@@ -144,8 +144,8 @@ The plugin also disables the default `directory-picker` auto entry and loads the
 ### Pair the phone
 
 1. On the computer, open **Settings → Phone connection**, choose LAN or Tailscale, and open the pairing window. The first start with no paired devices opens the window automatically and prints the 6-digit code in the Host log.
-2. On the phone, open the host row at the bottom of the session drawer, then Connection management. Use **Scan**, **Enter address**, or **Nearby devices** on the same LAN.
-3. Scan the QR code or enter `dshpocket://pair?h=<host:port>&c=<6-digit-code>`. Leave the name empty to use the host address.
+2. On the phone, open the host row at the bottom of the session drawer, then Connection management. Use **Scan**, **Pairing link**, **Enter address**, or **Nearby devices** on the same LAN.
+3. To use a link, copy `dshpocket://pair?h=<host:port>&c=<6-digit-code>` from the computer, then choose **Pairing link → Paste link → Continue** on the phone. Review the filled address and code, then tap **Start pairing**. Scanning or entering the address and code manually also works. Leave the name empty to use the host address.
 4. After the connection succeeds, select a workspace or session. Model providers and credentials are owned by the Host; phone model settings edit that Host.
 
 The pairing code is valid for 10 minutes, allows at most 3 attempts, and is consumed on success. Legacy iroh forms (`n=` / `nodeId#code`) are rejected; re-pair from the desktop UI.

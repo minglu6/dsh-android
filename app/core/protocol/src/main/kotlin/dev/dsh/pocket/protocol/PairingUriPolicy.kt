@@ -16,8 +16,13 @@ object PairingUriPolicy {
         val q = s.substringAfter('?', "").split('&')
             .filter { it.isNotEmpty() }
             .associate {
-                it.substringBefore('=') to
+                val value = try {
                     java.net.URLDecoder.decode(it.substringAfter('=', ""), "UTF-8")
+                } catch (_: IllegalArgumentException) {
+                    // A pasted or partially typed URI may contain an unfinished escape.
+                    return null
+                }
+                it.substringBefore('=') to value
             }
         val c = q["c"]?.takeIf { CODE.matches(it) } ?: return null
         // Explicitly ignore legacy iroh node-id advertisements.
