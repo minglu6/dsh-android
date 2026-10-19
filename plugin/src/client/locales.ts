@@ -33,9 +33,6 @@ export const zh = {
   cancel: '取消',
   loading: '加载中…',
   refresh: '刷新',
-  close: '关闭',
-  diagnostics: '连接诊断',
-  diagnosticsCopy: '复制诊断报告',
 } as const
 
 export const en = {
@@ -73,9 +70,6 @@ export const en = {
   cancel: 'Cancel',
   loading: 'Loading…',
   refresh: 'Refresh',
-  close: 'Close',
-  diagnostics: 'Connection diagnostics',
-  diagnosticsCopy: 'Copy diagnostic report',
 } as const
 
 export type PocketLocaleKey = keyof typeof zh

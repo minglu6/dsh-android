@@ -2064,31 +2064,6 @@ object Pocket {
             }
         }
     }
-
-    /** Fetch diagnostics from the active (or given) host:port HTTP endpoint. */
-    suspend fun fetchDiagnostics(host: String? = null, port: Int? = null): String = withContext(Dispatchers.IO) {
-        val p = activeProfile
-        val h = host ?: p?.host ?: error("未连接")
-        val pt = port ?: p?.port ?: error("未连接")
-        val url = java.net.URL("http://$h:$pt/diagnostics")
-        val conn = (url.openConnection() as java.net.HttpURLConnection).apply {
-            connectTimeout = 4_000
-            readTimeout = 8_000
-            requestMethod = "GET"
-        }
-        try {
-            val code = conn.responseCode
-            val body = (if (code in 200..299) conn.inputStream else conn.errorStream)
-                ?.bufferedReader()?.use { it.readText() }.orEmpty()
-            if (code !in 200..299) error("诊断失败 HTTP $code")
-            val report = runCatching {
-                org.json.JSONObject(body).optString("report").takeIf { it.isNotBlank() }
-            }.getOrNull()
-            report ?: body
-        } finally {
-            conn.disconnect()
-        }
-    }
 }
 
 data class TerminalMeta(val sessionId: String, val id: String, val attachmentId: String, val title: String? = null, val state: String? = null, val cwd: String? = null)

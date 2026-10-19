@@ -19,7 +19,7 @@ Available surfaces depend on the Host version and enabled plugins. The list belo
 | Host tools | PTY terminal, background jobs, session trajectory and data diagnostics; a phone-local browser panel |
 | Configuration | Host model providers, Agent presets, shared general settings, plugin management and the built-in plugin inventory |
 | Automation | Task search, rule editing, delivery history and deletion; the create entry opens a conversation |
-| Connection | QR / pairing URI, LAN mDNS discovery, multi-host management, connection diagnostics, reconnect with cursor resume |
+| Connection | QR / pairing URI, LAN mDNS discovery, multi-host management, reconnect with cursor resume |
 
 ## Screenshots
 

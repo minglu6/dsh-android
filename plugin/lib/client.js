@@ -69,8 +69,7 @@ function createPocketApi(base = "") {
 				id,
 				name
 			})
-		}),
-		diagnostics: () => get("/pocket/diagnostics")
+		})
 	};
 }
 
@@ -110,10 +109,7 @@ const zh = {
 	revokeBody: "解除与「{name}」的配对？该手机需重新配对才能连接。",
 	cancel: "取消",
 	loading: "加载中…",
-	refresh: "刷新",
-	close: "关闭",
-	diagnostics: "连接诊断",
-	diagnosticsCopy: "复制诊断报告"
+	refresh: "刷新"
 };
 const en = {
 	entry: "Phone connection",
@@ -149,10 +145,7 @@ const en = {
 	revokeBody: "Unpair “{name}”? The phone will need to pair again to reconnect.",
 	cancel: "Cancel",
 	loading: "Loading…",
-	refresh: "Refresh",
-	close: "Close",
-	diagnostics: "Connection diagnostics",
-	diagnosticsCopy: "Copy diagnostic report"
+	refresh: "Refresh"
 };
 
 //#endregion
@@ -551,16 +544,6 @@ const styles = {
 		justifyContent: "flex-end",
 		gap: 8,
 		marginTop: 8
-	},
-	report: {
-		margin: 0,
-		whiteSpace: "pre-wrap",
-		overflowWrap: "anywhere",
-		userSelect: "text",
-		WebkitUserSelect: "text",
-		fontSize: 12,
-		lineHeight: "20px",
-		color: muted
 	}
 };
 const panelCss = `
@@ -1714,8 +1697,6 @@ function ManagePanel({ t, api }) {
 	const [loading, setLoading] = (0, react.useState)(true);
 	const [busy, setBusy] = (0, react.useState)(false);
 	const [copied, setCopied] = (0, react.useState)(null);
-	const [diagnostics, setDiagnostics] = (0, react.useState)(null);
-	const [diagBusy, setDiagBusy] = (0, react.useState)(false);
 	const network = (0, react.useRef)(void 0);
 	const request = (0, react.useRef)(0);
 	const copyTimer = (0, react.useRef)(void 0);
@@ -1749,14 +1730,6 @@ function ManagePanel({ t, api }) {
 		}, 1e3);
 		return () => clearInterval(timer);
 	}, [status?.pairing.open, refresh]);
-	(0, react.useEffect)(() => {
-		if (!diagnostics) return;
-		const onKey = (e) => {
-			if (e.key === "Escape") setDiagnostics(null);
-		};
-		document.addEventListener("keydown", onKey);
-		return () => document.removeEventListener("keydown", onKey);
-	}, [diagnostics]);
 	const changeNetwork = (next) => {
 		network.current = next;
 		setCopied(null);
@@ -1787,16 +1760,6 @@ function ManagePanel({ t, api }) {
 			copyTimer.current = window.setTimeout(() => setCopied(null), 1500);
 		} catch (e) {
 			setError(String(e?.message ?? e));
-		}
-	};
-	const diagnose = async () => {
-		setDiagBusy(true);
-		try {
-			setDiagnostics(await api.diagnostics());
-		} catch (e) {
-			setError(String(e?.message ?? e));
-		} finally {
-			setDiagBusy(false);
 		}
 	};
 	const pairing = status?.pairing;
@@ -1953,30 +1916,20 @@ function ManagePanel({ t, api }) {
 									})
 								})
 							] }) : /* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", { children: t(loading ? "loading" : "noNetwork") })
-						}), /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
+						}), /* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
 							style: styles.footerActions,
-							children: [
-								/* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
-									type: "button",
-									style: styles.iconBtn,
-									disabled,
-									title: t("refresh"),
-									"aria-label": t("refresh"),
-									onClick: () => {
-										if (!status) network.current = void 0;
-										refresh();
-									},
-									children: /* @__PURE__ */ (0, react_jsx_runtime.jsx)(Icon, { name: "refresh" })
-								}),
-								/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", { style: styles.divider }),
-								/* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
-									type: "button",
-									style: styles.textBtn,
-									disabled: diagBusy,
-									onClick: () => void diagnose(),
-									children: t("diagnostics")
-								})
-							]
+							children: /* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
+								type: "button",
+								style: styles.iconBtn,
+								disabled,
+								title: t("refresh"),
+								"aria-label": t("refresh"),
+								onClick: () => {
+									if (!status) network.current = void 0;
+									refresh();
+								},
+								children: /* @__PURE__ */ (0, react_jsx_runtime.jsx)(Icon, { name: "refresh" })
+							})
 						})]
 					})
 				]
@@ -2009,44 +1962,7 @@ function ManagePanel({ t, api }) {
 						children: t(loading ? "loading" : "empty")
 					})
 				})]
-			}),
-			diagnostics ? /* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
-				style: styles.dialogMask,
-				onClick: (e) => {
-					if (e.target === e.currentTarget) setDiagnostics(null);
-				},
-				children: /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
-					role: "dialog",
-					"aria-modal": "true",
-					"aria-label": t("diagnostics"),
-					style: styles.dialogCard,
-					children: [
-						/* @__PURE__ */ (0, react_jsx_runtime.jsx)("h3", {
-							style: styles.dialogTitle,
-							children: t("diagnostics")
-						}),
-						/* @__PURE__ */ (0, react_jsx_runtime.jsx)("pre", {
-							style: styles.report,
-							children: diagnostics.report
-						}),
-						/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
-							style: styles.dialogActions,
-							children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
-								type: "button",
-								style: styles.outlineBtn,
-								onClick: () => void copy(diagnostics.report, "diagnostics"),
-								children: t(copied === "diagnostics" ? "copied" : "diagnosticsCopy")
-							}), /* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
-								type: "button",
-								style: styles.primaryBtn,
-								autoFocus: true,
-								onClick: () => setDiagnostics(null),
-								children: t("close")
-							})]
-						})
-					]
-				})
-			}) : null
+			})
 		]
 	});
 }

@@ -27,7 +27,6 @@ import { loadTransport, saveTransport, normalizeTransport } from './src/transpor
 import { listAdvertiseNetworks, pickBindHost, selectNetwork } from './src/advertise-host.js'
 import { loadOrCreateInstanceId } from './src/instance-id.js'
 import { startMdnsAdvertise } from './src/mdns-advertise.js'
-import { collectConnectionDiagnostics } from './src/diagnostics.js'
 import { createOfficePreviewOps } from './src/office-preview.js'
 
 export const name = 'dsh-plugin-pocket'
@@ -66,25 +65,6 @@ export function apply(ctx, config = {}) {
       ? listAdvertiseNetworks(config.host, address.address)
       : []
   }
-  const buildDiagnostics = () => {
-    const selected = selectNetwork(getNetworks())
-    const address = server.address()
-    return collectConnectionDiagnostics({
-      version: PKG.version,
-      plugin: PKG.name,
-      transport: remoteTransport,
-      host: selected?.host ?? '',
-      port: address && typeof address === 'object' ? address.port : port,
-      instanceId,
-      connectionType: selected?.type ?? 'unavailable',
-      running: address !== null,
-      mdns: mdns !== null,
-      deviceName: mdns?.deviceName,
-      probes: selected ? undefined : {
-        reachability: async () => ({ ok: false, error: 'no-reachable-network' }),
-      },
-    })
-  }
   const taskHub = new TaskEventHub()
   /** @type {TaskFallbackTracker | null} */
   let taskFallback = null
@@ -98,7 +78,6 @@ export function apply(ctx, config = {}) {
       minimumAppVersion: '0.1.0',
     },
     onSessionEvent: (fn) => { listeners.add(fn); return () => listeners.delete(fn) },
-    getDiagnostics: buildDiagnostics,
     onSessionLifecycle: (kind, args) => {
       if (!taskFallback) return
       if (kind === 'status') taskFallback.onStatus(args[0], Boolean(args[1]))
@@ -155,7 +134,6 @@ export function apply(ctx, config = {}) {
     getTransport,
     setTransport: setTransportMode,
     instanceId,
-    getDiagnostics: buildDiagnostics,
     getMdns: () => mdns !== null,
   })
   ctx.on('permission-presets/catalog-changed', () => server.broadcastPermissionCatalogChanged())

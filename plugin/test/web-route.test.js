@@ -60,14 +60,6 @@ test('management routes: status, pair, rename, revoke, Origin fence', async (t) 
     getTransport: () => 'tailscale',
     instanceId: 'a'.repeat(64),
     getMdns: () => false,
-    getDiagnostics: async () => ({
-      version: 1,
-      generatedAt: Date.now(),
-      overall: 'ok',
-      summary: '连接基础检查正常。',
-      checks: [],
-      report: 'DSH Pocket 诊断报告\n生成时间: test',
-    }),
   })
 
   // Minimal fake webServer.register that mounts onto a real http server
@@ -180,11 +172,6 @@ test('management routes: status, pair, rename, revoke, Origin fence', async (t) 
   })).json()
   assert.equal(revoked.removed, true)
   assert.equal(revoked.devices.length, 0)
-
-  const diag = await (await fetch(`${base}/pocket/diagnostics`)).json()
-  assert.equal(diag.version, 1)
-  assert.ok(typeof diag.report === 'string' && diag.report.includes('诊断'))
-  assert.doesNotMatch(diag.report, /token|secret/i)
 
   // keep port referenced for lint
   assert.ok(port >= 0)

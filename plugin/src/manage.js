@@ -45,7 +45,7 @@ export function pairingString({ code, host, port, transport }) {
  */
 export function createManageApi({
   getNetworks, port, devices, pairing, server, openPairing, getTransport, setTransport,
-  instanceId, getDiagnostics, getMdns,
+  instanceId, getMdns,
 }) {
   const transport = () => getTransport()
   const withOnline = () => {
@@ -91,10 +91,6 @@ export function createManageApi({
     setTransport: (mode) => {
       if (typeof setTransport !== 'function') throw new Error('setTransport unavailable')
       return { transport: setTransport(mode) }
-    },
-    getDiagnostics: () => {
-      if (typeof getDiagnostics !== 'function') throw new Error('diagnostics unavailable')
-      return getDiagnostics()
     },
     getStatus: (network) => {
       const networks = getNetworks()

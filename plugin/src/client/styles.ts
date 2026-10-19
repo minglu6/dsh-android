@@ -63,7 +63,6 @@ export const styles = {
   dialogTitle: { margin: 0, fontSize: 16, fontWeight: 600, lineHeight: '24px' },
   dialogBody: { margin: 0, fontSize: 14, lineHeight: '22px', color: muted },
   dialogActions: { display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 8 },
-  report: { margin: 0, whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', userSelect: 'text', WebkitUserSelect: 'text', fontSize: 12, lineHeight: '20px', color: muted },
 } satisfies Record<string, CSSProperties | ((state: 'done' | 'error' | 'idle') => CSSProperties)>
 
 export const panelCss = `

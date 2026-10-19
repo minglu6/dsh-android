@@ -7,7 +7,6 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardOptions
-import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.automirrored.rounded.CallMade
@@ -44,7 +43,6 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -739,7 +737,6 @@ fun ConnectionsScreen(
     var showScan by remember { mutableStateOf(false) }
     var showPairLink by remember { mutableStateOf(false) }
     var showOverflow by remember { mutableStateOf(false) }
-    var showDiagnostics by remember { mutableStateOf(false) }
     var manageId by remember { mutableStateOf<String?>(null) }
     var repairTarget by remember { mutableStateOf<Profile?>(null) }
     var nearby by remember { mutableStateOf(nearbySeed) }
@@ -826,7 +823,7 @@ fun ConnectionsScreen(
         ConnHeader(
             title = L.connections(),
             onBack = if (canBack) onBack else null,
-            onOverflow = { showOverflow = true },
+            onOverflow = if (needNearbyPerm) ({ showOverflow = true }) else null,
         )
         CompatibilityBanner(compatibility)
 
@@ -908,15 +905,13 @@ fun ConnectionsScreen(
             onAllow = { nearbyPermLauncher.launch(Manifest.permission.NEARBY_WIFI_DEVICES) },
         )
     }
-    if (showOverflow) {
+    if (showOverflow && needNearbyPerm) {
         ConnOverflowSheet(
             onDismiss = { showOverflow = false },
             showNearbyAllow = needNearbyPerm,
             onNearbyAllow = { showOverflow = false; showNearbyPerm = true },
-            onDiagnostics = { showOverflow = false; showDiagnostics = true },
         )
     }
-    if (showDiagnostics) DiagnosticsSheet(onDismiss = { showDiagnostics = false })
     if (showPairLink) PairLinkSheet(
         onDismiss = { showPairLink = false },
         onResult = { link ->
@@ -956,11 +951,11 @@ fun ConnectionsScreen(
 }
 
 @Composable
-private fun ConnHeader(title: String, onBack: (() -> Unit)?, onOverflow: () -> Unit) {
+private fun ConnHeader(title: String, onBack: (() -> Unit)?, onOverflow: (() -> Unit)?) {
     Row(Modifier.fillMaxWidth().height(52.dp).padding(horizontal = 6.dp), verticalAlignment = Alignment.CenterVertically) {
         if (onBack != null) IconButton(onBack) { Icon(D.chevronLeft, navText("返回", "Back"), tint = Conn.Fg) } else Spacer(Modifier.width(16.dp))
         Text(title, fontSize = 18.sp, fontWeight = FontWeight.SemiBold, color = Conn.Fg, modifier = Modifier.weight(1f))
-        IconButton(onOverflow) { Icon(D.ellipsis, L.moreActions(), tint = Conn.FgDim, modifier = Modifier.size(18.dp)) }
+        if (onOverflow != null) IconButton(onOverflow) { Icon(D.ellipsis, L.moreActions(), tint = Conn.FgDim, modifier = Modifier.size(18.dp)) }
     }
 }
 
@@ -1101,14 +1096,12 @@ private fun buildConnStatusLine(dot: Dot?, routeLabel: String, isCurrent: Boolea
 @Composable
 fun ConnOverflowSheet(
     onDismiss: () -> Unit,
-    onDiagnostics: () -> Unit,
     showNearbyAllow: Boolean = false,
     onNearbyAllow: () -> Unit = {},
 ) {
     ConnSheet(onDismiss) {
         ConnSheetTitle(L.moreActions())
         if (showNearbyAllow) ConnOptionRow(L.allowNearby(), icon = D.link, onClick = onNearbyAllow)
-        ConnOptionRow(L.diagnostics(), icon = D.inspect, onClick = onDiagnostics)
     }
 }
 
@@ -1445,7 +1438,6 @@ fun SettingsScreen(
     val visibleOps = if (online) ops else lastOps
     var notify by remember { mutableStateOf(Pocket.prefs.approvalNotify) }
     var presets by remember { mutableStateOf(false) }
-    var diagnostics by remember { mutableStateOf(false) }
     if (presets) {
         AgentPresetSettingsScreen(onBack = { presets = false }, onCreator = onCreatePreset)
         return
@@ -1460,73 +1452,11 @@ fun SettingsScreen(
         Text(st("移动端", "Mobile"), fontSize = 13.sp, color = T.Text3, modifier = Modifier.padding(start = 22.dp, top = 12.dp, bottom = 2.dp))
         Card {
             Row2(st("连接", "Connections"), icon = D.rightUp, value = profile?.name ?: st("未连接", "Disconnected"), onClick = onConnections)
-            Row2(L.diagnostics(), icon = D.inspect, onClick = { diagnostics = true })
             Row2(st("审批通知", "Approval notifications"), divider = false, trailing = {
                 Switch(notify, { notify = it; Pocket.prefs.approvalNotify = it }, colors = SwitchDefaults.colors(checkedTrackColor = T.PrimaryButton, checkedThumbColor = T.OnPrimary))
             })
         }
         Text(st("当前版本：", "Version: ") + BuildConfig.VERSION_NAME, fontSize = 12.sp, color = T.Caption, textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth().padding(16.dp))
-    }
-    if (diagnostics) DiagnosticsSheet(onDismiss = { diagnostics = false })
-}
-
-@Composable
-fun DiagnosticsSheet(onDismiss: () -> Unit) {
-    var report by remember { mutableStateOf<String?>(null) }
-    var err by remember { mutableStateOf<String?>(null) }
-    var loading by remember { mutableStateOf(true) }
-    val clip = LocalClipboardManager.current
-    val scope = rememberCoroutineScope()
-    LaunchedEffect(Unit) {
-        loading = true
-        runCatching { Pocket.fetchDiagnostics() }
-            .onSuccess { report = it; err = null }
-            .onFailure { err = it.message ?: L.diagnosticsUnavailable(); report = null }
-        loading = false
-    }
-    PocketSheet(onDismiss) {
-        SheetTitle(L.diagnostics())
-        when {
-            loading -> Text(L.diagnosticsChecking(), fontSize = 14.sp, color = T.Text3, modifier = Modifier.padding(22.dp))
-            err != null -> Text(err!!, fontSize = 14.sp, color = T.Err, modifier = Modifier.padding(22.dp))
-            else -> SelectionContainer {
-                Text(
-                    report.orEmpty(),
-                    style = T.Mono.copy(fontSize = 12.sp, color = T.Text2, lineHeight = 18.sp),
-                    modifier = Modifier.padding(horizontal = 22.dp, vertical = 8.dp).testTag("diagnosticsReport"),
-                )
-            }
-        }
-        Row(Modifier.padding(horizontal = 22.dp, vertical = 16.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-            OutlinedButton(
-                {
-                    loading = true
-                    scope.launch {
-                        runCatching { Pocket.fetchDiagnostics() }
-                            .onSuccess { report = it; err = null }
-                            .onFailure { err = it.message ?: L.diagnosticsUnavailable(); report = null }
-                        loading = false
-                    }
-                },
-                Modifier.weight(1f).height(50.dp),
-                shape = T.R12,
-                border = BorderStroke(1.dp, T.Border),
-                colors = ButtonDefaults.outlinedButtonColors(contentColor = T.Ink),
-                enabled = !loading,
-            ) { Text("刷新") }
-            Button(
-                {
-                    report?.let {
-                        clip.setText(AnnotatedString(it))
-                        Pocket.notices.tryEmit(L.diagnosticsCopied())
-                    }
-                },
-                Modifier.weight(1f).height(50.dp),
-                enabled = !report.isNullOrBlank(),
-                shape = T.R12,
-                colors = PrimaryColors(),
-            ) { Text(L.diagnosticsCopy(), color = T.OnPrimary) }
-        }
     }
 }
 

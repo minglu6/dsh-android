@@ -164,20 +164,6 @@ export function createPocketServer(opts) {
   const completionSeed = new AbortController()
   let hostUi
   const http = createServer(async (req, res) => {
-    if (req.method === 'GET' && req.url === '/diagnostics') {
-      if (typeof opts.getDiagnostics !== 'function') {
-        res.writeHead(404, { 'content-type': 'application/json; charset=utf-8' }).end(JSON.stringify({ error: 'unavailable' }))
-        return
-      }
-      try {
-        const body = await opts.getDiagnostics()
-        res.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' })
-        res.end(JSON.stringify(body))
-      } catch (e) {
-        res.writeHead(500, { 'content-type': 'application/json; charset=utf-8' }).end(JSON.stringify({ error: String(e?.message ?? e) }))
-      }
-      return
-    }
     if (req.method === 'GET' && req.url === '/discovery') {
       const info = opts.info ?? {}
       res.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' })

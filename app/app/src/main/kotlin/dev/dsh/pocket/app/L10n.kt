@@ -141,13 +141,6 @@ object L {
     fun dark() = if (en) "Dark" else "深色"
     fun followSystem() = if (en) "System" else "跟随系统"
 
-    // Connection diagnostics (desktop pocket locales)
-    fun diagnostics() = if (en) "Connection diagnostics" else "连接诊断"
-    fun openDiagnostics() = if (en) "Open connection diagnostics" else "打开连接诊断"
-    fun diagnosticsCopy() = if (en) "Copy diagnostic report" else "复制诊断报告"
-    fun diagnosticsCopied() = if (en) "Copied" else "已复制"
-    fun diagnosticsChecking() = if (en) "Checking…" else "正在检查…"
-    fun diagnosticsUnavailable() = if (en) "Diagnostics unavailable" else "诊断服务暂不可用"
     fun nearbyComputers() = if (en) "Nearby computers" else "附近的电脑"
     /** mDNS `_dshpocket._tcp` unpaired desktops on the LAN (connections list). */
     fun nearbyDevices() = if (en) "Nearby devices" else "附近设备"

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState, type JSX } from 'react'
-import type { ConnectionDiagnostics, DeviceRow, NetworkType, PocketApi, PocketStatus } from './api.ts'
+import type { DeviceRow, NetworkType, PocketApi, PocketStatus } from './api.ts'
 import { ConfirmDialog } from './ConfirmDialog.tsx'
 import { qrSvg } from './qr.ts'
 import { panelCss, styles } from './styles.ts'
@@ -94,8 +94,6 @@ export function ManagePanel({ t, api }: { t: TFn, api: PocketApi }): JSX.Element
   const [loading, setLoading] = useState(true)
   const [busy, setBusy] = useState(false)
   const [copied, setCopied] = useState<string | null>(null)
-  const [diagnostics, setDiagnostics] = useState<ConnectionDiagnostics | null>(null)
-  const [diagBusy, setDiagBusy] = useState(false)
   const network = useRef<NetworkType | undefined>(undefined)
   const request = useRef(0)
   const copyTimer = useRef<number | undefined>(undefined)
@@ -124,12 +122,6 @@ export function ManagePanel({ t, api }: { t: TFn, api: PocketApi }): JSX.Element
     const timer = setInterval(() => { void refresh(true) }, 1000)
     return () => clearInterval(timer)
   }, [status?.pairing.open, refresh])
-  useEffect(() => {
-    if (!diagnostics) return
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setDiagnostics(null) }
-    document.addEventListener('keydown', onKey)
-    return () => document.removeEventListener('keydown', onKey)
-  }, [diagnostics])
 
   const changeNetwork = (next: NetworkType) => {
     network.current = next
@@ -155,12 +147,6 @@ export function ManagePanel({ t, api }: { t: TFn, api: PocketApi }): JSX.Element
       setCopied(key)
       copyTimer.current = window.setTimeout(() => setCopied(null), 1500)
     } catch (e) { setError(String((e as Error)?.message ?? e)) }
-  }
-  const diagnose = async () => {
-    setDiagBusy(true)
-    try { setDiagnostics(await api.diagnostics()) }
-    catch (e) { setError(String((e as Error)?.message ?? e)) }
-    finally { setDiagBusy(false) }
   }
 
   const pairing = status?.pairing
@@ -218,8 +204,6 @@ export function ManagePanel({ t, api }: { t: TFn, api: PocketApi }): JSX.Element
         <div style={styles.footerActions}>
           <button type="button" style={styles.iconBtn} disabled={disabled} title={t('refresh')} aria-label={t('refresh')}
             onClick={() => { if (!status) network.current = undefined; void refresh() }}><Icon name="refresh" /></button>
-          <span style={styles.divider} />
-          <button type="button" style={styles.textBtn} disabled={diagBusy} onClick={() => void diagnose()}>{t('diagnostics')}</button>
         </div>
       </footer>
     </section>
@@ -230,15 +214,5 @@ export function ManagePanel({ t, api }: { t: TFn, api: PocketApi }): JSX.Element
           onChanged={(devices) => setStatus((s) => s ? { ...s, devices } : s)} />) : <p style={styles.hint}>{t(loading ? 'loading' : 'empty')}</p>}
       </div>
     </section>
-    {diagnostics ? <div style={styles.dialogMask} onClick={(e) => { if (e.target === e.currentTarget) setDiagnostics(null) }}>
-      <div role="dialog" aria-modal="true" aria-label={t('diagnostics')} style={styles.dialogCard}>
-        <h3 style={styles.dialogTitle}>{t('diagnostics')}</h3>
-        <pre style={styles.report}>{diagnostics.report}</pre>
-        <div style={styles.dialogActions}>
-          <button type="button" style={styles.outlineBtn} onClick={() => void copy(diagnostics.report, 'diagnostics')}>{t(copied === 'diagnostics' ? 'copied' : 'diagnosticsCopy')}</button>
-          <button type="button" style={styles.primaryBtn} autoFocus onClick={() => setDiagnostics(null)}>{t('close')}</button>
-        </div>
-      </div>
-    </div> : null}
   </div>
 }

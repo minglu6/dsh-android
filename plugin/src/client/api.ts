@@ -36,15 +36,6 @@ export type PocketStatus = {
   devices: DeviceRow[]
 }
 
-export type ConnectionDiagnostics = {
-  version: number
-  generatedAt: number
-  overall: string
-  summary: string
-  report: string
-  checks: Array<{ id: string, status: string, label: string, detail: string }>
-}
-
 export interface PocketApi {
   status(network?: NetworkType): Promise<PocketStatus>
   pairStatus(network?: NetworkType): Promise<PairingStatus>
@@ -53,7 +44,6 @@ export interface PocketApi {
   listDevices(): Promise<DeviceRow[]>
   revoke(id: string): Promise<{ removed: boolean, devices: DeviceRow[] }>
   rename(id: string, name: string): Promise<{ renamed: boolean, devices: DeviceRow[] }>
-  diagnostics(): Promise<ConnectionDiagnostics>
 }
 
 async function readBody(res: Response): Promise<unknown> {
@@ -103,6 +93,5 @@ export function createPocketApi(base = ''): PocketApi {
         body: JSON.stringify({ id, name }),
       },
     ),
-    diagnostics: () => get<ConnectionDiagnostics>('/pocket/diagnostics'),
   }
 }
