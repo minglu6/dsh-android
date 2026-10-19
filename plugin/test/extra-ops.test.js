@@ -1,6 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { zipSync, strToU8, unzipSync, strFromU8 } from 'fflate'
+import { Context, Service } from '@deepseek-ai/cordis'
 import { commandOps, skillOps, filesOps, jobsOps, exportOps, terminalOps } from '../src/extra-ops.js'
 
 test('commands.execute prefixes slash and returns Host result', async () => {
@@ -315,8 +316,27 @@ function waitAbort(signal) {
 function desktopTerminalController({ frames = [], onInput } = {}) {
   const retained = []
   const attached = []
+  // Mirror Cordis: `invocation` is a get-only root accessor, so assigning it
+  // throws in strict mode; Gateway binds it on a call-derived child Context.
+  const rootCtx = {
+    get invocation() { return undefined },
+    extend(meta) {
+      const child = Object.create(this)
+      for (const key of Reflect.ownKeys(meta)) {
+        Object.defineProperty(child, key, Reflect.getOwnPropertyDescriptor(meta, key))
+      }
+      return child
+    },
+    get(name) {
+      if (name !== 'terminalController') return undefined
+      const callCtx = this
+      return new Proxy(controller, {
+        get: (target, prop, receiver) => (prop === 'ctx' ? callCtx : Reflect.get(target, prop, receiver)),
+      })
+    },
+  }
   const controller = {
-    ctx: {},
+    ctx: rootCtx,
     list: () => [{ id: 'term1', state: 'running' }],
     create: async (_agent, req) => ({ id: req.id, state: 'running', cols: req.cols, rows: req.rows }),
     close: async () => {},
@@ -329,7 +349,7 @@ function desktopTerminalController({ frames = [], onInput } = {}) {
       await waitAbort(signal)
     },
     attach(agent, id, signal) {
-      const uplink = controller.ctx.invocation?.uplink()
+      const uplink = this.ctx.invocation?.uplink()
       if (uplink === undefined) throw new Error('Terminal attachment requires a Remote invocation')
       attached.push({ agent, id })
       const input = uplink[Symbol.asyncIterator]()
@@ -461,4 +481,41 @@ test('session.export pages history into a zip of jsonl', async () => {
   const text = strFromU8(files['abc.jsonl'])
   assert.match(text, /user\/message/)
   assert.match(text, /assistant\/message/)
+})
+
+test('terminal.follow binds invocation on a call-derived Cordis Context instead of assigning ctx.invocation', async () => {
+  const root = new Context()
+  // typert-protocol provideInvocationAccessor: get-only, so `ctx.invocation = x` throws.
+  root.accessor('invocation', { get: () => undefined })
+  const seen = []
+  class TerminalController extends Service {
+    constructor(ctx) { super(ctx, 'terminalController') }
+    list() { return [] }
+    async *retain() { yield { type: 'retained' }; await new Promise(() => {}) }
+    attach(_agent, id, signal) {
+      const invocation = this.ctx.invocation
+      if (invocation === undefined) throw new Error('Terminal attachment requires a Remote invocation')
+      seen.push({ id, uplink: invocation.uplink() !== undefined })
+      return (async function* () {
+        yield { type: 'ready', sequence: 0, writable: true }
+        await new Promise((resolve) => signal.addEventListener('abort', resolve, { once: true }))
+      })()
+    }
+  }
+  root.plugin(TerminalController)
+  await new Promise((resolve) => setTimeout(resolve, 20))
+  const controller = await new Promise((resolve) => {
+    root.inject(['terminalController'], (c) => resolve(c.terminalController))
+  })
+  assert.throws(() => { controller.ctx.invocation = {} }, /trap returned falsish for property 'invocation'/)
+  const ops = terminalOps(controller, { get: (id) => (id === 's1' ? { session: {} } : undefined) })
+  const pushed = []
+  const client = { subs: new Map(), nextSub: 1, push: (frame) => pushed.push(frame) }
+  const receipt = await ops['terminal.follow']({ sessionId: 's1', id: 'term1' }, AbortSignal.timeout(5000), client)
+  await new Promise((resolve) => setTimeout(resolve, 20))
+  assert.equal(JSON.stringify(pushed).includes('invocation'), false, JSON.stringify(pushed))
+  assert.ok(pushed.some((frame) => frame.ev === 'terminal' && frame.frame?.type === 'ready'), JSON.stringify(pushed))
+  assert.deepEqual(seen, [{ id: 'term1', uplink: true }])
+  assert.equal(controller.ctx.invocation, undefined)
+  client.subs.get(receipt.subId)?.abort()
 })

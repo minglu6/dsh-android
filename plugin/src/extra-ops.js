@@ -289,19 +289,27 @@ function createTerminalUplink() {
   }
 }
 
-/** Bind the in-process uplink the same way Typert Gateway binds `ctx.invocation`. */
+/**
+ * Bind the in-process uplink the same way Typert Gateway binds `ctx.invocation`:
+ * Gateway calls `receiverContext.extend({ invocation }).get(service)`, so the
+ * method reads `this.ctx.invocation` from a call-derived child Context.
+ *
+ * Never assign `ctx.invocation` directly: typert-protocol registers it on the
+ * root as a get-only Cordis accessor, so the Context proxy's set trap returns
+ * false and strict-mode code throws
+ * "'set' on proxy: trap returned falsish for property 'invocation'".
+ */
 function attachWithUplink(controller, agent, id, signal, uplink) {
   const ctx = controller.ctx
-  if (ctx === undefined) {
+  if (ctx === undefined || typeof ctx.extend !== 'function') {
     throw Object.assign(new Error('terminalController.ctx is required for attach'), { code: 'internal' })
   }
-  const previous = ctx.invocation
-  ctx.invocation = { uplink: () => uplink, uplinkWindow: undefined }
-  try {
-    return controller.attach(agent, id, signal)
-  } finally {
-    ctx.invocation = previous
+  const invocation = { uplink: () => uplink, uplinkWindow: undefined }
+  const bound = ctx.extend({ invocation }).get('terminalController')
+  if (bound === undefined || typeof bound.attach !== 'function') {
+    throw Object.assign(new Error('terminalController is unavailable for attach'), { code: 'terminal/unavailable' })
   }
+  return bound.attach(agent, id, signal)
 }
 
 /**
