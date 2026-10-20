@@ -15,6 +15,8 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.*
@@ -51,6 +53,7 @@ internal fun HeaderAction(
     enabled: Boolean = true,
 ) {
     Row(modifier.heightIn(min = 32.dp).clip(T.R8).clickable(enabled = enabled, onClick = onClick)
+        .semantics { contentDescription = text }
         .padding(horizontal = 6.dp), verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(5.dp)) {
         Icon(icon, null, tint = T.Text3, modifier = Modifier.size(14.dp))
