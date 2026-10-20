@@ -94,7 +94,7 @@ data class PendingAttach(
 )
 
 enum class Sheet {
-    None, Model, Permission, PermissionRisk, Preset, Plus, More, Panel, Team, Workspace, Goal, Feedback,
+    None, Model, Permission, PermissionRisk, Preset, Plus, More, Panel, Workspace, Goal, Feedback,
     Files, Jobs, Terminal, Browser, SessionInspector, Commands, Mentions, FeedbackCategory, FilePreview,
 }
 
@@ -396,7 +396,7 @@ fun ChatRoot(
             onMenu = if (showMenuButton) onMenu else null,
             onMore = { if (firstPrompt == null) sheet = Sheet.More },
             onPanel = { if (firstPrompt == null) sheet = Sheet.Panel },
-            onTeam = { if (firstPrompt == null) sheet = Sheet.Team }, onPreset = { if (firstPrompt == null) sheet = Sheet.Preset }, preset = presetLabel(chat?.agentPreset, presetRoster), onNew = { Pocket.closeChat() },
+            onPreset = { if (firstPrompt == null) sheet = Sheet.Preset }, preset = presetLabel(chat?.agentPreset, presetRoster), onNew = { Pocket.closeChat() },
         )
         CompatibilityBanner(compatibility)
         val question = questions.firstOrNull { chat != null && (it.sessionId == null || it.sessionId == sid) }
@@ -460,7 +460,15 @@ fun ChatRoot(
             )
         }
         // Keep one composer mounted from the welcome page through session creation (including IME focus).
-        if (!questionVisible && approval == null) {
+        if (visibleChat?.canControl == false) {
+            val oneShot = visibleChat.address.subagentMode == "one-shot"
+            Column(Modifier.fillMaxWidth().padding(20.dp)) {
+                Text(if (oneShot) teamText("一次性子智能体记录", "One-shot subagent record")
+                    else teamText("此子智能体暂时只读", "This subagent is read-only for now"), color = T.Ink, fontSize = 13.sp)
+                Text(if (oneShot) teamText("一次性任务不支持后续消息，可在这里查看完整执行记录。", "One-shot tasks do not accept follow-ups; review the full execution record here.")
+                    else teamText("读取子会话后才能确定是否可继续。", "Read the child session to determine whether it can be continued."), color = T.Text3, fontSize = 12.sp)
+            }
+        } else if (!questionVisible && approval == null) {
             firstPrompt?.let { prompt ->
                 Row(
                     Modifier.fillMaxWidth().padding(horizontal = 20.dp).testTag("firstPromptStatus"),
@@ -623,7 +631,6 @@ fun ChatRoot(
             onBrowser = { sheet = Sheet.Browser },
             onInspector = { sheet = Sheet.SessionInspector },
         )
-        Sheet.Team -> TeamSheet(onDismiss = { sheet = Sheet.None })
         Sheet.Workspace -> WorkspaceSheet(draftWorkspacePath, onDismiss = { sheet = Sheet.None }) { Pocket.draftWorkspacePath.value = it }
         Sheet.Goal -> GoalSheet(onDismiss = { sheet = Sheet.None })
         Sheet.Feedback -> FeedbackSheet(onDismiss = { sheet = Sheet.None })
@@ -679,18 +686,26 @@ fun ChatRoot(
 }
 
 @Composable
-private fun TopBar(title: String?, inChat: Boolean, onMenu: (() -> Unit)?, onMore: () -> Unit, onPanel: (() -> Unit)?, onTeam: () -> Unit, onPreset: () -> Unit, preset: String?, onNew: () -> Unit = {}) {
+private fun TopBar(title: String?, inChat: Boolean, onMenu: (() -> Unit)?, onMore: () -> Unit, onPanel: (() -> Unit)?, onPreset: () -> Unit, preset: String?, onNew: () -> Unit = {}) {
+    val chat by Pocket.chat.collectAsState()
+    val subagents by Pocket.subagents.collectAsState()
+    val parent = chat?.address?.parentSessionId
+    val childLabel = subagents?.firstOrNull { it.id == chat?.sessionId }?.label
     Row(Modifier.fillMaxWidth().height(56.dp).padding(horizontal = 6.dp), verticalAlignment = Alignment.CenterVertically) {
         if (onMenu != null) IconButton(onMenu) { Icon(D.panelLeft, L.menu(), tint = T.Ink, modifier = Modifier.size(20.dp)) }
         else Spacer(Modifier.width(12.dp))
         // One weighted region: the title takes what the gray links leave (no competing spacer).
         Row(Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically) {
             if (inChat) {
-                Text(title ?: "新会话", style = MaterialTheme.typography.titleMedium, color = T.Ink, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
+                if (parent != null) IconButton({ Pocket.openSession(parent) }, Modifier.size(32.dp)) {
+                    Icon(D.chevronLeft, teamText("返回父会话", "Return to parent conversation"), tint = T.Text3, modifier = Modifier.size(16.dp))
+                }
+                Text(childLabel ?: title ?: "新会话", style = MaterialTheme.typography.titleMedium, color = T.Ink, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
                 Spacer(Modifier.width(10.dp))
                 // Icon-only on phones: the session title must never be squeezed to "…".
-                GrayLink(D.users, "智能体团队", onTeam)
+                chat?.sessionId?.let { TeamAction(it) }
                 preset?.let { GrayLink(D.agentPreset, it, onPreset) }
+                chat?.sessionId?.let { SubagentAction(it) }
             }
         }
         IconButton(onMore, Modifier.size(48.dp)) { Icon(D.ellipsis, "更多", tint = T.Ink) }

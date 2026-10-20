@@ -47,7 +47,10 @@ data class ChatState(
     val turnTokenUsage: Map<Int, TurnTokenUsage> = emptyMap(),
     /** Original Host events in the loaded history window; never inferred from rendered items. */
     val inspectorRecords: List<JsonObject> = emptyList(),
-)
+    val address: SessionAddress = SessionAddress(sessionId),
+) {
+    val canControl: Boolean get() = address.canControl
+}
 
 data class ModelChoice(val provider: String, val model: String, val name: String, val effort: String?)
 
@@ -91,6 +94,15 @@ object Pocket {
     val routes = MutableStateFlow<Map<String, Route>>(emptyMap())
     val active = MutableStateFlow<String?>(null)
     val sessions = MutableStateFlow<List<SessionSummary>>(emptyList())
+    private var teamStore = AgentTeamStore()
+    private val _team = MutableStateFlow<AgentTeam?>(null)
+    val team: StateFlow<AgentTeam?> = _team.asStateFlow()
+    private val _subagents = MutableStateFlow<List<SubagentEntry>?>(null)
+    val subagents: StateFlow<List<SubagentEntry>?> = _subagents.asStateFlow()
+    private fun publishTeam() {
+        _team.value = teamStore.team(chat.value?.address, sessions.value)
+        _subagents.value = teamStore.subagents(chat.value?.address, sessions.value)
+    }
     private val completionReminders = CompletionReminders()
     val completionUnread = completionReminders.unreadIds
     private val completionViewLock = Mutex()
@@ -281,6 +293,7 @@ object Pocket {
         detachFollow()
         active.value = profileId; prefs.activeProfile = profileId
         sessions.value = emptyList(); chat.value = null; approvals.value = emptyList()
+        teamStore.clear(); publishTeam()
         draftWorkspacePath.value = null
         inspectorLog = SessionInspectorLog()
         questionStore.clear()
@@ -331,6 +344,7 @@ object Pocket {
                 detachFollow()
                 continuityRepairAttempts = 0
                 reducer.clearComposerProjections()
+                teamStore.resetSequences()
                 permissionProjectionSeq = -1L
                 modelProjectionSeq = -1L
                 questionStore.clear()
@@ -428,8 +442,9 @@ object Pocket {
         modelSettingsRevision.value++
         if ("workspace.state" in ops.value) runCatching { refreshWorkspaceState(c) }
         chat.value?.let { st ->
-            refollow(c, st.sessionId, reducer.cursor.takeIf { s -> s >= 0 })
-            if ("feedback.get" in ops.value) loadFeedback(st.sessionId)
+            refollow(c, st.address, reducer.cursor.takeIf { s -> s >= 0 })
+            refreshParentProjections(c, st.address)
+            if (!st.address.isSubagent && "feedback.get" in ops.value) loadFeedback(st.sessionId)
         }
     }
 
@@ -609,7 +624,8 @@ object Pocket {
                 // Stop the spinner; do not keep asking for the same oversized frame.
                 chat.value = chat.value?.copy(loaded = true)
             }
-            "session" -> when (m["kind"].str()) {
+            "session" -> {
+                when (m["kind"].str()) {
                 "added" -> SessionSummary.parse(m["summary"])?.let { s -> sessions.value = listOf(s) + sessions.value.filter { it.sessionId != s.sessionId } }
                 "removed" -> sessions.value = sessions.value.filter { it.sessionId != m["sessionId"].str() }
                 "status" -> { val id = m["sessionId"].str(); val r = m["running"].bool() ?: false
@@ -623,6 +639,8 @@ object Pocket {
                 "activity" -> { val id = m["sessionId"].str(); val t = m["updatedAt"].long() ?: 0
                     sessions.value = sessions.value.map { if (it.sessionId == id) it.copy(updatedAt = t) else it }.sortedByDescending { it.updatedAt } }
                 "error" -> m["message"].str()?.let { errors.tryEmit(it) }
+                }
+                publishTeam()
             }
             "approval" -> { val a = Approval.parse(m); approvals.value = approvals.value.filter { it.approvalId != a.approvalId } + a }
             "approval.closed" -> approvals.value = approvals.value.filter { it.approvalId != m["approvalId"].str() }
@@ -698,6 +716,15 @@ object Pocket {
             return
         }
         inspectorLog.apply(f)
+        when (f["type"].str()) {
+            "snapshot", "resume" -> {
+                teamStore.baseline(st.sessionId, f["projections"])
+                publishTeam()
+            }
+            "projection" -> f["key"].str()?.let {
+                if (teamStore.put(st.sessionId, it, f["seq"].long() ?: -1L, f["value"])) publishTeam()
+            }
+        }
         val frameType = f["type"].str()
         if (frameType == "snapshot" || frameType == "resume" ||
             frameType == "projection" && (f["key"].str() == "userQuestions" || f["key"].str() == "inbox")) {
@@ -811,7 +838,7 @@ object Pocket {
     /** Revoke the damaged generation before any unsubscribe RPC can suspend. */
     private fun recoverFollow() {
         val c = client ?: return
-        val sessionId = chat.value?.sessionId ?: return
+        val address = chat.value?.address ?: return
         val expectedEpoch = followEpoch.get() + 1
         continuityRepairAttempts++
         if (continuityRepairAttempts > MAX_FOLLOW_ATTEMPTS) {
@@ -826,10 +853,10 @@ object Pocket {
             return
         }
         main.launch(start = CoroutineStart.UNDISPATCHED) {
-            try { refollow(c, sessionId, null) }
+            try { refollow(c, address, null) }
             catch (e: CancellationException) { throw e }
             catch (e: Exception) {
-                if (currentFollow(c, sessionId, expectedEpoch)) {
+                if (currentFollow(c, address, expectedEpoch)) {
                     errors.tryEmit(e.message ?: "会话重新同步失败，请重新打开会话")
                 }
             }
@@ -853,11 +880,12 @@ object Pocket {
         return old
     }
 
-    private fun currentFollow(c: PocketClient, sessionId: String, epoch: Long): Boolean =
-        client === c && chat.value?.sessionId == sessionId && followEpoch.get() == epoch
+    private fun currentFollow(c: PocketClient, address: SessionAddress, epoch: Long): Boolean =
+        client === c && chat.value?.address == address && followEpoch.get() == epoch
 
-    private suspend fun refollow(c: PocketClient, sessionId: String, afterSeq: Long?) {
-        if (client !== c || chat.value?.sessionId != sessionId) return
+    private suspend fun refollow(c: PocketClient, address: SessionAddress, afterSeq: Long?) {
+        if (client !== c || chat.value?.address != address) return
+        val sessionId = address.sessionId
         val epoch = followEpoch.incrementAndGet()
         val old = detachFollow()
         try {
@@ -866,7 +894,7 @@ object Pocket {
                 catch (e: CancellationException) { throw e }
                 catch (_: Exception) { /* The old subscription is already locally detached. */ }
             }
-            if (!currentFollow(c, sessionId, epoch)) return
+            if (!currentFollow(c, address, epoch)) return
             val attempts = (followAttempts[sessionId] ?: 0) + 1
             if (attempts > MAX_FOLLOW_ATTEMPTS) {
                 errors.tryEmit("会话同步失败（已重试 $MAX_FOLLOW_ATTEMPTS 次）")
@@ -875,8 +903,8 @@ object Pocket {
             }
             followAttempts[sessionId] = attempts
             pendingFollowEpoch = epoch
-            val sid = c.follow(sessionId, afterSeq)
-            if (!currentFollow(c, sessionId, epoch)) {
+            val sid = c.follow(address, afterSeq)
+            if (!currentFollow(c, address, epoch)) {
                 // A newer selection won while the Host was opening this subscription.
                 try { c.unfollow(sid) }
                 catch (e: CancellationException) { throw e }
@@ -887,11 +915,11 @@ object Pocket {
             pendingFollowEpoch = null
             val buffered = stray.remove(sid)
             stray.clear()
-            buffered?.forEach { if (currentFollow(c, sessionId, epoch)) applyFrame(it["frame"]) }
+            buffered?.forEach { if (currentFollow(c, address, epoch)) applyFrame(it["frame"]) }
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            if (currentFollow(c, sessionId, epoch)) throw e
+            if (currentFollow(c, address, epoch)) throw e
         } finally {
             if (pendingFollowEpoch == epoch) {
                 pendingFollowEpoch = null
@@ -939,7 +967,7 @@ object Pocket {
         }
     }
 
-    private fun initializeChat(sessionId: String, seed: FirstPrompt? = null) {
+    private fun initializeChat(sessionId: String, seed: FirstPrompt? = null, address: SessionAddress = SessionAddress(sessionId)) {
         transcriptPublisher.cancel()
         continuityRepairAttempts = 0
         followAttempts.remove(sessionId)
@@ -952,27 +980,66 @@ object Pocket {
         resetFeedback()
         seed?.let { reducer.echo(it.text, it.requestId) }
         chat.value = ChatState(sessionId, items = reducer.items(), running = reducer.running,
-            title = sessions.value.firstOrNull { it.sessionId == sessionId }?.title)
+            title = sessions.value.firstOrNull { it.sessionId == sessionId }?.title, address = address)
+        publishTeam()
     }
 
     fun openSession(sessionId: String) = main.launch {
+        val known = teamStore.address(sessionId)
+        val row = sessions.value.firstOrNull { it.sessionId == sessionId }
+        val address = known ?: if (row?.origin == "subagent") {
+            val parent = row.parentSessionId
+            if (parent == null) {
+                errors.tryEmit("子智能体缺少父会话地址")
+                return@launch
+            }
+            SessionAddress(sessionId, parent, "unknown")
+        } else SessionAddress(sessionId)
+        openSession(address).join()
+    }
+
+    fun openTeammate(member: AgentTeamMember) = main.launch {
+        if (member.canOpen) member.address?.let { openSession(it).join() }
+    }
+
+    fun openSession(address: SessionAddress) = main.launch {
+        val sessionId = address.sessionId
         clearFirstPrompt()
-        initializeChat(sessionId)
+        initializeChat(sessionId, address = address)
         val c = client ?: return@launch
-        runCatching { refollow(c, sessionId, null) }
+        runCatching { refollow(c, address, null) }
             .onFailure {
                 if (it is CancellationException) throw it
-                if (client === c && chat.value?.sessionId == sessionId) {
+                if (client === c && chat.value?.address == address) {
                     errors.tryEmit(it.message ?: "follow failed")
                     chat.value = chat.value?.copy(loaded = true)
                 }
             }
-        if (client !== c || chat.value?.sessionId != sessionId) return@launch
-        if ("permissions.get" in ops.value) runCatching {
+        if (client !== c || chat.value?.address != address) return@launch
+        refreshParentProjections(c, address)
+        if (!address.isSubagent && "permissions.get" in ops.value) runCatching {
             val current = c.permission(sessionId)
             if (client === c && chat.value?.sessionId == sessionId) permission.value = permission.value + (sessionId to current)
         }
-        if ("feedback.get" in ops.value) loadFeedback(sessionId)
+        if (!address.isSubagent && "feedback.get" in ops.value) loadFeedback(sessionId)
+    }
+
+    private suspend fun refreshParentProjections(c: PocketClient, address: SessionAddress) {
+        val parent = address.parentSessionId ?: return
+        if ("sessions.projections" !in ops.value) return
+        try {
+            val projection = c.sessionProjections(teamStore.address(parent) ?: SessionAddress(parent))
+            if (client === c && chat.value?.address == address) {
+                teamStore.baseline(parent, projection)
+                teamStore.address(address.sessionId)?.takeIf { it.parentSessionId == parent }?.let {
+                    chat.value = chat.value?.copy(address = it)
+                }
+                publishTeam()
+            }
+        } catch (e: CancellationException) { throw e }
+        catch (e: Exception) {
+            if (client === c && chat.value?.address == address) errors.tryEmit(e.message ?: "团队信息加载失败")
+        }
     }
 
     /**
@@ -989,12 +1056,12 @@ object Pocket {
         try {
             val req = HistoryPagingPolicy.pageRequest(reducer.cursor, st.firstSeq)
             val page = c.historyPage(
-                sessionId = st.sessionId,
+                address = st.address,
                 throughSeq = req.throughSeq,
                 beforeSeq = req.beforeSeq,
                 maxMessages = req.maxMessages,
             )
-            if (!currentFollow(c, st.sessionId, epoch) || reducer !== historyReducer) return@launch
+            if (!currentFollow(c, st.address, epoch) || reducer !== historyReducer) return@launch
             reducer.prepend(page["records"], page["hasMore"].bool() ?: false)
             inspectorLog.prepend(page["records"])
             chat.value = chat.value?.copy(
@@ -1011,7 +1078,7 @@ object Pocket {
             )
         } catch (e: Exception) {
             if (e is CancellationException) throw e
-            if (!currentFollow(c, st.sessionId, epoch) || reducer !== historyReducer) return@launch
+            if (!currentFollow(c, st.address, epoch) || reducer !== historyReducer) return@launch
             errors.tryEmit(e.message ?: "加载历史失败")
             chat.value = chat.value?.copy(loadingOlder = false)
         }
@@ -1051,6 +1118,7 @@ object Pocket {
         followEpoch.incrementAndGet()
         val old = detachFollow()
         chat.value = null
+        publishTeam()
         resetFeedback()
         inspectorLog = SessionInspectorLog()
         if (old != null) client?.let { c ->
@@ -1125,7 +1193,7 @@ object Pocket {
             }
             if (!current()) return@launch
             // New sessions have no feedback to fetch; follow projections own permission reads.
-            refollow(c, id, null)
+            refollow(c, SessionAddress(id), null)
             if (!current()) return@launch
             c.prompt(id, text, "queue", requestId = first.requestId)
             if (current()) {
@@ -1148,6 +1216,10 @@ object Pocket {
         images: List<PromptImage> = emptyList(),
         files: List<PromptFile> = emptyList(),
     ) {
+        if (!st.canControl || st.address.isSubagent && files.isNotEmpty()) {
+            errors.tryEmit(if (!st.canControl) "此子智能体仅支持查看历史" else "子智能体续聊不支持文件附件")
+            return
+        }
         val target = reducer
         val requestId = UUID.randomUUID().toString()
         val mode = if (st.running) prefs.busySend.mode else "queue"
@@ -1162,7 +1234,7 @@ object Pocket {
         target.echo(text, requestId, mode, images = images.size, files = files.size)
         syncEcho()
         try {
-            c.prompt(st.sessionId, text, mode, images, files, requestId = requestId)
+            c.prompt(st.address, text, mode, images, files, requestId = requestId)
         } catch (e: Exception) {
             target.discardEcho(requestId)
             syncEcho()
@@ -1185,6 +1257,7 @@ object Pocket {
             chat.value?.sessionId == sessionId && followEpoch.get() == epoch
         if (!current()) return@launch
         try {
+            check(chat.value?.canControl == true) { "此子智能体仅支持查看历史" }
             check(c != null && status.value[active.value] == Dot.Online) { "未连接到主机" }
             check("queue.update" in ops.value) { "主机不支持修改排队消息" }
             val row = target.queueMessages().firstOrNull { it.id == itemId }
@@ -1217,6 +1290,7 @@ object Pocket {
     /** dsh titles a session asynchronously after the first turn; the list is the source of truth. */
     private suspend fun refreshTitles(c: PocketClient) = runCatching {
         sessions.value = c.listSessions().sortedByDescending { it.updatedAt }
+        publishTeam()
         chat.value?.let { st -> sessions.value.firstOrNull { it.sessionId == st.sessionId }?.title?.let { t -> chat.value = st.copy(title = t) } }
     }
 
@@ -1224,7 +1298,7 @@ object Pocket {
     fun cancel() = main.launch {
         val st = chat.value ?: return@launch
         val c = client ?: return@launch errors.tryEmit("未连接").let { }
-        runCatching { c.cancel(st.sessionId) }
+        runCatching { c.cancel(st.address) }
             .onFailure { errors.tryEmit(it.message ?: "终止失败") }
     }
 
@@ -1240,6 +1314,7 @@ object Pocket {
         val projectionSeq = modelProjectionSeq
         _modelPending.value = m
         try {
+            chat.value?.takeIf { it.sessionId == sessionId }?.address?.requireControl()
             val response = c.selectModel(sessionId, m.provider, m.model, m.effort)
             val selected = modelChoice(response["selected"]) ?: error("主机未返回已应用的模型")
             if (client === c && modelSelectionEpoch.get() == epoch) {
@@ -1275,6 +1350,7 @@ object Pocket {
         }
         permissionChanging.value = true
         try {
+            chat.value?.takeIf { it.sessionId == sessionId }?.address?.requireControl()
             val selected = c.setPermission(sessionId, name)
             if (client === c) {
                 permission.value = permission.value + (sessionId to selected)
@@ -1411,6 +1487,7 @@ object Pocket {
     suspend fun mutateGoal(sessionId: String, action: String, ref: JsonObject, objective: String? = null): JsonElement {
         require(action in setOf("edit", "pause", "resume", "clear"))
         val c = requireClient()
+        chat.value?.takeIf { it.sessionId == sessionId }?.address?.requireControl()
         val activationEpoch = goalActivationEpoch
         val response = c.call("goals.$action", jsonOf("sessionId" to sessionId, "ref" to ref, "request" to jsonOf("objective" to objective)))
         if (client === c && chat.value?.sessionId == sessionId && goalActivationEpoch == activationEpoch) {
@@ -1451,6 +1528,7 @@ object Pocket {
 
     fun executeCommand(line: String, onResult: (Boolean) -> Unit = {}) = mutation(onResult) { c ->
         val st = chat.value ?: error("无会话")
+        st.address.requireControl()
         val result = c.executeCommand(st.sessionId, line)["result"]
         check(result["kind"].str() != "error") { result["text"].str() ?: "指令失败" }
         result["text"].str()?.takeIf { it.isNotBlank() }?.let { notices.tryEmit(it) }
@@ -1506,6 +1584,9 @@ object Pocket {
         val c = client ?: return null
         if (!hasOp("attachments.upload")) return null
         return runCatching {
+            check(chat.value?.takeIf { it.sessionId == sessionId }?.address?.isSubagent != true) {
+                "子智能体续聊不支持文件附件"
+            }
             UploadReceipt.parse(
                 c.uploadAttachment(sessionId, Base64.encodeToString(bytes, Base64.NO_WRAP), name),
             )
@@ -1689,6 +1770,7 @@ object Pocket {
 
     fun answerUserQuestion(callId: String, answers: List<JsonObject>, onResult: (Boolean) -> Unit = {}) = mutation(onResult) { c ->
         val st = chat.value ?: error("无会话")
+        st.address.requireControl()
         check(c.answerUserQuestion(st.sessionId, callId, answers)["accepted"].bool() == true) { "提问已变化或答案未被接受" }
         if (client === c) {
             questionStore.submitted(st.sessionId, callId)

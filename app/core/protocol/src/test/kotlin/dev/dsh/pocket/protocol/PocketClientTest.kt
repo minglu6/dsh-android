@@ -111,6 +111,80 @@ class PocketClientTest {
         field.isAccessible = true
         return (field.get(client) as Map<*, *>).size
     }
+
+    @Test fun durableChildAddressSurvivesEveryTranscriptAndControlRequest() = runTest {
+        withClient { client, transport ->
+            transport.onSend = {
+                val request = transport.requests.last()
+                transport.reply(request, jsonOf("subId" to "child-follow"))
+            }
+            val child = SessionAddress("child", "parent", "continuable")
+            client.follow(child, afterSeq = 17)
+            client.historyPage(child, throughSeq = 17, beforeSeq = 5)
+            client.sessionProjections(child)
+            client.prompt(child, "continue", "queue", requestId = "request")
+            client.cancel(child)
+            val addressed = transport.requests.filter { it["op"].str() != "hello" }
+            assertEquals(listOf("follow", "history.page", "sessions.projections", "prompt", "cancel"),
+                addressed.map { it["op"].str() })
+            addressed.forEach { request ->
+                assertEquals("child", request["args"]["sessionId"].str())
+                assertEquals("parent", request["args"]["parentSessionId"].str())
+                assertEquals("continuable", request["args"]["subagentMode"].str())
+            }
+            client.follow(SessionAddress("parent"))
+            val root = transport.requests.last()["args"] as JsonObject
+            assertEquals("parent", root["sessionId"].str())
+            assertFalse(root.containsKey("parentSessionId"))
+            assertFalse(root.containsKey("subagentMode"))
+        }
+    }
+
+    @Test fun oneShotAndUnknownChildrenRejectControlBeforeSendingAnyRpc() = runTest {
+        withClient { client, transport ->
+            val initial = transport.requests.size
+            listOf("one-shot", "unknown").forEach { mode ->
+                val address = SessionAddress("child", "parent", mode)
+                assertEquals("subagent/read-only", assertFailsWith<PocketError> {
+                    client.prompt(address, "unsupported", "queue")
+                }.code)
+                assertEquals("subagent/read-only", assertFailsWith<PocketError> { client.cancel(address) }.code)
+            }
+            assertEquals("subagent/attachment-invalid", assertFailsWith<PocketError> {
+                client.prompt(SessionAddress("child", "parent", "continuable"), "file", "queue",
+                    files = listOf(PromptFile("receipt")))
+            }.code)
+            assertEquals(initial, transport.requests.size)
+        }
+    }
+
+    @Test fun partialOrSelfParentAddressesAreRejectedInsteadOfBecomingRoots() {
+        assertFailsWith<IllegalArgumentException> { SessionAddress("child", "parent") }
+        assertFailsWith<IllegalArgumentException> { SessionAddress("child", subagentMode = "unknown") }
+        assertFailsWith<IllegalArgumentException> { SessionAddress("child", "child", "continuable") }
+        assertFailsWith<IllegalArgumentException> { SessionAddress("child", "parent", "external") }
+    }
+
+    @Test fun replacementConnectionUsesTheSavedChildAddressNotItsBareId() = runTest {
+        val client = PocketClient(backgroundScope)
+        val first = FakeTransport()
+        val replacement = FakeTransport()
+        val address = SessionAddress("child", "parent", "continuable")
+        try {
+            client.connect(TransportFactory { first }, Auth.Token("first"))
+            first.onSend = { first.reply(first.requests.last(), jsonOf("subId" to "first")) }
+            client.follow(address)
+            client.connect(TransportFactory { replacement }, Auth.Token("replacement"))
+            replacement.onSend = { replacement.reply(replacement.requests.last(), jsonOf("subId" to "replacement")) }
+            client.follow(address, afterSeq = 42)
+            val request = replacement.requests.last()
+            assertEquals("parent", request["args"]["parentSessionId"].str())
+            assertEquals("child", request["args"]["sessionId"].str())
+            assertEquals("continuable", request["args"]["subagentMode"].str())
+            assertEquals(42L, request["args"]["afterSeq"].long())
+            assertTrue(first.closed)
+        } finally { client.close() }
+    }
     @Test fun officeCancellationBeforeRenderReplyReleasesTheRequestedHandle() = runTest {
         withClient { client, transport ->
             transport.onSend = {

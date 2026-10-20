@@ -128,3 +128,37 @@ test('question continuation and queued reply projections reach only the owning s
   assert.deepEqual(a.frames[3].frame.value.active, [])
   assert.equal(b.frames.length, 1)
 })
+
+test('team and child catalog changes follow the initial sequence cut, including withdrawal', { timeout: 10000 }, async t => {
+  let release
+  const gate = new Promise(resolve => { release = resolve })
+  t.after(() => release())
+  const { server, url } = await start(t, () => gate)
+  const c = await connect(url)
+  t.after(() => c.ws.terminate())
+  await c.call('follow', { sessionId: 'parent' })
+  const catalog = [{ id: 'child', mode: 'continuable', label: 'Research', createdAt: 123 }]
+  const team = { members: [{ id: 'parent', name: 'lead', role: 'lead', phase: 'active' }], tasks: [] }
+  // Covered by the opening snapshot: must not restore stale header state.
+  server.broadcastProjection('parent', 'agentTeam', null, 9)
+  server.broadcastProjection('parent', 'subagentCatalog', catalog, 11)
+  server.broadcastProjection('other-parent', 'subagentCatalog', [], 12)
+  await c.barrier()
+  assert.equal(c.frames.length, 0)
+  release()
+  await c.frameCount(2)
+  await c.barrier()
+  assert.equal(c.frames.length, 2)
+  assert.equal(c.frames[0].frame.projections.asOfSeq, 10)
+  assert.deepEqual(c.frames[1].frame, {
+    type: 'projection', sessionId: 'parent', key: 'subagentCatalog', value: catalog, seq: 11,
+  })
+  server.broadcastProjection('parent', 'agentTeam', team, 12)
+  server.broadcastProjection('parent', 'subagentCatalog', [], 13)
+  server.broadcastProjection('parent', 'subagentCatalog', undefined, 14)
+  server.broadcastProjection('parent', 'agentTeam', undefined, 15)
+  await c.barrier()
+  assert.deepEqual(c.frames.slice(2).map(({ frame }) => [frame.key, frame.value, frame.seq]), [
+    ['agentTeam', team, 12], ['subagentCatalog', [], 13], ['subagentCatalog', null, 14], ['agentTeam', null, 15],
+  ])
+})

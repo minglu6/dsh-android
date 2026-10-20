@@ -70,6 +70,7 @@ export function apply(ctx, config = {}) {
   let taskFallback = null
   const server = createPocketServer({
     sessionController: ctx.sessionController, token, host: bindHost, port, devices, pairing,
+    getSubagents: () => ctx.get('subagents'),
     info: {
       plugin: PKG.name,
       version: PKG.version,

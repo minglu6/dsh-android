@@ -255,15 +255,24 @@ class PocketClient(
     suspend fun createSession(cwd: String? = null, agentPreset: String? = null, workspaceId: String? = null): String =
         call("sessions.create", jsonOf("cwd" to cwd, "agentPreset" to agentPreset, "workspaceId" to workspaceId))["sessionId"].str() ?: throw PocketError("bad-reply", "no sessionId")
     suspend fun prompt(
-        sessionId: String,
+        sessionId: String, text: String, mode: String, images: List<PromptImage> = emptyList(),
+        files: List<PromptFile> = emptyList(), requestId: String? = null,
+    ) = prompt(SessionAddress(sessionId), text, mode, images, files, requestId)
+    suspend fun prompt(
+        address: SessionAddress,
         text: String,
         mode: String,
         images: List<PromptImage> = emptyList(),
         files: List<PromptFile> = emptyList(),
         requestId: String? = null,
-    ) =
-        call("prompt", buildJsonObject {
-            put("sessionId", sessionId); put("text", text); put("mode", mode)
+    ): JsonElement {
+        address.requireControl()
+        if (address.isSubagent && files.isNotEmpty()) {
+            throw PocketError("subagent/attachment-invalid", "子智能体续聊不支持文件附件")
+        }
+        return call("prompt", buildJsonObject {
+            address.arguments().forEach { (key, value) -> put(key, value) }
+            put("text", text); put("mode", mode)
             requestId?.let { put("requestId", it) }
             if (images.isNotEmpty()) putJsonArray("images") {
                 images.forEach { img ->
@@ -277,6 +286,7 @@ class PocketClient(
                 files.forEach { f -> add(buildJsonObject { put("receiptId", f.receiptId) }) }
             }
         })
+    }
     suspend fun updateQueuedPrompt(sessionId: String, itemId: String, action: QueueAction): JsonElement =
         call("queue.update", buildJsonObject {
             put("sessionId", sessionId)
@@ -294,7 +304,11 @@ class PocketClient(
                 }
             })
         })
-    suspend fun cancel(sessionId: String) = call("cancel", jsonOf("sessionId" to sessionId))
+    suspend fun cancel(sessionId: String) = cancel(SessionAddress(sessionId))
+    suspend fun cancel(address: SessionAddress): JsonElement {
+        address.requireControl()
+        return call("cancel", address.arguments())
+    }
     suspend fun executeCommand(sessionId: String, line: String): JsonElement =
         call("commands.execute", jsonOf("sessionId" to sessionId, "line" to line))
     suspend fun exportSession(sessionId: String, includeDescendants: Boolean = true): JsonElement =
@@ -446,21 +460,26 @@ class PocketClient(
             ),
         )
     suspend fun follow(sessionId: String, afterSeq: Long? = null, maxMessages: Int? = null): String =
-        call("follow", jsonOf("sessionId" to sessionId, "afterSeq" to afterSeq, "maxMessages" to maxMessages))["subId"].str() ?: ""
+        follow(SessionAddress(sessionId), afterSeq, maxMessages)
+    suspend fun follow(address: SessionAddress, afterSeq: Long? = null, maxMessages: Int? = null): String =
+        call("follow", JsonObject(address.arguments() + jsonOf("afterSeq" to afterSeq, "maxMessages" to maxMessages)))["subId"].str() ?: ""
+    suspend fun sessionProjections(address: SessionAddress): JsonElement =
+        call("sessions.projections", address.arguments())
     /** Load older turns above the current snapshot window (desktop history.page). */
+    suspend fun historyPage(sessionId: String, throughSeq: Long, beforeSeq: Long? = null, maxMessages: Int = 100): JsonElement =
+        historyPage(SessionAddress(sessionId), throughSeq, beforeSeq, maxMessages)
     suspend fun historyPage(
-        sessionId: String,
+        address: SessionAddress,
         throughSeq: Long,
         beforeSeq: Long? = null,
         maxMessages: Int = 100,
     ): JsonElement = call(
         "history.page",
-        jsonOf(
-            "sessionId" to sessionId,
+        JsonObject(address.arguments() + jsonOf(
             "throughSeq" to throughSeq,
             "beforeSeq" to beforeSeq,
             "maxMessages" to maxMessages,
-        ),
+        )),
     )
     suspend fun unfollow(subId: String) = call("unfollow", jsonOf("subId" to subId))
     suspend fun answerApproval(approvalId: String, outcome: String) =

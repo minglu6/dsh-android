@@ -211,7 +211,8 @@ Packages: `ui-conversation` (header shell), `ui-agent-preset`, experimental `cli
 |---|---|---|
 | Title / lineage | workspace `session.untitled` 未命名; aria `session.hierarchy` 会话层级 | `displayTitle` + subagent ancestry; open parent via workspace |
 | Tabs | `view.chat` 对话 (+ trajectory — out of scope) | Conversation Views |
-| 智能体团队 | agent-team `trigger` 智能体团队 | header action order −20; projection `agentTeam` |
+| 智能体团队 | agent-team `trigger` 智能体团队 | header-anchored, outside/back-dismissable popup; authoritative `agentTeam` members and shared tasks, separate from the child catalog |
+| 子智能体 | subagent count / switcher | separate `subagentCatalog` menu; opens the exact durable parent/child/mode address and supports returning to the parent |
 | Agent 预设 chip | agent-preset names + `headerHint` | read-only mid-session (`agentPreset` projection) |
 | 后台任务 chip | job `count.live.*` / `list.aria` 后台任务 | **header** action (not right-panel guide); `ctx.jobs` |
 | 提醒 | schedule catalog `trigger.label` 提醒 | header utility; opens schedule tab |
@@ -221,6 +222,8 @@ Packages: `ui-conversation` (header shell), `ui-agent-preset`, experimental `cli
 
 Phone note: Android currently also puts rename + stats into the ⋯ sheet for reachability; desktop keeps rename on the sidebar row.
 The Android composer dock uses authoritative whole-log `sessionStats` and `tokenUsage` plus Host context-pressure/breakdown projections. Compact displays speed/cache/context readings; Detailed adds counts and inspection dialogs. The permission trigger is intentionally icon-only on phones; its menu is the live Host catalog, including acknowledged current-session auto review when available.
+
+Android's team popup uses the desktop member cards, compact single-member layout, current-chat capsule and shared-task board instead of a bottom sheet. Ordinary subagents are not team members. The existing “地面洞察报告生成逻辑梳理与 Agent Skill 准备” desktop conversation was compared read-only: its team contains only `lead`, while its separate catalog has six continuable children. A native 412dp Robolectric smoke against that same running Host clicked all six child entries, loaded their histories, and returned to the root without navigation errors. Historical Qoder `INVALID_REQUEST` failures remain visible and are not navigation failures. The physical phone was not connected during this verification.
 
 
 ---

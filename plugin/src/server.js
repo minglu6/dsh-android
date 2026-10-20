@@ -72,13 +72,44 @@ export function followMaxMessages(args = {}) {
   return args.maxMessages
 }
 
+/** Preserve ordinary-session routing; direct children require their durable address. */
+export function sessionAddress(args) {
+  need(str(args.sessionId), 'sessionId required')
+  if (args.parentSessionId === undefined && args.subagentMode === undefined) {
+    return { kind: 'session', sessionId: args.sessionId }
+  }
+  need(str(args.parentSessionId) && args.parentSessionId !== args.sessionId, 'parentSessionId must name a different session')
+  need(['one-shot', 'continuable', 'unknown'].includes(args.subagentMode), 'subagentMode must be one-shot, continuable, or unknown')
+  return { kind: 'subagent', parentSessionId: args.parentSessionId, childSessionId: args.sessionId, mode: args.subagentMode }
+}
+
+function childController(address, getSubagents, method) {
+  need(address.mode === 'continuable', 'only continuable subagents accept prompt or cancel')
+  const controller = getSubagents()
+  if (typeof controller?.[method] !== 'function') {
+    throw new OpError('subagent/control-unavailable', `Host subagents.${method} is unavailable`)
+  }
+  return controller
+}
+
 /** Build the op table over an in-process sessionController. */
-export function createOps(sc, { timeZone } = {}) {
+export function createOps(sc, { timeZone, getSubagents = () => undefined } = {}) {
   const tz = timeZone ?? Intl.DateTimeFormat().resolvedOptions().timeZone
   return {
     'sessions.list': async (a, signal) => slimSessionsList(
       await sc.list({ ...(str(a.cursor) ? { cursor: a.cursor } : {}) }, signal),
     ),
+    ...(typeof sc.projections === 'function' ? {
+      'sessions.projections': async (a, signal) => {
+        const address = sessionAddress(a)
+        if (address.kind === 'subagent') {
+          // An empty-prefix read validates durable parent ownership and identity
+          // without activating an Agent or loading a transcript into the reply.
+          await sc.page({ address, throughSeq: -1, maxMessages: 1 }, signal)
+        }
+        return sc.projections({ sessionId: a.sessionId }, signal)
+      },
+    } : {}),
     'sessions.create': (a) => sc.create({
       ...(str(a.cwd) ? { cwd: a.cwd } : {}),
       ...(str(a.workspaceId) ? { workspaceId: a.workspaceId } : {}),
@@ -103,7 +134,7 @@ export function createOps(sc, { timeZone } = {}) {
       })
     },
     prompt: (a, signal) => {
-      need(str(a.sessionId), 'sessionId required')
+      const address = sessionAddress(a)
       need(a.mode === 'queue' || a.mode === 'steer', 'mode must be queue or steer')
       const content = []
       if (str(a.text)) content.push({ type: 'text', text: a.text })
@@ -117,20 +148,39 @@ export function createOps(sc, { timeZone } = {}) {
         content.push({ type: 'file', receiptId: file.receiptId })
       }
       need(content.length > 0, 'text, images, or files required')
+      const requestId = str(a.requestId) ? a.requestId : randomUUID()
+      if (address.kind === 'subagent') {
+        const subagents = childController(address, getSubagents, 'prompt')
+        if (content.some(part => part.type === 'file')) {
+          const error = new OpError('subagent/attachment-invalid', 'subagent continuation does not accept files')
+          error.details = { reason: 'SUBAGENT_FILE_UNSUPPORTED' }
+          throw error
+        }
+        return subagents.prompt({
+          requestId, parentSessionId: address.parentSessionId, childSessionId: address.childSessionId,
+          mode: 'continuable', delivery: a.mode, content, clientTimeZone: tz,
+        }, signal)
+      }
       return sc.prompt({
-        requestId: str(a.requestId) ? a.requestId : randomUUID(),
-        sessionId: a.sessionId, mode: a.mode, content, clientTimeZone: tz,
+        requestId, sessionId: a.sessionId, mode: a.mode, content, clientTimeZone: tz,
       }, signal)
     },
     'queue.update': (a) => {
       need(str(a.sessionId) && str(a.itemId) && a.action !== undefined, 'sessionId, itemId, action required')
       return sc.updateQueue({ sessionId: a.sessionId, itemId: a.itemId, action: a.action })
     },
-    cancel: (a) => { need(str(a.sessionId), 'sessionId required'); return sc.cancel({ sessionId: a.sessionId }) },
+    cancel: (a) => {
+      const address = sessionAddress(a)
+      if (address.kind === 'subagent') {
+        return childController(address, getSubagents, 'interruptByParent')
+          .interruptByParent(address.childSessionId, address.parentSessionId, 'continuable')
+      }
+      return sc.cancel({ sessionId: a.sessionId })
+    },
     'history.page': (a, signal) => {
       need(str(a.sessionId) && Number.isSafeInteger(a.throughSeq), 'sessionId and throughSeq required')
       return sc.page({
-        address: { kind: 'session', sessionId: a.sessionId }, throughSeq: a.throughSeq,
+        address: sessionAddress(a), throughSeq: a.throughSeq,
         ...(Number.isSafeInteger(a.beforeSeq) ? { beforeSeq: a.beforeSeq } : {}),
         ...(Number.isSafeInteger(a.maxMessages) ? { maxMessages: a.maxMessages } : {}),
       }, signal)
@@ -149,6 +199,7 @@ export function createOps(sc, { timeZone } = {}) {
 /**
  * @param {{sessionController: any, token: string, host?: string, port?: number,
  *   devices?: ReturnType<typeof createDeviceStore>, pairing?: ReturnType<typeof createPairing>,
+ *   getSubagents?: () => any,
  *   onSessionEvent?: (fn: (kind: string, args: unknown[]) => void) => () => void,
  *   heartbeatMs?: number, idleMs?: number, pairFailDelayMs?: number, info?: object}} opts
  */
@@ -159,7 +210,7 @@ export function createPocketServer(opts) {
   const heartbeatMs = opts.heartbeatMs ?? DEFAULT_HEARTBEAT_MS
   const idleMs = opts.idleMs ?? DEFAULT_IDLE_MS
   const pairFailDelayMs = opts.pairFailDelayMs ?? 200
-  const ops = createOps(sc)
+  const ops = createOps(sc, { getSubagents: opts.getSubagents })
   const completion = new CompletionTracker({ initializing: true })
   const completionSeed = new AbortController()
   let hostUi
@@ -212,7 +263,7 @@ export function createPocketServer(opts) {
   const authedClients = () => [...clients].filter((c) => c.device)
   const broadcast = (m) => { for (const c of authedClients()) c.push(m) }
   const unsubscribeCompletion = completion.subscribe((snapshot) => broadcast({ ev: 'completion', ...snapshot }))
-  const projectionKeys = new Set(['sessionStats', 'tokenUsage', 'contextPressure', 'contextBreakdown', 'permissions', 'modelSelection', 'agentPreset', 'goal', 'plan', 'userQuestions', 'inbox'])
+  const projectionKeys = new Set(['sessionStats', 'tokenUsage', 'contextPressure', 'contextBreakdown', 'permissions', 'modelSelection', 'agentPreset', 'goal', 'plan', 'userQuestions', 'inbox', 'agentTeam', 'subagentCatalog'])
   // Follow's snapshot is the baseline. Hold newer projections until it is sent,
   // including while a reconnect snapshot is paged or trimmed for the wire.
   const followProjections = new WeakMap()
@@ -392,7 +443,7 @@ export function createPocketServer(opts) {
     const args = msg.args && typeof msg.args === 'object' ? msg.args : {}
     try {
       if (msg.op === 'follow') {
-        need(str(args.sessionId), 'sessionId required')
+        sessionAddress(args)
         need(args.afterSeq === undefined || Number.isSafeInteger(args.afterSeq), 'afterSeq must be an integer')
         need(args.maxMessages === undefined || (Number.isSafeInteger(args.maxMessages) && args.maxMessages > 0), 'maxMessages must be a positive integer')
         const subId = `s${client.nextSub++}`
@@ -434,7 +485,7 @@ export function createPocketServer(opts) {
     // Fill a gap between afterSeq and the snapshot window with history pages (bounded).
     let before = firstSeq
     for (let i = 0; !complete && before !== undefined && i < 10; i++) {
-      const page = await sc.page({ address: { kind: 'session', sessionId: args.sessionId }, throughSeq: snapshot.cursor, beforeSeq: before, maxMessages: 200 }, signal)
+      const page = await sc.page({ address: sessionAddress(args), throughSeq: snapshot.cursor, beforeSeq: before, maxMessages: 200 }, signal)
       const recs = page.records ?? []
       if (recs.length === 0) break
       tail = [...recs.filter((r) => eventSeq(r) > after), ...tail]
@@ -450,7 +501,7 @@ export function createPocketServer(opts) {
     try {
       const maxMessages = followMaxMessages(args)
       const it = sc.follow({
-        address: { kind: 'session', sessionId: args.sessionId }, assistantStream: true,
+        address: sessionAddress(args), assistantStream: true,
         ...(maxMessages === undefined ? {} : { maxMessages }),
       }, ac.signal)
       let first = true
@@ -465,7 +516,11 @@ export function createPocketServer(opts) {
         const projectionState = followProjections.get(ac)
         if (projectionState && !projectionState.ready) {
           projectionState.ready = true
-          for (const update of projectionState.pending.values()) client.push({ ev: 'follow', subId, frame: update })
+          const baselineSeq = frame.projections?.asOfSeq
+          for (const update of projectionState.pending.values()) {
+            if (Number.isSafeInteger(baselineSeq) && update.seq <= baselineSeq) continue
+            client.push({ ev: 'follow', subId, frame: update })
+          }
           projectionState.pending.clear()
         }
       }

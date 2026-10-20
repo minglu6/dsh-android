@@ -22,7 +22,7 @@ Plugin surface: `dsh-plugin-pocket` WebSocket ops (+ optional Cordis injects).
 | Message copy / clock / branch | IconActions + `sessions.fork` | implement | done | Desktop locale; plugin `sessions.fork`. |
 | Turn error / max-tokens / stopped | chat notices | implement | done | Official `message.*` failure/stopped/retry copy. |
 | Full inventory | — | — | see [desktop-parity.md](desktop-parity.md) | Gap matrix: feasible / needs-plugin / hide. |
-| Top-bar 智能体团队 | Experimental agent-team UI + subagent lineage via `parentSessionId` | implement | done | List parent + children from `sessions.list`; switch session. |
+| Top-bar 智能体团队 | Experimental agent-team `agentTeam` projection | implement | done | Anchored member/task popup; current-chat capsule; separate subagent catalog and durable parent-address navigation. |
 | Top-bar Agent 预设 | Create-time preset; mid-session view | keep | done | Editable on new chat; view-only in session. |
 | Top-bar ⋯ 重命名 | `sessions.rename` | keep | done | |
 | Top-bar ⋯ 会话统计 | From projections / usage | keep | done | |

@@ -493,21 +493,6 @@ fun JobsSheet(sessionId: String, onDismiss: () -> Unit) {
     }
 }
 
-@Composable
-fun TeamSheet(onDismiss: () -> Unit) {
-    val chat = Pocket.chat.collectAsState().value
-    val sessions = Pocket.sessions.collectAsState().value
-    val active by Pocket.active.collectAsState()
-    val status by Pocket.status.collectAsState()
-    val online = status[active] == Dot.Online
-    val children = sessions.filter { it.parentSessionId != null && it.parentSessionId == chat?.sessionId }
-    PocketSheet(onDismiss) {
-        SheetTitle("智能体团队")
-        OptionRow(chat?.title ?: "主智能体", "主会话", D.user, selected = true)
-        if (children.isEmpty()) Text("尚无子智能体", fontSize = 14.sp, color = T.Text3, modifier = Modifier.padding(horizontal = 22.dp, vertical = 12.dp))
-        children.forEach { s -> OptionRow(s.title ?: "子智能体", if (s.running) "运行中" else "空闲", D.user, enabled = online) { Pocket.openSession(s.sessionId); onDismiss() } }
-    }
-}
 
 /** The shared desktop command source: both the + launcher and slash typing use this menu. */
 @Composable

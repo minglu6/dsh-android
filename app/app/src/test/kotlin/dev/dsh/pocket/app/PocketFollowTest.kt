@@ -40,10 +40,10 @@ class PocketFollowTest {
         val fields = listOf("client", "subId", "pendingFollowEpoch", "reducer", "inspectorLog", "permissionProjectionSeq",
             "modelProjectionSeq", "modelUsesDefault", "firstPromptSessionId", "continuityRepairAttempts",
             "desiredViewedSession", "completionReadySession", "completionViewClient", "completionViewSession",
-            "feedbackGeneration", "feedbackLoaded").associateWith(::get)
+            "feedbackGeneration", "feedbackLoaded", "teamStore").associateWith(::get)
         val modelEpochs = listOf("modelCatalogEpoch", "modelSelectionEpoch").associateWith { (get(it) as AtomicLong).get() }
         val modelFlows = listOf("catalog", "model", "_catalogLoading", "_catalogError", "_modelPending",
-            "_firstPrompt", "permissionCatalog", "permissionCatalogLoading", "feedbackStatus", "feedbackPending", "feedbackFailures")
+            "_firstPrompt", "_team", "_subagents", "permissionCatalog", "permissionCatalogLoading", "feedbackStatus", "feedbackPending", "feedbackFailures")
             .associateWith { (get(it) as MutableStateFlow<Any?>).value }
         val epoch = get("followEpoch") as AtomicLong
         val originalEpoch = epoch.get()
@@ -88,6 +88,9 @@ class PocketFollowTest {
         put("continuityRepairAttempts", 0)
         put("reducer", TranscriptReducer())
         put("inspectorLog", SessionInspectorLog())
+        put("teamStore", AgentTeamStore())
+        (get("_team") as MutableStateFlow<AgentTeam?>).value = null
+        (get("_subagents") as MutableStateFlow<List<SubagentEntry>?>).value = null
         put("permissionProjectionSeq", -1L)
         put("modelProjectionSeq", -1L)
         put("modelUsesDefault", false)
@@ -198,6 +201,124 @@ class PocketFollowTest {
         snapshot("sub-B")
         reply(follow, """{"subId":"sub-B"}""")
         finish(opening)
+    }
+
+    private fun catalog(sub: String = "sub-A") = push(sub,
+        """{"type":"snapshot","sessionId":"A","cursor":10,"records":[],"projections":{"asOfSeq":10,"values":{
+          "agentTeam":{"members":[{"id":"A","name":"Lead","role":"lead","phase":"active"}],"tasks":[]},
+          "subagentCatalog":[{"id":"child","createdAt":1,"mode":"continuable","label":"Worker"}]
+        }}}""")
+
+    private fun assertChild(request: JsonObject) {
+        assertEquals("child", request["args"]["sessionId"].str())
+        assertEquals("A", request["args"]["parentSessionId"].str())
+        assertEquals("continuable", request["args"]["subagentMode"].str())
+    }
+
+    @Test fun catalogChildOpensWithParentAddressAndReturningLeadRestoresRoot() = runBlocking {
+        catalog()
+        assertEquals(listOf("Lead"), Pocket.team.value!!.members.map { it.name })
+        assertEquals("child", Pocket.subagents.value!!.single().id)
+        val opening = open("child")
+        reply(request("unfollow"), "{}")
+        val childFollow = request("follow")
+        assertChild(childFollow)
+        push("sub-child", """{"type":"snapshot","sessionId":"child","cursor":20,"records":[],"projections":{"asOfSeq":20,"values":{}}}""")
+        reply(childFollow, """{"subId":"sub-child"}""")
+        finish(opening)
+        assertEquals(SessionAddress("child", "A", "continuable"), Pocket.chat.value!!.address)
+        assertTrue(Pocket.chat.value!!.loaded)
+        val lead = Pocket.team.value!!.members.single()
+        assertTrue(lead.canOpen)
+        val returning = Pocket.openTeammate(lead).also { jobs += it }
+        reply(request("unfollow"), "{}")
+        val rootFollow = request("follow")
+        assertEquals("A", rootFollow["args"]["sessionId"].str())
+        assertNull(rootFollow["args"]["parentSessionId"])
+        assertNull(rootFollow["args"]["subagentMode"])
+        reply(rootFollow, """{"subId":"sub-root"}""")
+        finish(returning)
+        assertEquals(SessionAddress("A"), Pocket.chat.value!!.address)
+    }
+
+    @Test fun childContinuityRecoveryAndHistoryPagingRetainTheEntireAddress() = runBlocking {
+        val address = SessionAddress("child", "A", "continuable")
+        val opening = Pocket.openSession(address).also { jobs += it }
+        reply(request("unfollow"), "{}")
+        reply(request("follow").also(::assertChild), """{"subId":"child-stream"}""")
+        finish(opening)
+        push("child-stream", """{"type":"snapshot","sessionId":"child","cursor":20,"records":[
+          {"type":"event","event":{"seq":10,"time":1,"type":"turn/end","data":{"turn":1}}}
+        ],"hasMore":true,"projections":{"asOfSeq":20,"values":{}}}""")
+        val paging = Pocket.loadOlderHistory().also { jobs += it }
+        val history = request("history.page")
+        assertChild(history)
+        reply(history, """{"records":[],"hasMore":false}""")
+        finish(paging)
+        val end = PocketJson.parseToJsonElement("""{"ev":"follow.end","subId":"child-stream"}""").jsonObject
+        Pocket.javaClass.getDeclaredMethod("onPush", JsonObject::class.java).apply { isAccessible = true }.invoke(Pocket, end)
+        reply(request("unfollow"), "{}")
+        val recovery = request("follow")
+        assertChild(recovery)
+        reply(recovery, """{"subId":"child-recovered"}""")
+        // Actor barrier waits for the recovery opening and its buffered snapshot.
+        finish(Pocket.setViewedSession(null).also { jobs += it })
+        assertEquals(address, Pocket.chat.value!!.address)
+    }
+
+    @Test fun oneShotControlCannotSendOrCreateLocalEchoAndContinuableControlIsAddressed() = runBlocking {
+        Pocket.chat.value = ChatState("child", address = SessionAddress("child", "A", "one-shot"))
+        finish(Pocket.send("not supported").also { jobs += it })
+        finish(Pocket.cancel().also { jobs += it })
+        assertTrue(requests.tryReceive().isFailure)
+        assertTrue(Pocket.chat.value!!.items.isEmpty())
+        Pocket.chat.value = Pocket.chat.value!!.copy(address = SessionAddress("child", "A", "continuable"))
+        val sending = Pocket.send("continue").also { jobs += it }
+        reply(request("prompt").also(::assertChild), "{}")
+        finish(sending)
+        val stopping = Pocket.cancel().also { jobs += it }
+        reply(request("cancel").also(::assertChild), "{}")
+        finish(stopping)
+    }
+
+    @Test fun switchingTheSameChildIdBetweenParentsRejectsTheOldOpening() = runBlocking {
+        val firstAddress = SessionAddress("child", "first-parent", "one-shot")
+        val secondAddress = SessionAddress("child", "second-parent", "continuable")
+        val first = Pocket.openSession(firstAddress).also { jobs += it }
+        val oldUnfollow = request("unfollow")
+        val second = Pocket.openSession(secondAddress).also { jobs += it }
+        val selected = request("follow")
+        assertEquals("second-parent", selected["args"]["parentSessionId"].str())
+        push("second", """{"type":"snapshot","sessionId":"child","cursor":2,"records":[],"projections":{"asOfSeq":2,"values":{"title":"Selected child"}}}""")
+        reply(selected, """{"subId":"second"}""")
+        finish(second)
+        reply(oldUnfollow, "{}")
+        finish(first)
+        assertEquals(secondAddress, Pocket.chat.value!!.address)
+        assertEquals("Selected child", Pocket.chat.value!!.title)
+        assertTrue(requests.tryReceive().isFailure)
+    }
+
+    @Test fun summaryDiscoveredChildLoadsParentProjectionAndResolvesItsRealMode() = runBlocking {
+        Pocket.sessions.value = listOf(SessionSummary("child", "Worker", null, false, false, 1, "A", origin = "subagent"))
+        Pocket.ops.value = setOf("sessions.projections", "permissions.get", "feedback.get")
+        val opening = open("child")
+        reply(request("unfollow"), "{}")
+        val follow = request("follow")
+        assertEquals("A", follow["args"]["parentSessionId"].str())
+        assertEquals("unknown", follow["args"]["subagentMode"].str())
+        reply(follow, """{"subId":"child-stream"}""")
+        val projection = request("sessions.projections")
+        assertEquals("A", projection["args"]["sessionId"].str())
+        reply(projection, """{"kind":"sequenced","asOfSeq":3,"values":{
+          "agentTeam":{"members":[{"id":"A","name":"Lead","role":"lead","phase":"active"}],"tasks":[]},
+          "subagentCatalog":[{"id":"child","createdAt":1,"mode":"continuable","label":"Worker"}]
+        }}""")
+        finish(opening)
+        assertEquals(SessionAddress("child", "A", "continuable"), Pocket.chat.value!!.address)
+        assertEquals("Lead", Pocket.team.value!!.members.single().name)
+        // Root-only permission and feedback operations are not issued for children.
+        assertTrue(requests.tryReceive().isFailure)
     }
 
     private fun invalidateModels() {
