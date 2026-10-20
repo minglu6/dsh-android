@@ -396,7 +396,7 @@ fun ChatRoot(
             onMenu = if (showMenuButton) onMenu else null,
             onMore = { if (firstPrompt == null) sheet = Sheet.More },
             onPanel = { if (firstPrompt == null) sheet = Sheet.Panel },
-            onPreset = { if (firstPrompt == null) sheet = Sheet.Preset }, preset = presetLabel(chat?.agentPreset, presetRoster), onNew = { Pocket.closeChat() },
+            preset = presetLabel(chat?.agentPreset, presetRoster), onNew = { Pocket.closeChat() },
         )
         CompatibilityBanner(compatibility)
         val question = questions.firstOrNull { chat != null && (it.sessionId == null || it.sessionId == sid) }
@@ -420,7 +420,6 @@ fun ChatRoot(
             }
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                 Box(Modifier.weight(1f)) { Tabs(tab) { tab = it } }
-                if (chat != null) SubagentAction(st.sessionId)
                 if (chat != null) JobsAction(active, st.sessionId, dot == Dot.Online && "jobs.list" in ops) { sheet = Sheet.Jobs }
             }
             HorizontalDivider(color = T.Fill)
@@ -623,7 +622,7 @@ fun ChatRoot(
                     permissionDirectory?.find(value) != null,
             )
         }
-        Sheet.Preset -> PresetSheet(if (sid == null) effectivePreset else chat?.agentPreset.orEmpty(), editable = sid == null, onDismiss = { sheet = Sheet.None }) { draftPreset = it }
+        Sheet.Preset -> PresetSheet(effectivePreset, onDismiss = { sheet = Sheet.None }) { draftPreset = it }
 
         Sheet.More -> MoreSheet(chat, onDismiss = { sheet = Sheet.None }, onFeedback = { sheet = Sheet.Feedback }, onExport = { doExport() })
         Sheet.Panel -> PanelSheet(
@@ -688,7 +687,7 @@ fun ChatRoot(
 }
 
 @Composable
-private fun TopBar(title: String?, inChat: Boolean, onMenu: (() -> Unit)?, onMore: () -> Unit, onPanel: (() -> Unit)?, onPreset: () -> Unit, preset: String?, onNew: () -> Unit = {}) {
+private fun TopBar(title: String?, inChat: Boolean, onMenu: (() -> Unit)?, onMore: () -> Unit, onPanel: (() -> Unit)?, preset: String?, onNew: () -> Unit = {}) {
     val chat by Pocket.chat.collectAsState()
     val subagents by Pocket.subagents.collectAsState()
     val parent = chat?.address?.parentSessionId
@@ -706,18 +705,14 @@ private fun TopBar(title: String?, inChat: Boolean, onMenu: (() -> Unit)?, onMor
                         maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
             }
+            if (inChat) Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                chat?.sessionId?.let { TeamAction(it) }
+                preset?.let { SessionPresetLabel(it) }
+                chat?.sessionId?.let { SubagentAction(it) }
+            }
             IconButton(onMore, Modifier.size(48.dp)) { Icon(D.ellipsis, "更多", tint = T.Ink) }
             if (!inChat) IconButton(onNew, Modifier.size(48.dp)) { Icon(D.newChat, "新会话", tint = T.Ink) }
             if (onPanel != null) IconButton(onPanel, Modifier.size(48.dp)) { Icon(D.panelRight, "右侧面板", tint = T.Text2, modifier = Modifier.size(15.dp)) }
-        }
-        if (inChat) Row(
-            Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, bottom = 12.dp),
-            horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Box(Modifier.weight(1f)) { chat?.sessionId?.let { TeamAction(it) } }
-            Box(Modifier.weight(1f), contentAlignment = Alignment.CenterEnd) {
-                preset?.let { HeaderAction(D.agentPreset, it, onPreset) }
-            }
         }
         HorizontalDivider(color = T.Fill)
     }

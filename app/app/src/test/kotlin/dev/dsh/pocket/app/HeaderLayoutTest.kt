@@ -53,32 +53,39 @@ class HeaderLayoutTest {
     }
     @After fun cleanup() = restore()
 
-    @Test fun labeledActionsAlignToToolbarEdgesAndCountRemainsClickableOnNarrowPhone() {
+    @Test fun compactIconsAndCountShareTitleRowWithoutSqueezingNavigation() {
         rule.setContent { PocketTheme { ChatRoot({}) } }
-        val team = rule.onNodeWithText("智能体团队").assertIsDisplayed()
-        val preset = rule.onNodeWithText("标准模式").assertIsDisplayed()
+        val team = rule.onNodeWithContentDescription("智能体团队").assertIsDisplayed()
+        val preset = rule.onNodeWithContentDescription("标准模式").assertIsDisplayed().assertHasNoClickAction()
         val count = rule.onNodeWithContentDescription("6 个子智能体").assertIsDisplayed()
         val tab = rule.onNodeWithText("轨迹").assertIsDisplayed()
+        val title = rule.onNodeWithText("地面洞察报告生成逻辑梳理与 Agent Skill 准备").assertIsDisplayed()
+        rule.onNodeWithText("智能体团队").assertDoesNotExist()
+        rule.onNodeWithText("标准模式").assertDoesNotExist()
+        rule.onNodeWithText("子智能体 6").assertIsDisplayed()
         val teamBounds = team.getUnclippedBoundsInRoot()
         val presetBounds = preset.getUnclippedBoundsInRoot()
         val countBounds = count.getUnclippedBoundsInRoot()
         val tabBounds = tab.getUnclippedBoundsInRoot()
-        assertTrue(kotlin.math.abs(teamBounds.left.value - 16f) < .5f)
-        assertTrue(kotlin.math.abs(presetBounds.right.value - 344f) < .5f)
-        assertTrue(teamBounds.top == presetBounds.top && teamBounds.bottom == presetBounds.bottom)
-        assertTrue(teamBounds.right <= presetBounds.left)
-        assertTrue(teamBounds.bottom <= tabBounds.top)
-        assertTrue(countBounds.left >= tabBounds.right)
-        val countCenterY = (countBounds.top + countBounds.bottom) / 2
-        assertTrue(countCenterY >= tabBounds.top && countCenterY <= tabBounds.bottom)
-        assertTrue(countBounds.right.value <= 360f)
+        val titleBounds = title.getUnclippedBoundsInRoot()
+        assertTrue((titleBounds.right - titleBounds.left).value > 24f)
+        assertTrue(teamBounds.left >= titleBounds.right)
+        assertTrue(presetBounds.left >= teamBounds.right)
+        assertTrue(countBounds.left >= presetBounds.right)
+        assertTrue(presetBounds.right - presetBounds.left <= teamBounds.right - teamBounds.left)
+        for (bounds in listOf(teamBounds, presetBounds, countBounds)) {
+            assertTrue(bounds.bottom <= tabBounds.top)
+            val centerY = (bounds.top + bounds.bottom) / 2
+            assertTrue(centerY >= titleBounds.top && centerY <= titleBounds.bottom)
+        }
+        assertTrue(countBounds.right <= rule.onNodeWithContentDescription("更多").getUnclippedBoundsInRoot().left)
         team.performClick()
         rule.onNodeWithTag("teamPanel").assertIsDisplayed()
         androidx.test.espresso.Espresso.pressBack()
         count.performClick()
         rule.onNodeWithTag("subagentPanel").assertIsDisplayed()
         androidx.test.espresso.Espresso.pressBack()
-        preset.performClick()
-        rule.onNodeWithText("Agent 预设").assertIsDisplayed()
+        preset.performTouchInput { click() }
+        rule.onNodeWithText("Agent 预设").assertDoesNotExist()
     }
 }

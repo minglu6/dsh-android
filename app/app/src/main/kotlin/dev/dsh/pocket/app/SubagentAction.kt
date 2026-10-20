@@ -12,9 +12,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -31,13 +31,13 @@ internal fun SubagentAction(sessionId: String) {
     var open by remember(active, sessionId) { mutableStateOf(false) }
     val label = teamText("${entries.size} 个子智能体", "${entries.size} subagents")
     Box {
-        Row(Modifier.heightIn(min = 40.dp).clip(T.R8).clickable { open = true }.padding(horizontal = 10.dp)
+        Row(Modifier.heightIn(min = 28.dp).clip(T.R8).clickable { open = true }
             .semantics { contentDescription = label }, verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            Text(teamText("子智能体", "Subagents"), color = T.Text3, fontSize = 12.sp)
-            Text("${entries.size}", color = T.Text2, fontSize = 11.sp, fontWeight = FontWeight.Medium,
-                modifier = Modifier.clip(androidx.compose.foundation.shape.CircleShape).background(T.Fill).padding(horizontal = 6.dp, vertical = 1.dp))
-            Icon(D.chevronDown, null, tint = T.Text3, modifier = Modifier.size(12.dp))
+            horizontalArrangement = Arrangement.spacedBy(5.dp)) {
+            if (entries.any { it.status == "running" }) Box(Modifier.size(6.dp)
+                .clip(androidx.compose.foundation.shape.CircleShape).background(T.Accent))
+            Text(teamText("子智能体 ${entries.size}", "Subagents ${entries.size}"), color = T.Text2, fontSize = 14.sp, maxLines = 1)
+            Icon(D.chevronDown, null, tint = T.Text2, modifier = Modifier.size(12.dp).rotate(if (open) 180f else 0f))
         }
         if (open) HeaderPopup(336, 560, { open = false }) {
             SubagentPanel(entries, online, { address -> Pocket.openSession(address); open = false })

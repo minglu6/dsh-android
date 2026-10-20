@@ -161,7 +161,7 @@ private fun CodeBox(s: String, maxLines: Int = 20) {
 
 
 @Composable
-fun PresetSheet(cur: String, editable: Boolean, onDismiss: () -> Unit, onPick: (String) -> Unit) {
+fun PresetSheet(cur: String, onDismiss: () -> Unit, onPick: (String) -> Unit) {
     val roster by Pocket.presetRoster.collectAsState()
     val active by Pocket.active.collectAsState()
     val status by Pocket.status.collectAsState()
@@ -169,11 +169,10 @@ fun PresetSheet(cur: String, editable: Boolean, onDismiss: () -> Unit, onPick: (
     val avail = roster.filter { Pocket.prefs.showCodeWorkView || it["id"].str() !in setOf("minimal", "ptc") || it["id"].str() == cur }
     PocketSheet(onDismiss) {
         SheetTitle("Agent 预设")
-        if (!editable) Text("预设在创建会话时确定", fontSize = 13.sp, color = T.Text3, modifier = Modifier.padding(horizontal = 22.dp))
         if (avail.isEmpty()) Text("主机未提供预设目录", color = T.Text3, modifier = Modifier.padding(22.dp))
         avail.forEach { preset ->
             val id = preset["id"].str() ?: return@forEach
-            OptionRow(presetName(preset), presetDescription(preset), selected = cur == id, enabled = editable && online) { onPick(id); onDismiss() }
+            OptionRow(presetName(preset), presetDescription(preset), selected = cur == id, enabled = online) { onPick(id); onDismiss() }
         }
     }
 }

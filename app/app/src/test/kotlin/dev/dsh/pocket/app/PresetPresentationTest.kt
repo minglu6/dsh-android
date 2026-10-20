@@ -72,4 +72,14 @@ class PresetPresentationTest {
         rule.runOnIdle { Pocket.presetRoster.value = listOf(jsonOf("id" to "review", "name" to "审查新名称")) }
         rule.onNodeWithContentDescription("审查新名称").assertIsDisplayed()
     }
+
+    @Test fun sessionPresetIsPassiveAndTouchCannotOpenPicker() {
+        Pocket.presetRoster.value = roster("standard")
+        Pocket.chat.value = ChatState("preset-session", loaded = true, agentPreset = "standard")
+        rule.setContent { PocketTheme { ChatRoot(onMenu = {}) } }
+        val preset = rule.onNodeWithContentDescription("团队代码模式").assertIsDisplayed().assertHasNoClickAction()
+        preset.performTouchInput { click() }
+        rule.onNodeWithText("Agent 预设").assertDoesNotExist()
+        assertEquals("standard", Pocket.chat.value?.agentPreset)
+    }
 }

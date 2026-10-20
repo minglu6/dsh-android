@@ -2,7 +2,6 @@ package dev.dsh.pocket.app
 
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
@@ -35,7 +34,11 @@ internal fun TeamAction(sessionId: String, enabled: Boolean = true) {
     val status by Pocket.status.collectAsState()
     var open by remember(active, sessionId) { mutableStateOf(false) }
     Box {
-        HeaderAction(D.users, teamText("智能体团队", "Agent Team"), { open = true }, enabled = enabled)
+        Box(Modifier.size(28.dp).clip(androidx.compose.foundation.shape.RoundedCornerShape(6.dp))
+            .clickable(enabled = enabled) { open = true }.semantics { contentDescription = teamText("智能体团队", "Agent Team") },
+            contentAlignment = Alignment.Center) {
+            Icon(D.users, null, tint = T.Text2, modifier = Modifier.size(14.dp))
+        }
         if (open) HeaderPopup(if (team?.members?.size == 1 && team?.tasks.isNullOrEmpty()) 320 else 500, 680, { open = false }) {
             TeamPanel(team, loading = chat?.loaded == false, online = status[active] == Dot.Online) {
                 Pocket.openTeammate(it)
@@ -46,21 +49,9 @@ internal fun TeamAction(sessionId: String, enabled: Boolean = true) {
 }
 
 @Composable
-internal fun HeaderAction(
-    icon: androidx.compose.ui.graphics.vector.ImageVector,
-    text: String,
-    onClick: () -> Unit,
-    modifier: Modifier = Modifier,
-    enabled: Boolean = true,
-) {
-    Row(modifier.heightIn(min = 32.dp).clip(T.R8).border(.5.dp, T.Border, T.R8)
-        .clickable(enabled = enabled, onClick = onClick).semantics { contentDescription = text }
-        .padding(horizontal = 10.dp), verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(5.dp)) {
-        Icon(icon, null, tint = T.Text3, modifier = Modifier.size(14.dp))
-        Text(text, color = T.Text2, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.weight(1f, fill = false))
-        Icon(D.chevronDown, null, tint = T.Text3, modifier = Modifier.size(12.dp))
+internal fun SessionPresetLabel(text: String) {
+    Box(Modifier.size(14.dp).semantics { contentDescription = text }, contentAlignment = Alignment.Center) {
+        Icon(D.agentPreset, null, tint = T.Text2, modifier = Modifier.size(14.dp))
     }
 }
 
