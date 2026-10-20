@@ -1,6 +1,7 @@
 package dev.dsh.pocket.app
 
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -13,6 +14,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -21,7 +23,6 @@ import dev.dsh.pocket.protocol.SessionAddress
 @Composable
 internal fun SubagentAction(sessionId: String) {
     val children by Pocket.subagents.collectAsState()
-    val chat by Pocket.chat.collectAsState()
     val active by Pocket.active.collectAsState()
     val status by Pocket.status.collectAsState()
     val online = status[active] == Dot.Online
@@ -30,9 +31,12 @@ internal fun SubagentAction(sessionId: String) {
     var open by remember(active, sessionId) { mutableStateOf(false) }
     val label = teamText("${entries.size} 个子智能体", "${entries.size} subagents")
     Box {
-        Row(Modifier.height(48.dp).clip(T.R8).clickable { open = true }.padding(horizontal = 6.dp)
-            .semantics { contentDescription = label }, verticalAlignment = Alignment.CenterVertically) {
-            Text("${entries.size}", color = T.Text3, fontSize = 12.sp)
+        Row(Modifier.heightIn(min = 40.dp).clip(T.R8).clickable { open = true }.padding(horizontal = 10.dp)
+            .semantics { contentDescription = label }, verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            Text(teamText("子智能体", "Subagents"), color = T.Text3, fontSize = 12.sp)
+            Text("${entries.size}", color = T.Text2, fontSize = 11.sp, fontWeight = FontWeight.Medium,
+                modifier = Modifier.clip(androidx.compose.foundation.shape.CircleShape).background(T.Fill).padding(horizontal = 6.dp, vertical = 1.dp))
             Icon(D.chevronDown, null, tint = T.Text3, modifier = Modifier.size(12.dp))
         }
         if (open) HeaderPopup(336, 560, { open = false }) {

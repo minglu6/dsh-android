@@ -225,6 +225,8 @@ The Android composer dock uses authoritative whole-log `sessionStats` and `token
 
 Android's team popup uses the desktop member cards, compact single-member layout, current-chat capsule and shared-task board instead of a bottom sheet. Ordinary subagents are not team members. The existing “地面洞察报告生成逻辑梳理与 Agent Skill 准备” desktop conversation was compared read-only: its team contains only `lead`, while its separate catalog has six continuable children. A native 412dp Robolectric smoke against that same running Host clicked all six child entries, loaded their histories, and returned to the root without navigation errors. Historical Qoder `INVALID_REQUEST` failures remain visible and are not navigation failures. The physical phone was not connected during this verification.
 
+The phone header keeps the session title above labeled Team/preset actions. The separate “子智能体” count sits at the trailing edge of the Chat/Trajectory tab row with a neutral count capsule; it is not an unlabeled top-bar number. A 360dp layout regression checks label/count separation and all three menu entries. Native real-Host rendering and child navigation were exercised at 412dp light, 360dp dark and 800dp landscape.
+
 
 ---
 

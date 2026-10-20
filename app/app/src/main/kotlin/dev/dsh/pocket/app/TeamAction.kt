@@ -32,15 +32,29 @@ internal fun TeamAction(sessionId: String, enabled: Boolean = true) {
     val status by Pocket.status.collectAsState()
     var open by remember(active, sessionId) { mutableStateOf(false) }
     Box {
-        IconButton({ open = true }, enabled = enabled, modifier = Modifier.size(48.dp)) {
-            Icon(D.users, teamText("智能体团队", "Agent Team"), tint = T.Text3, modifier = Modifier.size(18.dp))
-        }
+        HeaderAction(D.users, teamText("智能体团队", "Agent Team"), { open = true }, enabled = enabled)
         if (open) HeaderPopup(if (team?.members?.size == 1 && team?.tasks.isNullOrEmpty()) 320 else 500, 680, { open = false }) {
             TeamPanel(team, loading = chat?.loaded == false, online = status[active] == Dot.Online) {
                 Pocket.openTeammate(it)
                 open = false
             }
         }
+    }
+}
+
+@Composable
+internal fun HeaderAction(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    text: String,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    enabled: Boolean = true,
+) {
+    Row(modifier.heightIn(min = 32.dp).clip(T.R8).clickable(enabled = enabled, onClick = onClick)
+        .padding(horizontal = 6.dp), verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(5.dp)) {
+        Icon(icon, null, tint = T.Text3, modifier = Modifier.size(14.dp))
+        Text(text, color = T.Text3, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
     }
 }
 

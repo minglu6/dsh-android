@@ -420,8 +420,10 @@ fun ChatRoot(
             }
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                 Box(Modifier.weight(1f)) { Tabs(tab) { tab = it } }
+                if (chat != null) SubagentAction(st.sessionId)
                 if (chat != null) JobsAction(active, st.sessionId, dot == Dot.Online && "jobs.list" in ops) { sheet = Sheet.Jobs }
             }
+            HorizontalDivider(color = T.Fill)
             Box(Modifier.weight(1f).fillMaxWidth()) {
                 if (tab == 0) Transcript(
                     st,
@@ -691,21 +693,22 @@ private fun TopBar(title: String?, inChat: Boolean, onMenu: (() -> Unit)?, onMor
     val subagents by Pocket.subagents.collectAsState()
     val parent = chat?.address?.parentSessionId
     val childLabel = subagents?.firstOrNull { it.id == chat?.sessionId }?.label
-    Row(Modifier.fillMaxWidth().height(56.dp).padding(horizontal = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+    Row(Modifier.fillMaxWidth().heightIn(min = if (inChat) 76.dp else 56.dp).padding(horizontal = 6.dp), verticalAlignment = Alignment.Top) {
         if (onMenu != null) IconButton(onMenu) { Icon(D.panelLeft, L.menu(), tint = T.Ink, modifier = Modifier.size(20.dp)) }
         else Spacer(Modifier.width(12.dp))
-        // One weighted region: the title takes what the gray links leave (no competing spacer).
-        Row(Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically) {
+        Column(Modifier.weight(1f).padding(vertical = 4.dp)) {
             if (inChat) {
-                if (parent != null) IconButton({ Pocket.openSession(parent) }, Modifier.size(32.dp)) {
-                    Icon(D.chevronLeft, teamText("返回父会话", "Return to parent conversation"), tint = T.Text3, modifier = Modifier.size(16.dp))
+                Row(Modifier.height(36.dp), verticalAlignment = Alignment.CenterVertically) {
+                    if (parent != null) IconButton({ Pocket.openSession(parent) }, Modifier.size(32.dp)) {
+                        Icon(D.chevronLeft, teamText("返回父会话", "Return to parent conversation"), tint = T.Text3, modifier = Modifier.size(16.dp))
+                    }
+                    Text(childLabel ?: title ?: "新会话", style = MaterialTheme.typography.titleMedium, color = T.Ink,
+                        maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
-                Text(childLabel ?: title ?: "新会话", style = MaterialTheme.typography.titleMedium, color = T.Ink, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
-                Spacer(Modifier.width(10.dp))
-                // Icon-only on phones: the session title must never be squeezed to "…".
-                chat?.sessionId?.let { TeamAction(it) }
-                preset?.let { GrayLink(D.agentPreset, it, onPreset) }
-                chat?.sessionId?.let { SubagentAction(it) }
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                    chat?.sessionId?.let { TeamAction(it) }
+                    preset?.let { HeaderAction(D.agentPreset, it, onPreset, Modifier.weight(1f, fill = false)) }
+                }
             }
         }
         IconButton(onMore, Modifier.size(48.dp)) { Icon(D.ellipsis, "更多", tint = T.Ink) }
@@ -715,12 +718,6 @@ private fun TopBar(title: String?, inChat: Boolean, onMenu: (() -> Unit)?, onMor
     HorizontalDivider(color = T.Fill)
 }
 
-@Composable
-private fun GrayLink(icon: androidx.compose.ui.graphics.vector.ImageVector, text: String, onClick: () -> Unit) {
-    Box(Modifier.size(48.dp).clip(T.R8).clickable(onClick = onClick), contentAlignment = Alignment.Center) {
-        Icon(icon, text, tint = T.Text3, modifier = Modifier.size(18.dp))
-    }
-}
 
 @Composable
 fun StatusDot(dot: Dot?, modifier: Modifier = Modifier) {
@@ -743,7 +740,6 @@ private fun Tabs(sel: Int, onSel: (Int) -> Unit) {
             }
         }
     }
-    HorizontalDivider(color = T.Fill)
 }
 
 @Composable
