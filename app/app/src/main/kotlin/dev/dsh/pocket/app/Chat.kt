@@ -693,29 +693,34 @@ private fun TopBar(title: String?, inChat: Boolean, onMenu: (() -> Unit)?, onMor
     val subagents by Pocket.subagents.collectAsState()
     val parent = chat?.address?.parentSessionId
     val childLabel = subagents?.firstOrNull { it.id == chat?.sessionId }?.label
-    Row(Modifier.fillMaxWidth().heightIn(min = if (inChat) 76.dp else 56.dp).padding(horizontal = 6.dp), verticalAlignment = Alignment.Top) {
-        if (onMenu != null) IconButton(onMenu) { Icon(D.panelLeft, L.menu(), tint = T.Ink, modifier = Modifier.size(20.dp)) }
-        else Spacer(Modifier.width(12.dp))
-        Column(Modifier.weight(1f).padding(vertical = 4.dp)) {
-            if (inChat) {
-                Row(Modifier.height(36.dp), verticalAlignment = Alignment.CenterVertically) {
+    Column(Modifier.fillMaxWidth()) {
+        Row(Modifier.fillMaxWidth().height(56.dp).padding(horizontal = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+            if (onMenu != null) IconButton(onMenu) { Icon(D.panelLeft, L.menu(), tint = T.Ink, modifier = Modifier.size(20.dp)) }
+            else Spacer(Modifier.width(12.dp))
+            Row(Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically) {
+                if (inChat) {
                     if (parent != null) IconButton({ Pocket.openSession(parent) }, Modifier.size(32.dp)) {
                         Icon(D.chevronLeft, teamText("返回父会话", "Return to parent conversation"), tint = T.Text3, modifier = Modifier.size(16.dp))
                     }
                     Text(childLabel ?: title ?: "新会话", style = MaterialTheme.typography.titleMedium, color = T.Ink,
                         maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
-                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                    chat?.sessionId?.let { TeamAction(it) }
-                    preset?.let { HeaderAction(D.agentPreset, it, onPreset, Modifier.weight(1f, fill = false)) }
-                }
+            }
+            IconButton(onMore, Modifier.size(48.dp)) { Icon(D.ellipsis, "更多", tint = T.Ink) }
+            if (!inChat) IconButton(onNew, Modifier.size(48.dp)) { Icon(D.newChat, "新会话", tint = T.Ink) }
+            if (onPanel != null) IconButton(onPanel, Modifier.size(48.dp)) { Icon(D.panelRight, "右侧面板", tint = T.Text2, modifier = Modifier.size(15.dp)) }
+        }
+        if (inChat) Row(
+            Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, bottom = 12.dp),
+            horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Box(Modifier.weight(1f)) { chat?.sessionId?.let { TeamAction(it) } }
+            Box(Modifier.weight(1f), contentAlignment = Alignment.CenterEnd) {
+                preset?.let { HeaderAction(D.agentPreset, it, onPreset) }
             }
         }
-        IconButton(onMore, Modifier.size(48.dp)) { Icon(D.ellipsis, "更多", tint = T.Ink) }
-        if (!inChat) IconButton(onNew, Modifier.size(48.dp)) { Icon(D.newChat, "新会话", tint = T.Ink) }
-        if (onPanel != null) IconButton(onPanel, Modifier.size(48.dp)) { Icon(D.panelRight, "右侧面板", tint = T.Text2, modifier = Modifier.size(15.dp)) }
+        HorizontalDivider(color = T.Fill)
     }
-    HorizontalDivider(color = T.Fill)
 }
 
 

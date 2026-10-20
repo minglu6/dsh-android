@@ -2,6 +2,7 @@ package dev.dsh.pocket.app
 
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
@@ -52,12 +53,14 @@ internal fun HeaderAction(
     modifier: Modifier = Modifier,
     enabled: Boolean = true,
 ) {
-    Row(modifier.heightIn(min = 32.dp).clip(T.R8).clickable(enabled = enabled, onClick = onClick)
-        .semantics { contentDescription = text }
-        .padding(horizontal = 6.dp), verticalAlignment = Alignment.CenterVertically,
+    Row(modifier.heightIn(min = 32.dp).clip(T.R8).border(.5.dp, T.Border, T.R8)
+        .clickable(enabled = enabled, onClick = onClick).semantics { contentDescription = text }
+        .padding(horizontal = 10.dp), verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(5.dp)) {
         Icon(icon, null, tint = T.Text3, modifier = Modifier.size(14.dp))
-        Text(text, color = T.Text3, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        Text(text, color = T.Text2, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f, fill = false))
+        Icon(D.chevronDown, null, tint = T.Text3, modifier = Modifier.size(12.dp))
     }
 }
 

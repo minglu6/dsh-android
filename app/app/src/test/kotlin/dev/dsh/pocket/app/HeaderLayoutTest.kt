@@ -53,7 +53,7 @@ class HeaderLayoutTest {
     }
     @After fun cleanup() = restore()
 
-    @Test fun labeledHeaderAndRightAlignedCountRemainSeparateAndClickableOnNarrowPhone() {
+    @Test fun labeledActionsAlignToToolbarEdgesAndCountRemainsClickableOnNarrowPhone() {
         rule.setContent { PocketTheme { ChatRoot({}) } }
         val team = rule.onNodeWithText("智能体团队").assertIsDisplayed()
         val preset = rule.onNodeWithText("标准模式").assertIsDisplayed()
@@ -63,6 +63,9 @@ class HeaderLayoutTest {
         val presetBounds = preset.getUnclippedBoundsInRoot()
         val countBounds = count.getUnclippedBoundsInRoot()
         val tabBounds = tab.getUnclippedBoundsInRoot()
+        assertTrue(kotlin.math.abs(teamBounds.left.value - 16f) < .5f)
+        assertTrue(kotlin.math.abs(presetBounds.right.value - 344f) < .5f)
+        assertTrue(teamBounds.top == presetBounds.top && teamBounds.bottom == presetBounds.bottom)
         assertTrue(teamBounds.right <= presetBounds.left)
         assertTrue(teamBounds.bottom <= tabBounds.top)
         assertTrue(countBounds.left >= tabBounds.right)
