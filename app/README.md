@@ -170,6 +170,15 @@ cd app
 ./gradlew :core:protocol:test :app:testDebugUnitTest :app:assembleDebug :app:assembleRelease
 ```
 
+CI 将原生 Robolectric 单测按完整测试类稳定分成两片，内部类跟随外部类，所有分片合起来仍是完整测试集；每片保留 12 分钟时限和每个测试类独立 JVM，未放宽超时或取消隔离。上面的默认命令仍不分片。单独复现某片可在 Gradle 根目录执行：
+
+```bash
+./gradlew :app:testDebugUnitTest -Proborazzi.test.record=true -Pdsh.testShardCount=2 -Pdsh.testShardIndex=0
+./gradlew :app:testDebugUnitTest -Proborazzi.test.record=true -Pdsh.testShardCount=2 -Pdsh.testShardIndex=1
+```
+
+分片参数必须成对提供且索引合法；JUnit 与 HTML 报告分别保存在对应任务的 `shard-0`／`shard-1` 子目录，避免本地顺序运行相互覆盖。CI 始终收集每片报告与截图，只有全部分片以及插件、集成和模拟器门禁通过后，APK 任务才进入构建和发布。
+
 产物位于 `app/app/build/outputs/apk/debug/app-debug.apk` 与 `app/app/build/outputs/apk/release/app-release.apk`（相对于仓库根目录）。已连接 Android 设备或启动模拟器时，可在 Gradle 根目录执行：
 
 ```bash

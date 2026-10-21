@@ -87,8 +87,40 @@ jobs:
       - run: dsh --version
       - run: npm run test:integration
 
+  android-unit:
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with: { distribution: temurin, java-version: 17 }
+      - uses: android-actions/setup-android@v3
+        with:
+          packages: platform-tools
+      - uses: gradle/actions/setup-gradle@v4
+      - name: complete native unit-test shard
+        working-directory: app
+        run: |
+          ./gradlew --no-daemon :app:testDebugUnitTest \
+            -Proborazzi.test.record=true \
+            -Pdsh.testShardCount=2 \
+            -Pdsh.testShardIndex=${{ matrix.shard }}
+      - name: upload unit-test reports and screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-unit-${{ matrix.shard }}
+          if-no-files-found: error
+          path: |
+            app/app/build/test-results/testDebugUnitTest/shard-${{ matrix.shard }}
+            app/app/build/reports/tests/testDebugUnitTest/shard-${{ matrix.shard }}
+            app/app/build/screenshots/*.png
+
   android:
-    needs: [host-binaries]
+    needs: [host-binaries, android-unit, plugin, integration, emulator]
     runs-on: ubuntu-latest
     permissions: { contents: write }
     steps:
@@ -145,13 +177,11 @@ jobs:
             echo "  ANDROID_KEYSTORE_B64, ANDROID_KEYSTORE_PASSWORD, ANDROID_KEY_ALIAS, ANDROID_KEY_PASSWORD"
             echo "Never commit keystore files or passwords."
           fi
-      - name: unit tests + debug + R8 release APK
+      - name: protocol tests + debug + R8 release APK
         working-directory: app
         run: |
           ./gradlew --no-daemon \
             :core:protocol:test \
-            :app:testDebugUnitTest \
-            -Proborazzi.test.record=true \
             :app:assembleDebug \
             :app:assembleDebugAndroidTest \
             :app:assembleRelease
@@ -194,6 +224,12 @@ jobs:
             echo "Android release APK is $actual bytes; limit is $maximum bytes." >&2
             exit 1
           fi
+      - name: collect verified unit-test screenshots
+        uses: actions/download-artifact@v4
+        with:
+          pattern: android-unit-*
+          merge-multiple: true
+          path: app/app/build
       - uses: actions/upload-artifact@v4
         with:
           name: dsh-android-debug

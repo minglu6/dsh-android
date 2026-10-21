@@ -5,6 +5,7 @@ import androidx.compose.runtime.*
 import androidx.compose.runtime.snapshots.Snapshot
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.*
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
@@ -321,29 +322,113 @@ class JobsActionTest {
     }
 
     @Test fun stopConfirmationFailureAndPendingConvergeOnlyThroughRoster() {
+        // These phases expire after 3s/4s. Automatic idling can consume either
+        // phase before its assertion, and resuming it can drain the poll loop.
+        rule.mainClock.autoAdvance = false
+        fun render() {
+            rule.mainClock.advanceTimeByFrame()
+            rule.mainClock.advanceTimeByFrame()
+            rule.waitForIdle()
+        }
+        fun assertPhase(phase: String) {
+            rule.onNodeWithTag("jobStop:run")
+                .assert(SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, phase))
+        }
+        val running = job("run", "running")
+        val stopping = job("stopping", "stopping")
+        val done = job("done", "completed")
+        fun poll(vararg rows: JsonObject) {
+            rule.mainClock.advanceTimeBy(3_000)
+            roster(request(), *rows)
+            render()
+        }
+
         show()
-        roster(request(), job("run", "running"), job("stopping", "stopping"), job("done", "completed"))
+        render()
+        roster(request(), running, stopping, done)
+        render()
         rule.onNodeWithTag("jobsAction").performClick()
+        render()
         rule.onNodeWithTag("jobStop:stopping").assertDoesNotExist()
         rule.onNodeWithTag("jobStop:run").performClick()
+        render()
         rule.onNodeWithText("确认停止").assertIsDisplayed()
+        assertPhase("Armed")
         assertTrue(requests.isEmpty())
+        rule.mainClock.advanceTimeBy(1_000)
+        rule.onNodeWithText("确认停止").assertIsDisplayed()
+        rule.mainClock.advanceTimeBy(2_000)
+        render()
+        rule.onNodeWithText("确认停止").assertDoesNotExist()
+        assertPhase("Idle")
+        // The 3s roster poll is expected; confirmation expiry must not kill.
+        roster(request(), running, stopping, done)
+        render()
+        assertTrue(requests.isEmpty())
+
         rule.onNodeWithTag("jobStop:run").performClick()
+        render()
+        rule.onNodeWithText("确认停止").assertIsDisplayed()
+        rule.onNodeWithTag("jobStop:run").performClick()
+        render()
         val rejected = request("jobs.kill")
         assertEquals("run", rejected["args"]["jobId"].str())
         result(rejected, ok = false)
+        render()
         rule.onNodeWithContentDescription("停止失败").assertIsDisplayed()
+        assertPhase("Failed")
+        rule.mainClock.advanceTimeBy(2_000)
+        rule.onNodeWithContentDescription("停止失败").assertIsDisplayed()
+        // Retrying while the failure is still visible must not wait for expiry.
         rule.onNodeWithTag("jobStop:run").performClick()
+        render()
+        assertPhase("Armed")
         rule.onNodeWithTag("jobStop:run").performClick()
+        render()
+        result(request("jobs.kill"), ok = false)
+        render()
+        assertPhase("Failed")
+        rule.mainClock.advanceTimeBy(2_000)
+        rule.onNodeWithContentDescription("停止失败").assertIsDisplayed()
+        rule.mainClock.advanceTimeBy(2_000)
+        render()
+        rule.onNodeWithContentDescription("停止失败").assertDoesNotExist()
+        assertPhase("Idle")
+        roster(request(), running, stopping, done)
+        render()
+        assertTrue(requests.isEmpty())
+
+        rule.onNodeWithTag("jobStop:run").performClick()
+        render()
+        rule.onNodeWithText("确认停止").assertIsDisplayed()
+        assertTrue(requests.isEmpty())
+        rule.onNodeWithTag("jobStop:run").performClick()
+        render()
         val accepted = request("jobs.kill")
+        assertEquals("run", accepted["args"]["jobId"].str())
+        assertPhase("Pending")
         rule.onNodeWithTag("jobStop:run").assertIsNotEnabled()
         result(accepted, jsonOf("outcome" to "requested"))
+        render()
+        assertPhase("Pending")
         rule.onNodeWithTag("jobStop:run").assertIsNotEnabled()
+        rule.onNodeWithTag("jobRow:run")
+            .assert(SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, "运行中"))
         assertTrue(requests.isEmpty())
-        rule.mainClock.advanceTimeBy(3100)
-        roster(request(), job("run", "stopping"), job("stopping", "stopping"), job("done", "completed"))
+        poll(running, stopping, done)
+        assertPhase("Pending")
+        rule.onNodeWithTag("jobStop:run").assertIsNotEnabled()
+        poll(job("run", "stopping"), stopping, done)
         rule.onNodeWithTag("jobStop:run").assertDoesNotExist()
+        rule.onNodeWithTag("jobRow:run")
+            .assert(SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, "正在停止"))
         rule.onNodeWithText("2 个后台任务运行中").assertIsDisplayed()
+        poll(job("run", "killed"), stopping, done)
+        rule.onNodeWithText("1 个后台任务运行中").assertIsDisplayed()
+        rule.onNodeWithTag("jobsSettledToggle").performClick()
+        render()
+        rule.onNodeWithTag("jobRow:run")
+            .assert(SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, "已取消"))
     }
 
     @Test fun backDismissesExpandedOutputAndUnsubscribesWithoutMutatingTheJob() {

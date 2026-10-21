@@ -1,4 +1,6 @@
 import java.time.Duration
+import org.gradle.api.file.FileTreeElement
+import org.gradle.api.specs.Spec
 
 plugins {
     id("com.android.application")
@@ -25,6 +27,27 @@ val releaseSigningConfigured = listOf(
 val appVersionName = "0.1.0"
 // Above the last rolling-latest GITHUB_RUN_NUMBER (206). Bump with each tagged release.
 val appVersionCode = 210
+
+val unitTestShard = run {
+    val countValue = providers.gradleProperty("dsh.testShardCount").orNull
+    val indexValue = providers.gradleProperty("dsh.testShardIndex").orNull
+    if (countValue == null && indexValue == null) {
+        null
+    } else {
+        require(countValue != null && indexValue != null) {
+            "dsh.testShardCount and dsh.testShardIndex must be provided together"
+        }
+        val count = countValue.toIntOrNull()
+        require(count != null && count > 0) {
+            "dsh.testShardCount must be a positive integer"
+        }
+        val index = indexValue.toIntOrNull()
+        require(index != null && index >= 0 && index < count) {
+            "dsh.testShardIndex must be an integer in [0, dsh.testShardCount)"
+        }
+        count to index
+    }
+}
 
 android {
     namespace = "dev.dsh.pocket.app"
@@ -108,13 +131,28 @@ dependencies {
     testImplementation("androidx.test.espresso:espresso-core:3.6.1")
 }
 
-tasks.withType<org.gradle.api.tasks.testing.Test>().configureEach {
-    // Idle regressions used to look like a 40-minute hang (60s Espresso policy × dozens of tests).
-    // Keep the suite bounded so a future spinner/clock leak fails the job in minutes.
-    timeout.set(Duration.ofMinutes(12))
-    // Robolectric NATIVE Skia/Choreographer state leaks across classes in one JVM and
-    // makes later Compose waitForIdle spin until Espresso times out. MessageActionsTest
-    // is the first class that trips that leak after a handful of NATIVE Compose suites;
-    // one class per worker keeps the leak from accumulating.
-    forkEvery = 1
+android.testOptions.unitTests.all { test ->
+    test.apply {
+        // Bound idle regressions without sharing NATIVE Skia state across classes.
+        timeout.set(Duration.ofMinutes(12))
+        forkEvery = 1
+        unitTestShard?.let { (shardCount, shardIndex) ->
+            inputs.property("dsh.testShardCount", shardCount)
+            inputs.property("dsh.testShardIndex", shardIndex)
+            // Scan compiled paths lazily; inner classes stay with their outer class.
+            include(Spec<FileTreeElement> { element ->
+                if (element.isDirectory) {
+                    true
+                } else {
+                    val classPath = element.relativePath.pathString
+                    classPath.endsWith(".class") &&
+                        Math.floorMod(classPath.removeSuffix(".class").substringBefore('$').hashCode(), shardCount) == shardIndex
+                }
+            })
+            val resultsPath = "test-results/$name/shard-$shardIndex"
+            reports.junitXml.outputLocation.set(layout.buildDirectory.dir(resultsPath))
+            binaryResultsDirectory.set(layout.buildDirectory.dir("$resultsPath/binary"))
+            reports.html.outputLocation.set(layout.buildDirectory.dir("reports/tests/$name/shard-$shardIndex"))
+        }
+    }
 }
