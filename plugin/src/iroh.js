@@ -156,8 +156,8 @@ function missingSidecarHelp() {
 
 /**
  * Spawn pocket-host and bridge peer sessions into the pocket server as pipe clients.
- * @param {{ server: any, dataDir: string, hostBinary?: string, log?: (...a:any)=>void }} opts
- * @returns {Promise<{ endpointId: Promise<string>, close: () => Promise<void> } | null>}
+ * @param {{ server: any, dataDir: string, hostBinary?: string, localOnly?: boolean, log?: (...a:any)=>void }} opts
+ * @returns {Promise<{ endpoint: Promise<{ id: string, directAddress: string | null }>, close: () => Promise<void> } | null>}
  */
 export async function startIrohSidecar(opts) {
   const log = opts.log ?? ((...a) => console.log('[pocket]', ...a))
@@ -168,15 +168,18 @@ export async function startIrohSidecar(opts) {
   }
   log(`iroh sidecar: ${binary}`)
   const args = ['host', '--data-dir', opts.dataDir]
+  if (opts.localOnly) args.push('--local-only')
   const child = spawn(binary, args, { stdio: ['pipe', 'pipe', 'inherit'], windowsHide: true })
   let gone
   child.on('exit', (code) => {
     gone = `sidecar exited (code=${code})`
     console.error(`[pocket] iroh ${gone}`)
+    rejectReady(new Error(gone))
   })
   child.on('error', (error) => {
     gone = `sidecar failed to start: ${error.message}`
     console.error(`[pocket] iroh ${gone} (${binary})`)
+    rejectReady(new Error(gone))
   })
 
   const send = (msg) => {
@@ -184,8 +187,8 @@ export async function startIrohSidecar(opts) {
     child.stdin.write(`${JSON.stringify(msg)}\n`)
   }
 
-  let resolveReady
-  const endpointId = new Promise((r) => { resolveReady = r })
+  let resolveReady, rejectReady
+  const endpoint = new Promise((resolve, reject) => { resolveReady = resolve; rejectReady = reject })
   /** @type {Map<string, { push(line: string): void, close(): void }>} */
   const sessions = new Map()
 
@@ -198,7 +201,7 @@ export async function startIrohSidecar(opts) {
     }
     switch (msg.type) {
       case 'ready':
-        resolveReady(msg.endpoint_id)
+        resolveReady({ id: msg.endpoint_id, directAddress: msg.direct_addr ?? null })
         log(`iroh ready, node id: ${msg.endpoint_id}`)
         break
       case 'peer-session': {
@@ -241,7 +244,7 @@ export async function startIrohSidecar(opts) {
   })
 
   return {
-    endpointId,
+    endpoint,
     /** @returns {Promise<void>} */
     close: () => new Promise((resolve) => {
       const done = () => resolve()

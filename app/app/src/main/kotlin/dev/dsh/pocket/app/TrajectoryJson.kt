@@ -113,39 +113,6 @@ internal fun trajectoryJsonRows(root: JsonElement, expanded: Set<String>): List<
     return rows
 }
 
-internal fun trajectoryJsonRowText(row: TrajectoryJsonRow, expanded: Boolean): String {
-    val value = when (val element = row.value) {
-        is JsonObject -> when {
-            row.closing -> "}"
-            element.isEmpty() -> "{}"
-            expanded -> "{"
-            else -> trajectoryJsonPreview(element)
-        }
-        is JsonArray -> when {
-            row.closing -> "]"
-            element.isEmpty() -> "[]"
-            expanded -> "["
-            else -> trajectoryJsonPreview(element)
-        }
-        else -> element.toString()
-    }
-    return row.label?.let { "$it: $value" } ?: value
-}
-
-/** Desktop JsonTree previews four object fields / five array entries, to depth two. */
-internal fun trajectoryJsonPreview(value: JsonElement): String {
-    fun preview(element: JsonElement, depth: Int): String = when (element) {
-        is JsonObject -> if (depth >= 2) "{…}" else element.entries.asSequence().take(4)
-            .joinToString(", ", "{", if (element.size > 4) ", …}" else "}") { (name, child) ->
-                "$name: ${preview(child, depth + 1)}"
-            }
-        is JsonArray -> if (depth >= 2) "[…]" else element.asSequence().take(5)
-            .joinToString(", ", "[", if (element.size > 5) ", …]" else "]") { preview(it, depth + 1) }
-        else -> element.toString()
-    }
-    return preview(value, 0)
-}
-
 private val jsonPathIdentifier = Regex("[A-Za-z_$][A-Za-z0-9_$]*")
 internal fun trajectoryJsonPropertyPath(parent: String, name: String): String =
     if (jsonPathIdentifier.matches(name)) "$parent.$name" else "$parent[${JsonPrimitive(name)}]"
@@ -227,7 +194,7 @@ internal fun TrajectoryJsonValue(
     }
 }
 
-private data class TrajectoryJsonColors(val property: Color, val string: Color, val keyword: Color, val punctuation: Color)
+internal data class TrajectoryJsonColors(val property: Color, val string: Color, val keyword: Color, val punctuation: Color)
 
 @Composable
 private fun trajectoryJsonColors(error: Boolean): TrajectoryJsonColors = when {
@@ -236,21 +203,66 @@ private fun trajectoryJsonColors(error: Boolean): TrajectoryJsonColors = when {
     else -> TrajectoryJsonColors(Color(0xFF881391), Color(0xFFC41A16), Color(0xFF1C00CF), Color(0xFF202124))
 }
 
-private val jsonDisplayToken = Regex("\"(?:[^\"\\\\]|\\\\.)*\"|(?<![\\w$])(?:true|false|null|-?\\d+(?:\\.\\d+)?(?:[eE][+-]?\\d+)?)(?![\\w$])")
-
-private fun trajectoryJsonStyledRow(row: TrajectoryJsonRow, expanded: Boolean, colors: TrajectoryJsonColors): AnnotatedString {
-    val text = trajectoryJsonRowText(row.copy(label = null), expanded)
-    return buildAnnotatedString {
-        row.label?.let { withStyle(SpanStyle(color = colors.property)) { append("$it: ") } }
-        var offset = 0
-        jsonDisplayToken.findAll(text).forEach { token ->
-            append(text.substring(offset, token.range.first))
-            withStyle(SpanStyle(color = if (token.value.startsWith('"')) colors.string else colors.keyword)) {
-                append(token.value)
+internal fun trajectoryJsonStyledRow(row: TrajectoryJsonRow, expanded: Boolean, colors: TrajectoryJsonColors): AnnotatedString =
+    buildAnnotatedString {
+        row.label?.let { withStyle(SpanStyle(color = colors.property)) { append(it); append(": ") } }
+        when (row.value) {
+            is JsonObject -> when {
+                row.closing -> append('}')
+                expanded && row.expandable -> append('{')
+                else -> appendTrajectoryJsonPreview(row.value, colors)
             }
-            offset = token.range.last + 1
+            is JsonArray -> when {
+                row.closing -> append(']')
+                expanded && row.expandable -> append('[')
+                else -> appendTrajectoryJsonPreview(row.value, colors)
+            }
+            else -> appendTrajectoryJsonPreview(row.value, colors)
         }
-        append(text.substring(offset))
+    }
+
+/**
+ * Render parsed values directly: no rescanning of escaped strings or unquoted property names.
+ * Desktop previews four object fields / five array entries, with at most two container levels.
+ */
+private fun AnnotatedString.Builder.appendTrajectoryJsonPreview(
+    value: JsonElement,
+    colors: TrajectoryJsonColors,
+    depth: Int = 0,
+) {
+    when (value) {
+        is JsonObject -> {
+            if (depth >= 2) {
+                append("{…}")
+                return
+            }
+            append('{')
+            var count = 0
+            for ((name, child) in value) {
+                if (count == 4) break
+                if (count++ > 0) append(", ")
+                append(name); append(": ")
+                appendTrajectoryJsonPreview(child, colors, depth + 1)
+            }
+            if (value.size > 4) append(", …")
+            append('}')
+        }
+        is JsonArray -> {
+            if (depth >= 2) {
+                append("[…]")
+                return
+            }
+            append('[')
+            for (index in 0 until minOf(value.size, 5)) {
+                if (index > 0) append(", ")
+                appendTrajectoryJsonPreview(value[index], colors, depth + 1)
+            }
+            if (value.size > 5) append(", …")
+            append(']')
+        }
+        is JsonPrimitive -> withStyle(SpanStyle(color = if (value.isString) colors.string else colors.keyword)) {
+            append(value.toString())
+        }
     }
 }
 

@@ -307,7 +307,7 @@ export function apply(ctx, config = {}) {
         if (iroh) {
           try {
             await Promise.race([
-              iroh.endpointId,
+              iroh.endpoint,
               new Promise((_, rej) => setTimeout(() => rej(new Error('iroh ready timeout')), 60_000)),
             ])
             log('legacy iroh sidecar ready (not used for phone pairing)')

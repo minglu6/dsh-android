@@ -1,26 +1,32 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
+import { once } from 'node:events'
 import { createInterface } from 'node:readline'
-import { mkdtempSync, existsSync } from 'node:fs'
+import { mkdtempSync, existsSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createDeviceStore } from '../src/devices.js'
+import { createPairing } from '../src/pairing.js'
 import { createPocketServer } from '../src/server.js'
 import { resolveHostBinary, startIrohSidecar } from '../src/iroh.js'
 
 const OWNER = 'owner-token-iroh-e2e'
 const bin = resolveHostBinary()
+const options = { skip: !bin || !existsSync(bin), timeout: 30_000 }
 
-function waitExit(child, ms = 2000) {
-  if (child.exitCode !== null || child.signalCode !== null) return Promise.resolve()
-  return new Promise((resolve) => {
-    const t = setTimeout(() => { try { child.kill('SIGKILL') } catch { /* ignore */ }; resolve() }, ms)
-    child.once('exit', () => { clearTimeout(t); resolve() })
-  })
+async function stopPhone(phone) {
+  if (!phone) return
+  phone.stdout?.destroy()
+  phone.stderr?.destroy()
+  if (phone.exitCode !== null || phone.signalCode !== null) return
+  const exited = once(phone, 'exit')
+  phone.kill('SIGKILL')
+  await exited
 }
 
-test('iroh host↔phone-sim carries pocket hello over ALPN dsh-pocket/1', { skip: !bin || !existsSync(bin), timeout: 90_000 }, async () => {
+/** Real QUIC/TLS + the Node pipe bridge, isolated from public DNS and relay availability. */
+async function exchange(t, first, pairing) {
   const hostDir = mkdtempSync(join(tmpdir(), 'pocket-host-'))
   const phoneDir = mkdtempSync(join(tmpdir(), 'pocket-phone-'))
   const devices = createDeviceStore({ ownerToken: OWNER, persist: false })
@@ -29,45 +35,57 @@ test('iroh host↔phone-sim carries pocket hello over ALPN dsh-pocket/1', { skip
       list: async () => ({ items: [{ sessionId: 's1' }] }),
       follow: () => (async function* () {})(),
     },
-    token: OWNER, port: 0, devices, pairFailDelayMs: 1,
+    token: OWNER, port: 0, devices, pairing, pairFailDelayMs: 1,
   })
-  await server.listen()
-
-  const sidecar = await startIrohSidecar({
-    server,
-    dataDir: hostDir,
-    hostBinary: bin,
-    log: () => {},
-  })
-  assert.ok(sidecar)
-  const endpointId = await Promise.race([
-    sidecar.endpointId,
-    new Promise((_, rej) => setTimeout(() => rej(new Error('ready timeout')), 20_000)),
-  ])
-  assert.ok(typeof endpointId === 'string' && endpointId.length > 8)
-
-  const first = JSON.stringify({ id: 1, op: 'hello', args: { proto: 1, token: OWNER, app: 'phone-sim' } })
-  const phone = spawn(bin, ['phone-sim', '--peer', endpointId, '--data-dir', phoneDir, '--first', first], {
-    stdio: ['ignore', 'pipe', 'pipe'],
-  })
-  const rl = createInterface({ input: phone.stdout })
-  try {
-    const line = await new Promise((resolve, reject) => {
-      const t = setTimeout(() => reject(new Error('phone-sim timeout')), 30_000)
-      rl.once('line', (l) => { clearTimeout(t); resolve(l) })
-      phone.on('error', reject)
-    })
-    const msg = JSON.parse(line)
-    assert.equal(msg.id, 1)
-    assert.equal(msg.ok, true)
-    assert.ok(Array.isArray(msg.result?.ops))
-  } finally {
-    rl.close()
-    phone.stdout?.destroy()
-    phone.stderr?.destroy()
-    try { phone.kill('SIGKILL') } catch { /* ignore */ }
-    await waitExit(phone)
-    await sidecar.close()
+  let sidecar, phone, rl
+  t.after(async () => {
+    rl?.close()
+    await stopPhone(phone)
+    await sidecar?.close()
     await server.close()
+    rmSync(hostDir, { recursive: true, force: true })
+    rmSync(phoneDir, { recursive: true, force: true })
+  })
+  // No server.listen(): neither case can accidentally use WebSocket instead of iroh.
+  sidecar = await startIrohSidecar({ server, dataDir: hostDir, hostBinary: bin, localOnly: true, log: () => {} })
+  assert.ok(sidecar)
+  const endpoint = await sidecar.endpoint
+  assert.match(endpoint.directAddress, /^127\.0\.0\.1:\d+$/)
+  phone = spawn(bin, ['phone-sim', '--local-only', '--peer', endpoint.id, '--peer-addr', endpoint.directAddress,
+    '--data-dir', phoneDir, '--first', JSON.stringify(first)], { stdio: ['ignore', 'pipe', 'pipe'] })
+  let stderr = ''
+  phone.stderr.on('data', chunk => { stderr = (stderr + chunk).slice(-4096) })
+  rl = createInterface({ input: phone.stdout })
+  const abort = new AbortController()
+  const timeout = setTimeout(() => abort.abort(new Error(`iroh reply timeout: ${stderr}`)), 15_000)
+  try {
+    const line = await Promise.race([
+      once(rl, 'line', { signal: abort.signal }).then(([line]) => line),
+      once(phone, 'exit', { signal: abort.signal }).then(([code, signal]) => {
+        throw new Error(`phone-sim exited (${code ?? signal}): ${stderr}`)
+      }),
+    ])
+    return { reply: JSON.parse(line), devices }
+  } finally {
+    clearTimeout(timeout)
+    abort.abort()
   }
+}
+
+test('iroh hello authenticates over loopback QUIC and ALPN dsh-pocket/1 without WS', options, async t => {
+  const { reply } = await exchange(t, { id: 1, op: 'hello', args: { proto: 1, token: OWNER, app: 'phone-sim' } })
+  assert.equal(reply.id, 1)
+  assert.equal(reply.ok, true)
+  assert.ok(reply.result.ops.includes('sessions.list'))
+})
+
+test('iroh pairing registers a real device over loopback QUIC without WS', options, async t => {
+  const pairing = createPairing()
+  const { code } = pairing.open()
+  const { reply, devices } = await exchange(t, { id: 1, op: 'pair', args: { proto: 1, code, name: 'phone-sim' } }, pairing)
+  assert.equal(reply.id, 1)
+  assert.equal(reply.ok, true)
+  assert.equal(typeof reply.result.token, 'string')
+  assert.notEqual(reply.result.token, OWNER)
+  assert.deepEqual(devices.list().map(({ id, name }) => ({ id, name })), [{ id: reply.result.deviceId, name: 'phone-sim' }])
 })

@@ -6,6 +6,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.test.*
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.text.TextLayoutResult
@@ -21,6 +22,8 @@ import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
 
 class TrajectoryJsonTest {
+    private val colors = TrajectoryJsonColors(Color.Magenta, Color.Red, Color.Blue, Color.Black)
+
     @Test fun emptyContainersAndEscapedKeysRemainDistinctAndValid() {
         val source = """{"a/b":{"~key":["line\nquote\"\\",{},[]]},"a~1b":null}"""
         val root = trajectoryJsonDocument(source).root!!
@@ -30,7 +33,7 @@ class TrajectoryJsonTest {
         val empty = rows.filter { it.path.endsWith("/1") || it.path.endsWith("/2") }
         assertEquals(2, empty.size)
         assertTrue(empty.none { it.expandable })
-        assertEquals(listOf("1: {}", "2: []"), empty.map { trajectoryJsonRowText(it, false) })
+        assertEquals(listOf("1: {}", "2: []"), empty.map { trajectoryJsonStyledRow(it, false, colors).text })
     }
 
     @Test fun invalidJsonRetainsOriginalErrorText() {
@@ -58,7 +61,8 @@ class TrajectoryJsonTest {
         val paths = (0..TRAJECTORY_JSON_MAX_DEPTH).map { "/0".repeat(it) }.toSet()
         val rows = trajectoryJsonRows(document.root!!, paths)
         assertEquals(TRAJECTORY_JSON_MAX_DEPTH * 2 + 1, rows.size)
-        assertEquals("0: 0", trajectoryJsonRowText(rows.first { it.depth == TRAJECTORY_JSON_MAX_DEPTH }, false))
+        assertEquals("0: 0", trajectoryJsonStyledRow(
+            rows.first { it.depth == TRAJECTORY_JSON_MAX_DEPTH }, false, colors).text)
     }
 
     @Test fun bracesAndEscapedQuotesInsideLongStringsAreNotNesting() {
@@ -68,13 +72,61 @@ class TrajectoryJsonTest {
     }
 
     @Test fun collapsedPreviewsUseDesktopFieldElementAndDepthLimits() {
-        assertEquals("{a: 1, b: 2, c: 3, d: 4, …}", trajectoryJsonPreview(
-            Json.parseToJsonElement("""{"a":1,"b":2,"c":3,"d":4,"hidden":5}""")))
-        assertEquals("[0, 1, 2, 3, 4, …]", trajectoryJsonPreview(Json.parseToJsonElement("[0,1,2,3,4,5]")))
-        assertEquals("{queries: [{…}], limit: 5}", trajectoryJsonPreview(
-            Json.parseToJsonElement("""{"queries":[{"query":"not exposed until expanded"}],"limit":5}""")))
-        assertEquals("""{text: "quote\"slash\\line\n"}""", trajectoryJsonPreview(
-            Json.parseToJsonElement("""{"text":"quote\"slash\\line\n"}""")))
+        val previews = listOf(
+            """{"a":1,"b":2,"c":3,"d":4,"hidden":5}""" to "{a: 1, b: 2, c: 3, d: 4, …}",
+            "[0,1,2,3,4,5]" to "[0, 1, 2, 3, 4, …]",
+            """{"queries":[{"query":"not exposed until expanded"}],"limit":5}""" to "{queries: [{…}], limit: 5}",
+            """{"text":"quote\"slash\\line\n"}""" to """{text: "quote\"slash\\line\n"}""",
+        )
+        for ((source, expected) in previews) {
+            val row = TrajectoryJsonRow("", null, Json.parseToJsonElement(source), 0)
+            assertEquals(expected, trajectoryJsonStyledRow(row, false, colors).text)
+        }
+    }
+
+    @Test fun longParsedStringsKeepFullStyledTextAndAllCopyRepresentations() {
+        val rawValues = listOf(
+            "x".repeat(131_072),
+            "中文🙂quote\"slash\\tab\tline\n\u0000\u2028".repeat(8_192),
+        )
+        for (raw in rawValues) {
+            val source = JsonPrimitive(raw).toString()
+            val value = trajectoryJsonDocument(source).root!!
+            val row = TrajectoryJsonRow("/content", "content", value, 0, copyPath = "$.content")
+            val styled = trajectoryJsonStyledRow(row, false, colors)
+            assertEquals("content: $source", styled.text)
+            assertEquals(
+                listOf(Triple(0, 9, colors.property), Triple(9, styled.length, colors.string)),
+                styled.spanStyles.map { Triple(it.start, it.end, it.item.color) },
+            )
+            assertEquals(raw, trajectoryJsonCopyText(value, row.copyPath, TrajectoryJsonCopyMode.Value))
+            assertEquals(source, trajectoryJsonCopyText(value, row.copyPath, TrajectoryJsonCopyMode.Json))
+            assertEquals("$.content", trajectoryJsonCopyText(value, row.copyPath, TrajectoryJsonCopyMode.Path))
+        }
+    }
+
+    @Test fun previewStylesParsedPropertiesAndValuesWithoutReinterpretingTheirContents() {
+        val name = "true 42 \"quoted\\name🙂"
+        val raw = "false null -12.5e+3 \"quote\" \\\\ 中文🙂\n".repeat(4_096)
+        val primitive = JsonPrimitive(raw)
+        val value = buildJsonObject {
+            put(name, primitive)
+            put("items", buildJsonArray { add(primitive); add(Json.parseToJsonElement("-12.5e+3")); add(true); add(JsonNull) })
+        }
+        val parsed = trajectoryJsonDocument(value.toString()).root!!
+        val styled = trajectoryJsonStyledRow(TrajectoryJsonRow("", null, parsed, 0), false, colors)
+        assertEquals("{$name: $primitive, items: [$primitive, -12.5e+3, true, null]}", styled.text)
+        val firstValueStart = styled.text.indexOf(primitive.toString())
+        assertFalse("Desktop preview property names must not be tokenized as values",
+            styled.spanStyles.any { it.start < firstValueStart })
+        assertEquals(
+            listOf(primitive.toString(), primitive.toString()),
+            styled.spanStyles.filter { it.item.color == colors.string }.map { styled.text.substring(it.start, it.end) },
+        )
+        assertEquals(
+            listOf("-12.5e+3", "true", "null"),
+            styled.spanStyles.filter { it.item.color == colors.keyword }.map { styled.text.substring(it.start, it.end) },
+        )
     }
 
     @Test fun copyModesPreserveValuesAndProduceDesktopFormattedAndCompactJson() {

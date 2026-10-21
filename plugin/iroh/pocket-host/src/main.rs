@@ -6,14 +6,15 @@
 //! `direct` or `relay` after an 8s upgrade window (same rule as dsh-tether).
 
 use std::collections::HashMap;
+use std::net::{Ipv4Addr, SocketAddr};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use anyhow::{bail, Context as _, Result};
 use clap::{Parser, Subcommand};
-use iroh::endpoint::Connection;
-use iroh::EndpointId;
+use iroh::endpoint::{presets, Connection, RelayMode};
+use iroh::{Endpoint, EndpointAddr, EndpointId};
 use pocket_iroh::{
     endpoint_builder, load_or_create_secret, read_line_bounded, report_path, write_line, ALPN,
     MAX_LINE,
@@ -35,6 +36,9 @@ enum Cmd {
     Host {
         #[arg(long)]
         data_dir: Option<PathBuf>,
+        /// Bind only loopback, with relay and public address lookup disabled.
+        #[arg(long)]
+        local_only: bool,
     },
     /// Phone stand-in for integration tests.
     PhoneSim {
@@ -45,6 +49,11 @@ enum Cmd {
         /// First pocket JSON line to send (pair or hello). Default: wait for stdin lines.
         #[arg(long)]
         first: Option<String>,
+        /// Connect to a local host without relay or public address lookup.
+        #[arg(long, requires = "peer_addr")]
+        local_only: bool,
+        #[arg(long, requires = "local_only")]
+        peer_addr: Option<SocketAddr>,
     },
     /// Print this machine's endpoint id.
     Id {
@@ -63,7 +72,11 @@ enum PluginIn {
 #[derive(Serialize)]
 #[serde(tag = "type", rename_all = "kebab-case")]
 enum PluginOut {
-    Ready { endpoint_id: String },
+    Ready {
+        endpoint_id: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        direct_addr: Option<SocketAddr>,
+    },
     PeerSession { id: String, peer: String },
     PeerData { id: String, line: String },
     PeerPath { peer: String, kind: String, remote: String },
@@ -98,35 +111,55 @@ async fn main() -> Result<()> {
             let secret = load_or_create_secret(&dir.join("identity.key"))?;
             println!("{}", secret.public());
         }
-        Cmd::Host { data_dir } => {
-            host_main(data_dir.unwrap_or_else(default_data_dir)).await?
+        Cmd::Host { data_dir, local_only } => {
+            host_main(data_dir.unwrap_or_else(default_data_dir), local_only).await?
         }
         Cmd::PhoneSim {
             peer,
             data_dir,
             first,
+            local_only,
+            peer_addr,
         } => {
             let dir = data_dir.unwrap_or_else(|| {
                 dirs::config_dir()
                     .unwrap_or_else(|| PathBuf::from("."))
                     .join("dsh-pocket-phone-sim")
             });
-            phone_sim_main(dir, peer, first).await?
+            phone_sim_main(dir, peer, first, local_only, peer_addr).await?
         }
     }
     Ok(())
 }
 
-async fn host_main(data_dir: PathBuf) -> Result<()> {
+fn sidecar_endpoint_builder(local_only: bool) -> Result<iroh::endpoint::Builder> {
+    if local_only {
+        Ok(Endpoint::builder(presets::Minimal)
+            .clear_ip_transports()
+            .bind_addr((Ipv4Addr::LOCALHOST, 0))?
+            .relay_mode(RelayMode::Disabled))
+    } else {
+        endpoint_builder()
+    }
+}
+
+async fn host_main(data_dir: PathBuf, local_only: bool) -> Result<()> {
     let secret = load_or_create_secret(&data_dir.join("identity.key"))?;
-    let ep = endpoint_builder()?
+    let ep = sidecar_endpoint_builder(local_only)?
         .secret_key(secret)
         .alpns(vec![ALPN.to_vec()])
         .bind()
         .await
         .context("failed to start iroh endpoint")?;
+    let direct_addr = if local_only {
+        Some(ep.bound_sockets().into_iter().find(|addr| addr.ip().is_loopback())
+            .context("local endpoint did not bind a loopback socket")?)
+    } else {
+        None
+    };
     emit(&PluginOut::Ready {
         endpoint_id: ep.id().to_string(),
+        direct_addr,
     });
 
     let state = Arc::new(Mutex::new(HostState {
@@ -251,13 +284,26 @@ async fn handle_phone(
     Ok(())
 }
 
-async fn phone_sim_main(data_dir: PathBuf, peer: String, first: Option<String>) -> Result<()> {
+async fn phone_sim_main(
+    data_dir: PathBuf,
+    peer: String,
+    first: Option<String>,
+    local_only: bool,
+    peer_addr: Option<SocketAddr>,
+) -> Result<()> {
     let peer: EndpointId = peer
         .trim()
         .parse()
         .map_err(|e| anyhow::anyhow!("invalid --peer: {e}"))?;
+    let mut peer = EndpointAddr::new(peer);
+    if let Some(addr) = peer_addr {
+        if !addr.ip().is_loopback() {
+            bail!("--peer-addr must be a loopback address in --local-only mode");
+        }
+        peer = peer.with_ip_addr(addr);
+    }
     let secret = load_or_create_secret(&data_dir.join("identity.key"))?;
-    let ep = endpoint_builder()?.secret_key(secret).bind().await?;
+    let ep = sidecar_endpoint_builder(local_only)?.secret_key(secret).bind().await?;
     eprintln!("[phone-sim] local id: {}", ep.id());
     let conn = ep
         .connect(peer, ALPN)

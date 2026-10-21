@@ -16,3 +16,9 @@ cd plugin && npm run build:iroh
 ```
 
 **Line limit:** `MAX_LINE` / `MAX_UNPAIRED_LINE` are **1 MiB** in `pocket-iroh`.
+
+## Local transport tests
+
+The host and phone simulator support an explicit `--local-only` fixture mode. It binds loopback only and disables public address lookup and relays. The host's ready frame includes `direct_addr`; pass that address with `phone-sim --local-only --peer <endpoint_id> --peer-addr <direct_addr>`.
+
+The Node end-to-end cases run real QUIC/TLS, ALPN authentication, and device pairing without starting a WebSocket listener. They do not depend on public DNS or the Tokyo relay to connect two processes on the same runner. This is transport/protocol coverage, not proof of public relay availability. Omitting the flag retains the normal N0 discovery and configured relay behavior.

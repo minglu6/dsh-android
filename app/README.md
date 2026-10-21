@@ -180,7 +180,7 @@ PDF 原生渲染由 `PdfPreviewInstrumentedTest` 覆盖，需要设备／模拟�
 
 普通文件与本轮改动共用原生 Compose 预览工具栏和隔离的离线 WebView，随 APK 打包 Shiki 4.4.3、官方语言映射及配色。路径按实际字宽从前部省略，优先保留文件名；完整路径仍可访问和复制。代码字体遵守手机可用字体与字号设置，换行不插入零宽字符，行号不进入复制内容。单侧比较复制保留的源码，混合比较复制 unified patch，不伪装成完整当前文件。聊天中的 Markdown 代码块维持原实现。
 
-渲染器不执行文件中的 HTML／脚本，不联网，不开放原生 `JavascriptInterface` 或本机文件访问；内部 bootstrap 分别确认模块初始化和文档着色完成，不以 `onPageFinished` 代替就绪。初始化、资源或高亮失败显示真实错误并支持重载，不静默退化成“已成功”的纯文本。每个 hunk 的 old/new 侧分别保留语法状态并按批次着色，字体、主题和换行更新不会重复 tokenize。
+渲染器不执行文件中的 HTML／脚本，不联网，不开放原生 `JavascriptInterface` 或本机文件访问；内部 bootstrap 确认模块初始化、文档着色以及所选代码字体加载和布局完成，不以 `onPageFinished` 或空页面的字体状态代替就绪。初始化、资源或高亮失败显示真实错误并支持重载，不静默退化成“已成功”的纯文本。每个 hunk 的 old/new 侧分别保留语法状态并按批次着色，字体、主题和换行更新不会重复 tokenize。
 
 `code-preview/` 保留渲染源文件、官方 MIT 源码及依赖锁；生成的 `app/app/src/main/assets/code-preview/` 和 `CodePreviewLanguages.kt` 随源码保存，常规 Gradle 构建不需要 Node。修改渲染器或升级官方语法后，从仓库根目录运行：
 

@@ -56,8 +56,16 @@ class CodePreviewInstrumentedTest {
                 renderer.error?.let { throw AssertionError(it) }
                 nativeReady = !renderer.loading
             }
-            nativeReady && evaluate("({state:window.codePreviewBridge?.status().state, fontsReady:document.fonts.status==='loaded'})")
-                .let { it.optString("state") == "ready" && it.optBoolean("fontsReady") }
+            nativeReady && evaluate("""
+                ({state:window.codePreviewBridge?.status().state,
+                  selectedFontLoaded:document.fonts.check(getComputedStyle(document.body).font)})
+            """.trimIndent()).let {
+                if (it.optString("state") != "ready") false
+                else {
+                    assertTrue("Native readiness must include the selected code font", it.getBoolean("selectedFontLoaded"))
+                    true
+                }
+            }
         }
         instrumentation.runOnMainSync { assertNull(renderer.error) }
     }
@@ -71,16 +79,28 @@ class CodePreviewInstrumentedTest {
           const first = document.querySelector('#code .line, #code .comparison-line');
           const firstStyle = first ? getComputedStyle(first) : null;
           const marker = first?.querySelector('.comparison-text');
+          const pixel = value => Math.round(value * devicePixelRatio);
+          const lineRect = first?.getBoundingClientRect();
+          const gutter = first ? getComputedStyle(first, '::before') : null;
+          const textRange = document.createRange();
+          if (first) textRange.selectNodeContents(marker ?? first);
+          const textRect = first ? textRange.getClientRects()[0] : null;
           return {
             ...window.codePreviewBridge.status(), mode: document.body.dataset.mode,
             oneSided: document.body.dataset.oneSided, wrap: document.body.dataset.wrap,
             dark: document.body.hasAttribute('data-ds-dark-theme'),
             numberColor: numberToken ? getComputedStyle(numberToken).color : '',
-            rows: rows.map(row => ({old: row.dataset.old, new: row.dataset.new, kind: row.dataset.diffLine, text: row.textContent})),
+            rows: rows.map(row => ({old: row.dataset.old, new: row.dataset.new, kind: row.dataset.diffLine,
+              text: row.textContent, heightPixel: pixel(row.getBoundingClientRect().height)})),
             lastColor: lastToken ? getComputedStyle(lastToken).color : '',
             secondGutter: rows.length ? getComputedStyle(rows[0], '::after').content : '',
-            lineTop: first ? first.getBoundingClientRect().top : -1,
-            linePadding: firstStyle?.paddingInlineStart, lineBackground: firstStyle?.backgroundColor,
+            lineTopPixel: lineRect ? pixel(lineRect.top) : -1,
+            textLeftPixel: textRect ? pixel(textRect.left) : -1,
+            lineHeightPixel: lineRect ? pixel(lineRect.height) : -1,
+            textLineHeightPixel: firstStyle ? pixel(parseFloat(firstStyle.lineHeight)) : -1,
+            gutterVisible: gutter?.content !== 'none' && parseFloat(gutter?.width) > 0,
+            textClearsGutter: !!textRect && textRect.left > lineRect.left + parseFloat(gutter.insetInlineStart) + parseFloat(gutter.width),
+            lineBackground: firstStyle?.backgroundColor,
             marker: marker ? getComputedStyle(marker, '::before').content : 'none',
             text: document.getElementById('code').textContent,
             truncated: !!document.querySelector('[data-diff-note="truncated"]'),
@@ -101,7 +121,7 @@ class CodePreviewInstrumentedTest {
     }
 
     @Test fun coldSourceAndComparisonHaveRealIdenticalBlueTokensAndSurviveReloadThemeAndSourceSwitch() {
-        val source = "{\"count\": 42, \"enabled\": true}"
+        val source = "{\"count\": 42, \"enabled\": true, \"label\": \"${"x".repeat(400)}\"}"
         val sourceScript = codePreviewDocumentScript("snapshot.json", source)
         mount(sourceScript)
         ready()
@@ -109,13 +129,22 @@ class CodePreviewInstrumentedTest {
         assertEquals("source", live.getString("mode"))
         val lightBlue = live.getString("numberColor")
         assertBlue(lightBlue)
+        assertTrue("Source line numbers must remain visible", live.getBoolean("gutterVisible"))
+        assertTrue("Source text must not overlap its line number", live.getBoolean("textClearsGutter"))
+        assertTrue("A long source line must visibly wrap",
+            live.getInt("lineHeightPixel") > live.getInt("textLineHeightPixel"))
         update(codeComparisonDocumentScript(WorkspaceFileDiff("text", "snapshot.json", "snapshot.json", before = false,
             hunks = listOf(WorkspaceDiffHunk(0, 1, listOf("+$source"))))))
         ready()
         val fullFile = snapshot()
         assertEquals(lightBlue, fullFile.getString("numberColor"))
-        assertEquals(live.getDouble("lineTop"), fullFile.getDouble("lineTop"), 0.1)
-        assertEquals(live.getString("linePadding"), fullFile.getString("linePadding"))
+        assertEquals(live.getInt("lineTopPixel"), fullFile.getInt("lineTopPixel"))
+        assertEquals("Complete snapshots must align their source text on screen",
+            live.getInt("textLeftPixel"), fullFile.getInt("textLeftPixel"))
+        assertEquals(live.getInt("lineHeightPixel"), fullFile.getInt("lineHeightPixel"))
+        assertTrue(fullFile.getBoolean("gutterVisible"))
+        assertTrue(fullFile.getBoolean("textClearsGutter"))
+        assertEquals("1", fullFile.getJSONArray("rows").getJSONObject(0).getString("new"))
         assertEquals(live.getString("lineBackground"), fullFile.getString("lineBackground"))
         assertEquals("none", fullFile.getString("marker"))
 
@@ -132,7 +161,13 @@ class CodePreviewInstrumentedTest {
         assertEquals("8", comparison.getJSONArray("rows").getJSONObject(1).getString("new"))
         assertEquals(source, comparison.getJSONArray("rows").getJSONObject(1).getString("text"))
         assertEquals(lightBlue, comparison.getString("numberColor"))
-        assertNotEquals(fullFile.getString("linePadding"), comparison.getString("linePadding"))
+        assertTrue("A patch must reserve space for both coordinates and the change sign",
+            comparison.getInt("textLeftPixel") > fullFile.getInt("textLeftPixel"))
+        assertTrue(comparison.getBoolean("gutterVisible"))
+        assertTrue(comparison.getBoolean("textClearsGutter"))
+        assertEquals("\"-\"", comparison.getString("marker"))
+        assertTrue("A long patch row must visibly wrap",
+            comparison.getJSONArray("rows").getJSONObject(1).getInt("heightPixel") > comparison.getInt("textLineHeightPixel"))
         val generation = comparison.getInt("generation")
         update(diffScript, options.put("dark", true).put("wrap", false).put("fontSize", 13))
         ready()
@@ -142,6 +177,8 @@ class CodePreviewInstrumentedTest {
         assertEquals(generation, dark.getInt("generation"))
         assertBlue(dark.getString("numberColor"))
         assertNotEquals(lightBlue, dark.getString("numberColor"))
+        assertEquals("Disabling wrap must render the long patch row at one text-line height",
+            dark.getInt("textLineHeightPixel"), dark.getJSONArray("rows").getJSONObject(1).getInt("heightPixel"))
 
         instrumentation.runOnMainSync { renderer.reload() }
         ready()

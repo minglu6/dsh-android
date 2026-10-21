@@ -192,6 +192,7 @@ npm test
 ```
 
 `npm test` 的 `pretest` 会重建客户端。若需覆盖遗留 sidecar 相关测试，先准备 Rust 工具链并执行 `npm run build:iroh`；CI 会先构建 sidecar，再将二进制提供给插件测试。
+遗留 sidecar 的握手／配对端到端用例使用真实 QUIC 与 Node pipe bridge，但通过显式回环地址隔离公网发现和中继可用性；不会退回 WebSocket，也不跳过认证。测试模式与默认中继行为见 [`iroh/README.md`](iroh/README.md#local-transport-tests)。
 
 真实 Host 集成测试需要 PATH 中的 dsh 与 pnpm：
 
