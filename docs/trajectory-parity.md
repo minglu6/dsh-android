@@ -310,7 +310,7 @@ Status column tracks Request inspector + load-earlier (this PR) on top of #36 ki
 | G13 | `tool/ptc-dispatch*` / `compaction/*` | Ignored | **Fixed** — reducer consumes; plugin already forwards |
 | G14 | firstTokenTime | Missing | **Fixed** — stream + StepRecord |
 | G15 | Previous system + tools catalog | Latest toolsByName only | **Fixed** |
-| G16 | Load-older UI | hasMore only | **Fixed** — Trajectory top “加载更早的历史” + near-top scroll → `Pocket.loadOlderHistory()` / `history.page` (#27) |
+| G16 | Load-older UI | hasMore only | **Fixed** — top pull-to-refresh + backward near-top boundary automatically call `Pocket.loadOlderHistory()` / `history.page`; short windows fill without a manual load row, failed/unchanged cursors do not spin |
 | G17 | Swimlane Actual | Toolbar hidden | OK (matches desktop) |
 | G18 | Chat tool cards | N/A | Out of scope (desktop Trajectory also omits) |
 
@@ -339,5 +339,5 @@ Status column tracks Request inspector + load-earlier (this PR) on top of #36 ki
 | `TrajectoryToolbar` / swimlane | `Trajectory.kt` |
 | `code-program.ts` | `CodeProgram.kt` |
 | `requestNumbers` / REQUEST_TABS | `TrajectoryRequest.kt` / `TrajectoryRequestDetail.kt` |
-| history load-earlier | `HistoryLoadEarlierRow` + `Pocket.loadOlderHistory` |
+| history load-earlier | `PullToRefreshBox` + cursor-gated near-top loading + `Pocket.loadOlderHistory` |
 | table / layout / snapshot tests | `Trajectory*Test`, `TrajectoryRequestTest`, `TranscriptReducerTest`, Roborazzi per kind |

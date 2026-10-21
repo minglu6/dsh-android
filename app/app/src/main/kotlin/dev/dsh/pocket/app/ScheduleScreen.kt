@@ -14,11 +14,17 @@ import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material3.*
+import androidx.compose.material3.pulltorefresh.PullToRefreshBox
+import androidx.compose.material3.pulltorefresh.rememberPullToRefreshState
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -31,6 +37,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.collect
 import kotlinx.serialization.json.*
 import java.time.Instant
 import java.time.LocalDate
@@ -347,11 +354,16 @@ private fun ScheduleDetailScreen(row: JsonObject, authoritative: Boolean, online
             } finally { busy = false }
         }
     }
-    SettingsScaffold(row["title"].str().orEmpty(), leave, actions = {
-        if (editing != null) TextButton(::save, enabled = !busy && online && changed && authoritative && isActive && "schedule.update" in ops) {
-            Text(if (busy) st("保存中…", "Saving…") else st("保存", "Save"))
+    CompositionLocalProvider(LocalContentColor provides T.Ink) {
+    Column(Modifier.fillMaxSize().background(T.Surface2).systemBarsPadding().imePadding()) {
+        Row(Modifier.fillMaxWidth().height(56.dp).padding(horizontal = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+            IconButton(leave) { Icon(D.chevronLeft, st("返回", "Back"), tint = T.Ink) }
+            Text(row["title"].str().orEmpty(), fontSize = 20.sp, color = T.Ink, modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
+            if (editing != null) TextButton(::save, enabled = !busy && online && changed && authoritative && isActive && "schedule.update" in ops) {
+                Text(if (busy) st("保存中…", "Saving…") else st("保存", "Save"))
+            }
         }
-    }) {
+        if (!online) SettingsMessage(st("远程主机未连接，需连接的操作暂不可用", "Host disconnected. Actions requiring a connection are unavailable."))
         Row(Modifier.fillMaxWidth().padding(horizontal = 18.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
             listOf(st("规则", "Rules"), st("任务运行记录", "Records")).forEachIndexed { index, label ->
                 ScheduleTab(label, tab == index) { tab = index }
@@ -362,8 +374,9 @@ private fun ScheduleDetailScreen(row: JsonObject, authoritative: Boolean, online
             retryEnabled = online && "schedule.catalog" in ops, onRetry = onRefresh)
         error?.let { ErrorOrEmpty(it, retryEnabled = online && !loading && "schedule.catalog" in ops, onRetry = onRefresh) }
         if (tab == 1) {
-            key(id, sessionId) { ScheduleHistoryScreen(sessionId, id, row["timeZone"].str(), row["lastDelivery"]["messageId"].str(), online) }
+            ScheduleHistoryScreen(sessionId, id, row["timeZone"].str(), row["lastDelivery"]["messageId"].str(), online)
         } else {
+            Column(Modifier.weight(1f).fillMaxWidth().verticalScroll(rememberScrollState())) {
             ScheduleCard {
                 Text(if (isActive) st("已开启", "Enabled") else st("已结束", "Inactive"), color = MaterialTheme.colorScheme.onSurfaceVariant)
                 if (editing != null) {
@@ -416,8 +429,10 @@ private fun ScheduleDetailScreen(row: JsonObject, authoritative: Boolean, online
             Column(Modifier.padding(horizontal = 18.dp)) {
                 ScheduleButton(st("删除任务", "Delete task"), !busy && online && authoritative && "schedule.delete" in ops) { confirmDelete = true }
             }
+            Spacer(Modifier.height(24.dp))
+            }
         }
-        Spacer(Modifier.height(24.dp))
+    }
     }
     if (confirmLeave) AlertDialog(onDismissRequest = { confirmLeave = false }, title = { Text(st("有未保存的修改", "Unsaved changes")) },
         text = { Text(st("离开将放弃未保存的更改。", "Leaving discards unsaved changes.")) },
@@ -641,13 +656,23 @@ private fun ScheduleCronEditor(expression: String, enabled: Boolean, onChange: (
 }
 
 @Composable
-private fun ScheduleHistoryScreen(sessionId: String, id: String, zone: String?, latestMessage: String?, online: Boolean) {
+internal fun ScheduleHistoryScreen(sessionId: String, id: String, zone: String?, latestMessage: String?, online: Boolean) {
+    key(sessionId, id) { ScheduleHistoryContent(sessionId, id, zone, latestMessage, online) }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun ScheduleHistoryContent(sessionId: String, id: String, zone: String?, latestMessage: String?, online: Boolean) {
     val scope = rememberCoroutineScope()
     val ops by Pocket.ops.collectAsState()
+    val canLoad = online && "schedule.history" in ops
+    val list = rememberLazyListState()
+    val pullState = rememberPullToRefreshState()
     var records by remember { mutableStateOf<List<JsonObject>>(emptyList()) }
     var nextBefore by remember { mutableStateOf<String?>(null) }
     var failedBefore by remember { mutableStateOf<String?>(null) }
     var loading by remember { mutableStateOf(false) }
+    var refreshing by remember { mutableStateOf(false) }
     var loaded by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
     var pruned by remember { mutableStateOf(false) }
@@ -655,14 +680,17 @@ private fun ScheduleHistoryScreen(sessionId: String, id: String, zone: String?, 
     var retention by remember { mutableStateOf<JsonElement?>(null) }
     var showRetention by remember { mutableStateOf(false) }
     var requestEpoch by remember { mutableIntStateOf(0) }
+    val attempted = remember { mutableSetOf<String>() }
+    val completed = remember { mutableSetOf<String>() }
     suspend fun load(before: String? = null) {
-        if (!online || (loading && before != null)) return
+        if (!canLoad || (loading && before != null)) return
         val epoch = ++requestEpoch
         loading = true
+        refreshing = before == null
         error = null
         failedBefore = before
+        if (before != null) attempted.add(before)
         try {
-            check("schedule.history" in Pocket.ops.value) { L.unavailable() }
             val client = Pocket.clientOrNull() ?: error(st("连接已断开，请重新连接。", "Disconnected. Reconnect to continue."))
             val result = client.scheduleHistory(sessionId, id, 20, before)
             if (epoch != requestEpoch) return
@@ -672,9 +700,24 @@ private fun ScheduleHistoryScreen(sessionId: String, id: String, zone: String?, 
                 error(code)
             }
             val page = result["records"].arr() ?: error("Invalid delivery history response")
-            val pageRows = page.map { it as? JsonObject ?: error("Invalid delivery record") }
-            records = if (before == null) pageRows else (records + pageRows).distinctBy { it["messageId"].str() }
-            nextBefore = result["nextBefore"].str()
+            val pageRows = page.map { record ->
+                val row = record as? JsonObject ?: error("Invalid delivery record")
+                check(!row["messageId"].str().isNullOrBlank()) { "Invalid delivery messageId" }
+                row
+            }.distinctBy { it["messageId"].str() }
+            val merged = if (before == null) pageRows else (records + pageRows).distinctBy { it["messageId"].str() }
+            val cursor = result["nextBefore"].str()
+            if (before != null && cursor != null) {
+                check(merged.size > records.size && cursor != before && cursor !in completed) {
+                    st("运行记录分页未取得进展，请重试或下拉刷新。", "Delivery history did not advance. Retry or pull to refresh.")
+                }
+            }
+            records = merged
+            nextBefore = cursor
+            if (before == null) {
+                attempted.clear()
+                completed.clear()
+            } else completed.add(before)
             pruned = result["earlierRecordsPruned"].bool() == true
             unavailable = result["earlierRecordsUnavailable"].bool() == true
             retention = result["retention"]
@@ -682,20 +725,59 @@ private fun ScheduleHistoryScreen(sessionId: String, id: String, zone: String?, 
         } catch (e: CancellationException) { throw e } catch (e: Exception) {
             if (epoch == requestEpoch) error = scheduleFailure(e)
         } finally {
-            if (epoch == requestEpoch) loading = false
+            if (epoch == requestEpoch) { loading = false; refreshing = false }
         }
     }
-    // Re-mounting the tab starts a fresh page; subsequent catalog receipts refresh it too.
-    LaunchedEffect(latestMessage, online, ops) { load() }
-    Column(Modifier.fillMaxWidth().padding(horizontal = 18.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        Text(st("以下记录仅确认提醒已写入原会话收件箱，不代表模型已执行或任务已完成。", "These receipts confirm inbox delivery to the original session, not model execution or task completion."),
-            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        ScheduleButton(st("刷新", "Refresh"), online && !loading && "schedule.history" in ops) { scope.launch { load() } }
-        if (loading) LinearProgressIndicator(Modifier.fillMaxWidth(), color = MaterialTheme.colorScheme.onSurface)
-        error?.let { ErrorOrEmpty(it, retryEnabled = online && !loading && "schedule.history" in ops) { scope.launch { load(failedBefore) } } }
-        if (loaded && records.isEmpty() && error == null) ErrorOrEmpty(st("暂无任务运行记录", "No delivery record available"))
-        records.forEach { record ->
-            key(record["messageId"].str()) {
+    DisposableEffect(Unit) { onDispose { requestEpoch++ } }
+    // Only relevant capability transitions refresh; unrelated capability events must not retry errors.
+    LaunchedEffect(latestMessage, canLoad) {
+        requestEpoch++
+        loading = false
+        refreshing = false
+        if (canLoad) load()
+    }
+    LaunchedEffect(canLoad) {
+        var wasScrolling = false
+        var newGesture = false
+        snapshotFlow {
+            val layout = list.layoutInfo
+            val bottom = layout.totalItemsCount == records.size + 2 &&
+                layout.visibleItemsInfo.lastOrNull()?.key == "footer"
+            Triple(bottom, list.isScrollInProgress, Triple(nextBefore, loading, pullState.distanceFraction > 0f))
+        }.collect { (bottom, scrolling, _) ->
+            val endedGesture = !scrolling && wasScrolling && newGesture
+            if (scrolling && !wasScrolling) newGesture = true
+            if (!scrolling) newGesture = false
+            wasScrolling = scrolling
+            val cursor = nextBefore
+            if (canLoad && loaded && bottom && !loading && cursor != null) {
+                val retryBoundary = endedGesture && pullState.distanceFraction == 0f && failedBefore == cursor
+                if (error != null && !retryBoundary) return@collect
+                if (retryBoundary && error != null) {
+                    attempted.remove(cursor)
+                    newGesture = false
+                }
+                if (attempted.add(cursor)) {
+                    newGesture = false
+                    load(cursor)
+                }
+            }
+        }
+    }
+    PullToRefreshBox(
+        isRefreshing = refreshing,
+        onRefresh = { if (canLoad && !loading) scope.launch { load() } },
+        modifier = Modifier.fillMaxSize().testTag("scheduleHistoryRefresh"),
+        state = pullState,
+    ) {
+        LazyColumn(state = list, modifier = Modifier.fillMaxSize().testTag("scheduleHistory"),
+            contentPadding = PaddingValues(horizontal = 18.dp, vertical = 10.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            item(key = "explanation") {
+                Text(st("以下记录仅确认提醒已写入原会话收件箱，不代表模型已执行或任务已完成。", "These receipts confirm inbox delivery to the original session, not model execution or task completion."),
+                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            items(records, key = { it["messageId"].str()!! }) { record ->
                 var expanded by remember { mutableStateOf(false) }
                 var overflow by remember { mutableStateOf(false) }
                 Column(Modifier.fillMaxWidth().padding(vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -707,19 +789,26 @@ private fun ScheduleHistoryScreen(sessionId: String, id: String, zone: String?, 
                             onTextLayout = { if (!expanded) overflow = it.hasVisualOverflow })
                         if (expanded || overflow) TextButton({ expanded = !expanded }) { Text(if (expanded) st("收起", "Collapse") else st("展开", "Expand")) }
                     }
+                    HorizontalDivider(thickness = 0.5.dp)
                 }
-                HorizontalDivider(thickness = 0.5.dp)
             }
-        }
-        if (nextBefore != null && error == null) ScheduleButton(st("加载更多", "Load more"), online && !loading && "schedule.history" in ops) { scope.launch { load(nextBefore) } }
-        if (records.isNotEmpty() && nextBefore == null && !loading && error == null && (pruned || unavailable)) {
-            Text(if (pruned) st("更早的运行记录已清理", "Earlier delivery records have been cleared")
-                else st("更早的任务运行记录不可用", "Earlier delivery records are unavailable"), style = MaterialTheme.typography.bodySmall)
-            if (pruned) {
-                ScheduleButton(st("保留规则", "Retention rules")) { showRetention = !showRetention }
-                if (showRetention) Text(st("每个任务最多保留最近 ${retention["days"].int()} 天的 ${retention["records"].int()} 条运行记录。保存新记录时会自动清理超出限制的记录，清理不会停止任务。",
-                    "Each task keeps up to ${retention["records"].int()} delivery records from the last ${retention["days"].int()} days. Older records are cleared when a new record is saved. Clearing records does not stop the task."),
-                    style = MaterialTheme.typography.bodySmall)
+            item(key = "footer") {
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    if (loading && !refreshing) LinearProgressIndicator(Modifier.fillMaxWidth(), color = MaterialTheme.colorScheme.onSurface)
+                    error?.let { ErrorOrEmpty(it, retryEnabled = canLoad && !loading) { scope.launch { load(failedBefore) } } }
+                    if (loaded && records.isEmpty() && error == null) ErrorOrEmpty(st("暂无任务运行记录", "No delivery record available"))
+                    if (records.isNotEmpty() && nextBefore == null && !loading && error == null && (pruned || unavailable)) {
+                        Text(if (pruned) st("更早的运行记录已清理", "Earlier delivery records have been cleared")
+                            else st("更早的任务运行记录不可用", "Earlier delivery records are unavailable"), style = MaterialTheme.typography.bodySmall)
+                        if (pruned) {
+                            ScheduleButton(st("保留规则", "Retention rules")) { showRetention = !showRetention }
+                            if (showRetention) Text(st("每个任务最多保留最近 ${retention["days"].int()} 天的 ${retention["records"].int()} 条运行记录。保存新记录时会自动清理超出限制的记录，清理不会停止任务。",
+                                "Each task keeps up to ${retention["records"].int()} delivery records from the last ${retention["days"].int()} days. Older records are cleared when a new record is saved. Clearing records does not stop the task."),
+                                style = MaterialTheme.typography.bodySmall)
+                        }
+                    }
+                    Spacer(Modifier.height(14.dp))
+                }
             }
         }
     }

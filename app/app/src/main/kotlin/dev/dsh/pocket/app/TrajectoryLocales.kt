@@ -104,9 +104,6 @@ object TrajL {
     const val optionsJson = "请求选项 JSON"
 
     const val historyLoadingTrajectory = "正在加载轨迹…"
-    const val historyLoadingEarlier = "正在加载更早的历史…"
-    const val historyLoadEarlier = "加载更早的历史"
-    const val historyClickToLoadEarlier = "点击加载更早的历史"
 
     const val recordToolCallOnly = "（仅工具调用）"
     const val recordNoContent = "无内容"

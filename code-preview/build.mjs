@@ -19,6 +19,7 @@ await writeFile(resolve(assets, 'preview.css'),
   await readFile(resolve(root, 'vendor/shiki.css'), 'utf8') + '\n' +
   await readFile(resolve(root, 'src/preview.css'), 'utf8'))
 await writeFile(resolve(assets, 'index.html'), await readFile(resolve(root, 'src/index.html')))
+await writeFile(resolve(assets, 'bridge.js'), await readFile(resolve(root, 'src/bridge.js')))
 await writeFile(resolve(assets, 'LICENSE'), await readFile(resolve(root, 'vendor/LICENSE')))
 // Ship the licenses of every bundled npm package, not just the upstream adaptation.
 const packageDirectories = new Set(Object.keys(bundle.metafile.inputs)

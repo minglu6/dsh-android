@@ -972,7 +972,8 @@ object Pocket {
         continuityRepairAttempts = 0
         followAttempts.remove(sessionId)
         reducer = TranscriptReducer()
-        reducer.setRunning(sessions.value.firstOrNull { it.sessionId == sessionId }?.running ?: false)
+        val summary = sessions.value.firstOrNull { it.sessionId == sessionId }
+        reducer.setRunning(summary?.running ?: false)
         inspectorLog = SessionInspectorLog()
         permissionProjectionSeq = -1L
         modelProjectionSeq = -1L
@@ -980,7 +981,7 @@ object Pocket {
         resetFeedback()
         seed?.let { reducer.echo(it.text, it.requestId) }
         chat.value = ChatState(sessionId, items = reducer.items(), running = reducer.running,
-            title = sessions.value.firstOrNull { it.sessionId == sessionId }?.title, address = address)
+            title = summary?.title, agentPreset = summary?.agentPreset, address = address)
         publishTeam()
     }
 

@@ -38,7 +38,7 @@ class PocketFollowTest {
         Pocket.init(RuntimeEnvironment.getApplication())
         (get("transcriptPublisher") as TranscriptPublisher).cancel()
         val fields = listOf("client", "subId", "pendingFollowEpoch", "reducer", "inspectorLog", "permissionProjectionSeq",
-            "modelProjectionSeq", "modelUsesDefault", "firstPromptSessionId", "continuityRepairAttempts",
+            "modelProjectionSeq", "goalProjectionSeq", "presetProjectionSeq", "modelUsesDefault", "firstPromptSessionId", "continuityRepairAttempts",
             "desiredViewedSession", "completionReadySession", "completionViewClient", "completionViewSession",
             "feedbackGeneration", "feedbackLoaded", "teamStore").associateWith(::get)
         val modelEpochs = listOf("modelCatalogEpoch", "modelSelectionEpoch").associateWith { (get(it) as AtomicLong).get() }
@@ -93,6 +93,8 @@ class PocketFollowTest {
         (get("_subagents") as MutableStateFlow<List<SubagentEntry>?>).value = null
         put("permissionProjectionSeq", -1L)
         put("modelProjectionSeq", -1L)
+        put("goalProjectionSeq", -1L)
+        put("presetProjectionSeq", -1L)
         put("modelUsesDefault", false)
         put("firstPromptSessionId", null)
         (get("_firstPrompt") as MutableStateFlow<FirstPrompt?>).value = null
@@ -136,6 +138,51 @@ class PocketFollowTest {
         """{"type":"snapshot","cursor":$seq,"records":[],"projections":{"asOfSeq":$seq,"values":{"permissions":{"currentValue":"workspace-write"}}}}""")
     private fun open(session: String) = Pocket.openSession(session).also { jobs += it }
     private suspend fun finish(job: Job) = withTimeout(5000) { job.join() }
+
+    @Test fun summaryPresetIsAvailableBeforeFollowAndSnapshotRemainsAuthoritative() = runBlocking {
+        Pocket.sessions.value = listOf(SessionSummary.parse(PocketJson.parseToJsonElement(
+            """{"sessionId":"A","projections":{"values":{"title":"Existing","agentPreset":"custom-review"}}}"""))!!)
+        val opening = open("A")
+        val old = request("unfollow")
+        assertEquals("custom-review", Pocket.chat.value!!.agentPreset)
+        assertFalse(Pocket.chat.value!!.loaded)
+        reply(old, "{}")
+        val follow = request("follow")
+        assertEquals("custom-review", Pocket.chat.value!!.agentPreset)
+        reply(follow, """{"subId":"preset-A"}""")
+        finish(opening)
+        push("preset-A", """{"type":"snapshot","cursor":10,"records":[],"projections":{"asOfSeq":10,"values":{"agentPreset":"standard"}}}""")
+        assertEquals("standard", Pocket.chat.value!!.agentPreset)
+        assertTrue(Pocket.chat.value!!.loaded)
+    }
+
+    @Test fun switchingToUnknownSummaryNeverBorrowsThePreviousSessionsPreset() = runBlocking {
+        Pocket.chat.value = ChatState("A", agentPreset = "cordis", loaded = true)
+        Pocket.sessions.value = listOf(SessionSummary.parse(PocketJson.parseToJsonElement(
+            """{"sessionId":"B","projections":{"values":{"title":"No recorded preset"}}}"""))!!)
+        val opening = open("B")
+        val old = request("unfollow")
+        assertEquals("B", Pocket.chat.value!!.sessionId)
+        assertNull(Pocket.chat.value!!.agentPreset)
+        reply(old, "{}")
+        reply(request("follow"), """{"subId":"preset-B"}""")
+        finish(opening)
+        snapshot("preset-B")
+        assertNull(Pocket.chat.value!!.agentPreset)
+    }
+
+    @Test fun fullSnapshotCanRemoveASummaryPresetInsteadOfLeavingAFalseIcon() = runBlocking {
+        Pocket.sessions.value = listOf(SessionSummary.parse(PocketJson.parseToJsonElement(
+            """{"sessionId":"A","projections":{"values":{"agentPreset":"standard"}}}"""))!!)
+        val opening = open("A")
+        val old = request("unfollow")
+        assertEquals("standard", Pocket.chat.value!!.agentPreset)
+        reply(old, "{}")
+        reply(request("follow"), """{"subId":"preset-cleared"}""")
+        finish(opening)
+        snapshot("preset-cleared")
+        assertNull(Pocket.chat.value!!.agentPreset)
+    }
 
     @Test fun unreadClearsOnlyAfterForegroundConversationHasARealSnapshot() = runBlocking {
         Pocket.ops.value = setOf("completion.view")

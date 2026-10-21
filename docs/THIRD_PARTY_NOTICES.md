@@ -44,6 +44,10 @@ bundled npm package license texts in
 `app/app/src/main/assets/code-preview/THIRD_PARTY_NOTICES`; these notices and the
 DeepSeek license are shipped in the APK alongside the renderer.
 
+The vendored highlighter includes a local `LineHighlightSession` adapter for
+bounded line batches and retained grammar state. It reuses the upstream Shiki
+tokenization and theme mapping; the language table and theme rules are unchanged.
+
 The Office warning vector and localized font/conversion feedback follow
 `ui-sidebar-documentpreview`. The Excel renderer vendors that module's parsers,
 read-only workbook UI, styles, fixtures and required primitives in

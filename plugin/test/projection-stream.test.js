@@ -162,3 +162,31 @@ test('team and child catalog changes follow the initial sequence cut, including 
     ['agentTeam', team, 12], ['subagentCatalog', [], 13], ['subagentCatalog', null, 14], ['agentTeam', null, 15],
   ])
 })
+
+test('a todo withdrawal queued before the opening cut cannot restore another session or an old plan', { timeout: 10000 }, async t => {
+  let release
+  const gate = new Promise(resolve => { release = resolve })
+  t.after(() => release())
+  const { server, url } = await start(t, () => gate)
+  const a = await connect(url)
+  const b = await connect(url)
+  t.after(() => { a.ws.terminate(); b.ws.terminate() })
+  await a.call('follow', { sessionId: 'a' })
+  await b.call('follow', { sessionId: 'b' })
+  const completed = [{ content: 'Old plan', status: 'completed' }]
+  server.broadcastProjection('a', 'todos', completed, 9)
+  server.broadcastProjection('a', 'todos', null, 11)
+  server.broadcastProjection('a', 'todos', completed, 10)
+  await Promise.all([a.barrier(), b.barrier()])
+  assert.equal(a.frames.length, 0)
+  release()
+  await a.frameCount(2)
+  await b.frameCount(1)
+  await Promise.all([a.barrier(), b.barrier()])
+  assert.equal(a.frames.length, 2)
+  assert.equal(a.frames[0].frame.type, 'snapshot')
+  assert.deepEqual(a.frames[1].frame, {
+    type: 'projection', sessionId: 'a', key: 'todos', value: null, seq: 11,
+  })
+  assert.equal(b.frames.length, 1)
+})

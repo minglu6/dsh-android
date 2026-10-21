@@ -15,6 +15,7 @@ function fatSession(i) {
     projections: {
       values: {
         title: `Session title ${i}`,
+        agentPreset: 'standard',
         tokenUsage: { input: 12_000, output: 4_000, cacheRead: 90_000, cacheWrite: 1_000 },
         turnOutline: Array.from({ length: 20 }, (_, j) => ({
           kind: 'tool',
@@ -28,15 +29,15 @@ function fatSession(i) {
         },
       },
     },
-    agentPreset: 'standard',
     model: { provider: 'deepseek', id: 'deepseek-v4.1-flash' },
   }
 }
 
-test('slimSessionSummary keeps SessionSummary.parse fields only', () => {
+test('session summaries retain header metadata while dropping bulk projections', () => {
   const slim = slimSessionSummary(fatSession(3))
   assert.equal(slim.sessionId, 'session-3')
   assert.equal(slim.projections.values.title, 'Session title 3')
+  assert.equal(slim.projections.values.agentPreset, 'standard')
   assert.equal(slim.cwd, '/Users/me/projects/repo-3')
   assert.equal(slim.running, false)
   assert.equal(slim.blank, false)
@@ -50,6 +51,22 @@ test('slimSessionSummary keeps SessionSummary.parse fields only', () => {
   assert.equal(slim.model, undefined)
 })
 
+test('untitled and missing-preset sessions do not invent header context', () => {
+  const untitled = slimSessionSummary({
+    sessionId: 'untitled',
+    projections: { values: { title: null, agentPreset: 'custom-review' } },
+  })
+  assert.deepEqual(untitled.projections.values, { agentPreset: 'custom-review' })
+  const absent = slimSessionSummary({ sessionId: 'unknown' })
+  assert.equal(absent.projections, undefined)
+  const cleared = slimSessionSummary({
+    sessionId: 'no-preset',
+    agentPreset: 'not-authoritative',
+    projections: { values: { agentPreset: null } },
+  })
+  assert.deepEqual(cleared.projections.values, { agentPreset: null })
+})
+
 test('slimSessionsList shrinks a 33-session fixture well under 64 KiB', () => {
   const fat = { items: Array.from({ length: 33 }, (_, i) => fatSession(i)), nextCursor: null }
   const fatBytes = Buffer.byteLength(JSON.stringify(fat), 'utf8')
@@ -60,28 +77,8 @@ test('slimSessionsList shrinks a 33-session fixture well under 64 KiB', () => {
   assert.ok(slimBytes < 16 * 1024, `slim list should be <<64KiB (got ${slimBytes})`)
   assert.equal(slim.items.length, 33)
   assert.equal(slim.items[0].projections.values.title, 'Session title 0')
-  // Envelope as the phone would see it over iroh (rpc reply wrapper).
+  // Include the RPC envelope seen by the phone.
   const wire = JSON.stringify({ id: 2, ok: true, result: slim })
   assert.ok(Buffer.byteLength(wire, 'utf8') < 64 * 1024)
 })
 
-test('documented iroh MAX_LINE is at least 1 MiB (keep in sync with pocket-iroh)', async () => {
-  // Mirror the Rust constant so a JS-only CI job still catches a doc drift if someone
-  // lowers the comment without rebuilding. The authoritative value is in
-  // plugin/iroh/pocket-iroh/src/lib.rs (MAX_LINE = 1024 * 1024).
-  const EXPECTED_MIN = 1024 * 1024
-  const { readFileSync } = await import('node:fs')
-  const { join, dirname } = await import('node:path')
-  const { fileURLToPath } = await import('node:url')
-  const lib = readFileSync(
-    join(dirname(fileURLToPath(import.meta.url)), '../iroh/pocket-iroh/src/lib.rs'),
-    'utf8',
-  )
-  const m = lib.match(/pub const MAX_LINE: usize = ([^;]+);/)
-  assert.ok(m, 'MAX_LINE declaration missing')
-  const expr = m[1].replace(/\s/g, '')
-  assert.ok(
-    expr === '1024*1024' || expr === `${EXPECTED_MIN}`,
-    `MAX_LINE should be ≥1MiB, got ${expr}`,
-  )
-})

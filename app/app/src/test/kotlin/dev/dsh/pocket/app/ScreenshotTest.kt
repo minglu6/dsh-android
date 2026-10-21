@@ -293,11 +293,6 @@ class ScreenshotTest {
             TrajectoryRequestSheet(assistant) {}
         }
     }
-    @Test fun s14e_historyLoadEarlier() {
-        show("14e-history-load-earlier") {
-            TrajectoryView(chatState(hasMore = true))
-        }
-    }
 
     private fun trajKindRow(kind: String): TrajRow {
         val state = chatState()

@@ -10,6 +10,8 @@ import androidx.compose.ui.unit.dp
 import com.github.takahirom.roborazzi.captureRoboImage
 import dev.dsh.pocket.protocol.*
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.withContext
 import org.junit.Assert.assertEquals
 import org.junit.Before
 import org.junit.Rule
@@ -56,11 +58,11 @@ class WorkspaceChangesTest {
         rule.onRoot().captureRoboImage("build/screenshots/changes-card-light.png")
         rule.onNodeWithTag("changesExpand").performClick()
         rule.onNodeWithTag("changedFile:6").performClick()
-        assertEquals(6, selected)
+        rule.runOnIdle { assertEquals(6, selected) }
         rule.onNodeWithTag("changesExpand").performClick()
         rule.onNodeWithTag("changedFile:4").assertDoesNotExist()
         rule.onNodeWithText("已编辑 7 个文件").performClick()
-        assertEquals(0, selected)
+        rule.runOnIdle { assertEquals(0, selected) }
         rule.runOnIdle { Pocket.prefs.appearance = Appearance.Dark }
         rule.onRoot().captureRoboImage("build/screenshots/changes-card-dark.png")
     }
@@ -91,15 +93,85 @@ class WorkspaceChangesTest {
         rule.onNodeWithTag("changesSummary").assertDoesNotExist()
     }
 
-    @Test fun hunkLineNumbersPreserveIndependentOldAndNewCoordinatesAndCapOutput() {
-        val diff = WorkspaceFileDiff("text", "a", "a", hunks = listOf(
-            WorkspaceDiffHunk(4, 8, listOf(" context", "-old", "+new", " next")),
-            WorkspaceDiffHunk(20, 24, listOf("+added")),
-        ))
-        assertEquals(listOf(ChangeDiffLine(4, 8, " context"), ChangeDiffLine(5, null, "-old"),
-            ChangeDiffLine(null, 9, "+new"), ChangeDiffLine(6, 10, " next"), ChangeDiffLine(null, 24, "+added")), changeDiffLines(diff))
-        val capped = changeDiffLines(diff.copy(hunks = listOf(WorkspaceDiffHunk(1, 1, List(5001) { "+$it" }))))
-        assertEquals(ChangeDiffLine(null, 5000, "+4999"), capped.last())
-        assertEquals(5000, capped.size)
+    @Test fun refreshReloadsTheSameHistoricalCoordinatesWhileSelectionKeepsHostOrder() {
+        val requests = mutableListOf<Triple<String, Long, Int>>()
+        rule.setContent { PocketTheme {
+            ChangesReviewSheet("session", 47, summary, 6, {}) { session, seq, index ->
+                requests += Triple(session, seq, index)
+                WorkspaceFileDiff("binary", summary.files[index].path, summary.files[index].display)
+            }
+        } }
+        rule.onNodeWithTag("previewPath").assertContentDescriptionEquals("package.json")
+        rule.onNodeWithContentDescription("刷新文件").performClick()
+        rule.runOnIdle { assertEquals(listOf(Triple("session", 47L, 6), Triple("session", 47L, 6)), requests) }
+        rule.onNodeWithTag("changesFilePicker").performClick()
+        rule.onNodeWithTag("changesFileOption:1").performClick()
+        rule.onNodeWithTag("previewPath").assertContentDescriptionEquals("dist/index.js")
+        rule.runOnIdle { assertEquals(Triple("session", 47L, 1), requests.last()) }
+        rule.onNodeWithTag("changesFilePicker").performClick()
+        rule.onNodeWithTag("changesFileOption:6").performClick()
+        rule.runOnIdle { assertEquals(3, requests.size) }
+    }
+
+    @Test fun modeAndWrapAreUsableWithoutFetchingTheCurrentWorkspaceFile() {
+        val requests = mutableListOf<Int>()
+        rule.setContent { PocketTheme {
+            ChangesReviewSheet("snapshot", 8, summary, 0, {}) { _, _, index ->
+                requests += index
+                WorkspaceFileDiff("text", summary.files[index].path, summary.files[index].display)
+            }
+        } }
+        rule.onNodeWithTag("previewMode").performClick()
+        rule.onNodeWithTag("previewMode:Plain").performClick()
+        rule.onNodeWithTag("previewMode").performClick()
+        rule.onNodeWithTag("previewMode:Plain").assertIsSelected()
+        rule.onNodeWithTag("previewMode:Code").performClick()
+        rule.onNodeWithContentDescription(L.wrapLines()).performClick()
+        rule.runOnIdle { assertEquals(listOf(0), requests) }
+    }
+
+    @Test fun switchingFilesIsolatesLateResponsesAndDoesNotCacheAnAbandonedRead() {
+        val old = CompletableDeferred<WorkspaceFileDiff?>()
+        val requests = mutableListOf<Int>()
+        var first = true
+        rule.setContent { PocketTheme {
+            ChangesReviewSheet("snapshot", 12, summary, 0, {}) { _, _, index ->
+                requests += index
+                if (index == 0 && first) {
+                    first = false
+                    withContext(NonCancellable) { old.await() }
+                } else WorkspaceFileDiff("binary", summary.files[index].path, summary.files[index].display)
+            }
+        } }
+        rule.onNodeWithTag("changesLoading").assertExists()
+        rule.onNodeWithTag("changesFilePicker").performClick()
+        rule.onNodeWithTag("changesFileOption:1").performClick()
+        rule.onNodeWithTag("previewPath").assertContentDescriptionEquals("dist/index.js")
+        rule.runOnIdle { old.complete(WorkspaceFileDiff("oversized", "README.md", "README.md")) }
+        rule.onNodeWithTag("previewPath").assertContentDescriptionEquals("dist/index.js")
+        rule.onNodeWithTag("changesLoading").assertDoesNotExist()
+        rule.onNodeWithTag("changesFilePicker").performClick()
+        rule.onNodeWithTag("changesFileOption:0").performClick()
+        rule.runOnIdle { assertEquals(listOf(0, 1, 0), requests) }
+    }
+
+    @Test fun failedSnapshotReadRetriesItsCoordinatesWithoutShowingThePreviousFile() {
+        val requests = mutableListOf<Int>()
+        var fail = true
+        rule.setContent { PocketTheme {
+            ChangesReviewSheet("snapshot", 12, summary, 0, {}) { _, _, index ->
+                requests += index
+                if (index == 1 && fail) { fail = false; error("snapshot unavailable") }
+                WorkspaceFileDiff("binary", summary.files[index].path, summary.files[index].display)
+            }
+        } }
+        rule.onNodeWithTag("changesFilePicker").performClick()
+        rule.onNodeWithTag("changesFileOption:1").performClick()
+        rule.onNodeWithText("snapshot unavailable").assertIsDisplayed()
+        rule.onNodeWithTag("changesNotice").assertDoesNotExist()
+        rule.onNodeWithText(L.docRetry()).performClick()
+        rule.onNodeWithTag("changesNotice").assertExists()
+        rule.onNodeWithText("snapshot unavailable").assertDoesNotExist()
+        rule.runOnIdle { assertEquals(listOf(0, 1, 1), requests) }
     }
 }

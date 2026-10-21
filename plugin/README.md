@@ -141,7 +141,8 @@ WebSocket 管理操作要求 owner 身份。管理 UI 通过受本机信任边�
 ## 会话流、审批与恢复
 
 - `follow` 支持 `afterSeq`，断线重连携带上次 cursor 续订，Host 按序补帧。手机的排队消息以 Host 收件箱为准；`queue` 等待后续轮次，`steer` 引导当前轮次，详见 [发送语义](../app/README.md#排队与插话)。
-- 会话顶部投影：`sessions.projections {sessionId,parentSessionId?,subagentMode?}` 仅在 Host 有 `sessionController.projections` 时公布；原样返回 `null`、`{kind:"sequenced",asOfSeq,values}` 或 `{kind:"migration-required",values}`。缺失键表示未知，不等于空团队或空目录。`agentTeam` / `subagentCatalog` 增量随 `follow` 的 `projection` 帧发送，初始快照先于增量；快照已覆盖的缓冲增量丢弃。
+- `sessions.list` 的精简摘要保留 `projections.values.title` 与 `agentPreset` 这两个轻量页头字段，仍剔除 usage、turnOutline、contextBreakdown 等大投影。预设缺失表示未知，显式 `null` 原样保留；Android 可据同一会话的真实预设初始化首帧，再由历史快照校准，不能填入默认模式。此修复需要同时更新 App 与运行中的桥接。
+- 会话顶部投影：`sessions.projections {sessionId,parentSessionId?,subagentMode?}` 仅在 Host 有 `sessionController.projections` 时公布；原样返回 `null`、`{kind:"sequenced",asOfSeq,values}` 或 `{kind:"migration-required",values}`。缺失键表示未知，不等于空团队或空目录。`agentTeam`／`subagentCatalog`／`todos` 增量随 `follow` 的 `projection` 帧发送，包含 `todos: null` 的权威清空；初始快照先于增量，快照已覆盖的缓冲增量丢弃，不能跨会话投递。
 - 子会话地址：`follow`、`history.page`、`sessions.projections`、`prompt`、`cancel` 均可携带成对的 `parentSessionId` + `subagentMode`（`one-shot` / `continuable` / `unknown`）；不能是同一会话，`external` 无本地会话不可打开。历史及续订补页使用官方 `{kind:"subagent",parentSessionId,childSessionId,mode}`，投影读取先通过官方空前缀历史读校验父子归属。省略两字段时保留原 root 路由，不把 child ID 冒充 root。
 - 子会话控制仅接受 `continuable`：`prompt.mode` 仍是 `queue` / `steer`，经官方 `subagents.prompt` 映射为 `delivery`，返回原始 `{messageId}`；只接受文字及图片，不接受文件。`cancel` 经 `subagents.interruptByParent(childId,parentId,"continuable")` 返回 `{accepted:true}`。缺少对应官方服务时报 `subagent/control-unavailable`，不会回退至 root 控制器。安装新手机应用不更新 Host；这些能力需构建并更新桌面运行中的 pocket 插件后才生效，本文变更本身不执行部署或重启。
 - Host 发起 `approval/request` 时向在线设备推送 `approval`。`approval.answer` 接受 `allowed-once` 或 `rejected`，手机与网页谁先答谁生效；另一端收到关闭／取消通知。工具取消对应 `cancelled`，新连接补发待审批项，也可用 `approval.pending` 查询。

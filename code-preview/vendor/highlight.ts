@@ -462,6 +462,27 @@ function lineSpans(line: ThemedToken[]): HighlightSpan[] {
   return spans
 }
 
+/** Retained grammar state for bounded, forward-only source/comparison line batches. */
+export class LineHighlightSession {
+  private state: GrammarState | undefined
+  private resolved: string | undefined
+
+  highlight(lines: readonly string[], lang: string | undefined): HighlightSpan[][] | undefined {
+    const resolved = grammarForHint(lang)
+    if (resolved === undefined || !ensureGrammar(resolved)) return undefined
+    if (this.resolved !== resolved) { this.resolved = resolved; this.state = undefined }
+    const tokens = highlighter().codeToTokensBase(lines.join('\n'), {
+      lang: resolved,
+      theme: 'css-variables',
+      tokenizeMaxLineLength: TOKENIZE_MAX_LINE_LENGTH,
+      ...(this.state === undefined ? {} : { grammarState: this.state }),
+    })
+    this.state = highlighter().getLastGrammarState(tokens)
+    // Unlike highlightLines, retain terminal empty token rows: each input line has a DOM row.
+    return lines.map((_, index) => lineSpans(tokens[index] ?? []))
+  }
+}
+
 /**
  * Incremental highlighter for one growing streaming fence. TextMate
  * tokenization is line-based and forward-only — a line's tokens depend only on

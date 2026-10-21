@@ -111,4 +111,30 @@ class TranscriptHistoryTest {
         rule.onNodeWithText("Message 29").assertDoesNotExist()
         rule.runOnIdle { assertEquals(1, pages) }
     }
+
+    @Test fun pullRetriesFailedBoundaryOnceWithoutRepeatingBusyOrFinalPages() {
+        val state = mutableStateOf(ChatState("pull-retry", loaded = true, hasMore = true, firstSeq = 100,
+            items = listOf(Item.User("latest", "当前请求"))))
+        var pages = 0
+        rule.setContent { PocketTheme {
+            Transcript(state.value, {}, onLoadOlder = {
+                pages++
+                state.value = state.value.copy(loadingOlder = true)
+            })
+        } }
+        rule.runOnIdle { assertEquals(1, pages) }
+        rule.onNodeWithTag("transcriptHistory").performTouchInput { swipeDown() }
+        rule.runOnIdle { assertEquals(1, pages); state.value = state.value.copy(loadingOlder = false) }
+        rule.waitForIdle()
+        rule.runOnIdle { assertEquals(1, pages) }
+        rule.onNodeWithTag("transcriptHistory").performTouchInput { swipeDown() }
+        rule.runOnIdle {
+            assertEquals(2, pages)
+            state.value = state.value.copy(firstSeq = 1, hasMore = false, loadingOlder = false,
+                items = listOf(Item.User("older", "之前的记录")) + state.value.items)
+        }
+        rule.onNodeWithText("之前的记录").assertIsDisplayed()
+        rule.onNodeWithTag("transcriptHistory").performTouchInput { swipeDown() }
+        rule.runOnIdle { assertEquals(2, pages) }
+    }
 }

@@ -239,7 +239,6 @@ object L {
 
     // Document preview (sidebarDocumentPreview + image/pdf renderer locales)
     fun docLoading() = if (en) "Rendering document..." else "文档渲染中..."
-    fun docLoadMore() = if (en) "Load more" else "加载更多"
     fun docRetry() = if (en) "Retry" else "重试"
     fun docUnsupported() = if (en) "Preview is not available for this file type yet." else "该格式文件暂时无法预览"
     fun docErrorUnavailable(message: String) =

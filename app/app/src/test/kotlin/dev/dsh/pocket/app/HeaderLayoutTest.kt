@@ -62,7 +62,7 @@ class HeaderLayoutTest {
         val title = rule.onNodeWithText("地面洞察报告生成逻辑梳理与 Agent Skill 准备").assertIsDisplayed()
         rule.onNodeWithText("智能体团队").assertDoesNotExist()
         rule.onNodeWithText("标准模式").assertDoesNotExist()
-        rule.onNodeWithText("子智能体 6").assertIsDisplayed()
+        rule.onNodeWithText("6 个子智能体").assertIsDisplayed()
         val teamBounds = team.getUnclippedBoundsInRoot()
         val presetBounds = preset.getUnclippedBoundsInRoot()
         val countBounds = count.getUnclippedBoundsInRoot()

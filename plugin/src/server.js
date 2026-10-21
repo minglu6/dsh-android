@@ -35,13 +35,13 @@ const need = (cond, msg) => { if (!cond) throw new OpError('bad-request', msg) }
 const str = (v) => typeof v === 'string' && v.length > 0
 
 /**
- * Keep only fields Android `SessionSummary.parse` reads.
- * Full dsh list items carry tokenUsage / turnOutline / contextBreakdown and can
- * push a multi-session `sessions.list` reply near the iroh MAX_LINE cap.
+ * Keep lightweight session-header metadata without the large usage/outline/
+ * context projections carried by full dsh list items.
  */
 export function slimSessionSummary(item) {
   if (!item || typeof item !== 'object') return item
   const title = item.projections?.values?.title
+  const agentPreset = item.projections?.values?.agentPreset
   const out = {
     sessionId: item.sessionId,
     updatedAt: item.updatedAt,
@@ -51,8 +51,11 @@ export function slimSessionSummary(item) {
     parentSessionId: item.parentSessionId,
     origin: item.origin,
   }
-  if (title !== undefined && title !== null) {
-    out.projections = { values: { title } }
+  if (title != null || agentPreset !== undefined) {
+    const values = {}
+    if (title != null) values.title = title
+    if (agentPreset !== undefined) values.agentPreset = agentPreset
+    out.projections = { values }
   }
   return out
 }
@@ -263,7 +266,7 @@ export function createPocketServer(opts) {
   const authedClients = () => [...clients].filter((c) => c.device)
   const broadcast = (m) => { for (const c of authedClients()) c.push(m) }
   const unsubscribeCompletion = completion.subscribe((snapshot) => broadcast({ ev: 'completion', ...snapshot }))
-  const projectionKeys = new Set(['sessionStats', 'tokenUsage', 'contextPressure', 'contextBreakdown', 'permissions', 'modelSelection', 'agentPreset', 'goal', 'plan', 'userQuestions', 'inbox', 'agentTeam', 'subagentCatalog'])
+  const projectionKeys = new Set(['sessionStats', 'tokenUsage', 'contextPressure', 'contextBreakdown', 'permissions', 'modelSelection', 'agentPreset', 'goal', 'plan', 'todos', 'userQuestions', 'inbox', 'agentTeam', 'subagentCatalog'])
   // Follow's snapshot is the baseline. Hold newer projections until it is sent,
   // including while a reconnect snapshot is paged or trimmed for the wire.
   const followProjections = new WeakMap()

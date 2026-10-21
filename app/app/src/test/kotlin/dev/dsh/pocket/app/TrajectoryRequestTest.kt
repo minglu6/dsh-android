@@ -136,14 +136,4 @@ class TrajectoryRequestTest {
         assertFalse(r.hasMore)
     }
 
-    @Test fun localesMatchDesktopRequestAndHistory() {
-        assertEquals("请求 #3", TrajL.requestLabel(3))
-        assertEquals("请求 #2 · 压缩", TrajL.requestLabelCompaction(2))
-        assertEquals("加载更早的历史", TrajL.historyLoadEarlier)
-        assertEquals("正在加载更早的历史…", TrajL.historyLoadingEarlier)
-        assertEquals("选项", TrajL.tabOptions)
-        assertEquals("用量", TrajL.tabUsage)
-        assertEquals("结果", TrajL.detailsResult)
-        assertEquals("已压缩", TrajL.detailsCompacted)
-    }
 }

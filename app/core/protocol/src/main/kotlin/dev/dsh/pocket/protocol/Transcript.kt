@@ -3,6 +3,7 @@ package dev.dsh.pocket.protocol
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
@@ -416,8 +417,10 @@ class TranscriptReducer {
     private var inputTokens = 0L
     private var cacheRead = 0L
     private var outputTokens = 0L
-    /** Latest whole-list todo snapshot (`todo/write` / projections.values.todos). */
+    /** Standing todo plan; event and projection cuts are separate from history cursor. */
     private var todos: List<TodoItem> = emptyList()
+    private var todoEventSeq = -1L
+    private var todoProjectionSeq = -1L
     /** Host `plan` projection (`plan/mode` + projections.values.plan.active). */
     private var planActive: Boolean = false
     private var planProjectionSeq = -1L
@@ -426,7 +429,10 @@ class TranscriptReducer {
     val composerMetrics: ComposerMetrics get() = composerProjections.metrics(settledSteps, toolTimings.values)
 
     /** Connection generations have incomparable Host projection watermarks. */
-    fun clearComposerProjections() = composerProjections.clear()
+    fun clearComposerProjections() {
+        composerProjections.clear()
+        todoProjectionSeq = todoEventSeq
+    }
 
     val usage get() = Usage(turns, steps, inputTokens, cacheRead, outputTokens)
     fun stepRecords(): List<StepRecord> = settledSteps.toList()
@@ -517,6 +523,8 @@ class TranscriptReducer {
                     planActive = frame["value"]["active"].bool() ?: false
                 } else if (key == "inbox") {
                     return readInbox(frame["value"], seq)
+                } else if (key == "todos") {
+                    return readTodoProjection(frame["value"], seq)
                 } else return composerProjections.apply(key, frame["value"], seq)
             }
             "assistant-stream" -> return stream(frame["frame"])
@@ -644,6 +652,8 @@ class TranscriptReducer {
         turns = 0; steps = 0; openTurn = null; openStep = null
         inputTokens = 0; cacheRead = 0; outputTokens = 0; running = false
         todos = emptyList()
+        todoEventSeq = -1L
+        todoProjectionSeq = -1L
         planActive = false
         planProjectionSeq = -1L
     }
@@ -660,12 +670,8 @@ class TranscriptReducer {
             cacheRead = cr; inputTokens = uncached + cr + (usage["cacheWriteTokens"].long() ?: 0)
             outputTokens = usage["outputTokens"].long() ?: 0
         }
-        values["todos"].arr()?.let { arr ->
-            todos = arr.mapNotNull { row ->
-                val content = row["content"].str()?.trim().orEmpty()
-                val status = row["status"].str() ?: return@mapNotNull null
-                if (content.isEmpty()) null else TodoItem(content, status)
-            }
+        if (values.obj()?.containsKey("todos") == true) {
+            readTodoProjection(values["todos"], p["asOfSeq"].long() ?: atSeq)
         }
         values["plan"]?.let { plan ->
             val seq = p["asOfSeq"].long() ?: atSeq
@@ -674,6 +680,28 @@ class TranscriptReducer {
                 planActive = plan["active"].bool() ?: false
             }
         }
+    }
+
+    private fun parseTodos(value: JsonElement?): List<TodoItem> {
+        val rows = value.arr()
+        if (rows.isNullOrEmpty()) return emptyList()
+        return rows.mapNotNull { row ->
+            val content = row["content"].str()?.trim().orEmpty()
+            val status = row["status"].str() ?: return@mapNotNull null
+            if (content.isEmpty()) null else TodoItem(content, status)
+        }
+    }
+
+    private fun readTodoProjection(value: JsonElement?, seq: Long): Boolean {
+        if (seq < todoProjectionSeq || seq < todoEventSeq) return false
+        todoProjectionSeq = seq
+        todos = parseTodos(value)
+        return true
+    }
+
+    private fun readTodoEvent(value: JsonElement?, seq: Long) {
+        todoEventSeq = seq
+        if (seq >= todoProjectionSeq) todos = parseTodos(value)
     }
 
     private fun records(arr: JsonElement?) { arr.arr()?.forEach { r -> if (r["type"].str() == "event") event(r["event"]) } }
@@ -716,6 +744,7 @@ class TranscriptReducer {
         val data = e["data"]
         when (e["type"].str()) {
             "turn/start" -> {
+                readTodoEvent(JsonNull, seq)
                 turns++
                 setRunning(true)
                 openTurn = data["turn"].long()?.toInt()
@@ -766,11 +795,7 @@ class TranscriptReducer {
                 }
             }
             "todo/write" -> {
-                todos = data["todos"].arr().orEmpty().mapNotNull { row ->
-                    val content = row["content"].str()?.trim().orEmpty()
-                    val status = row["status"].str() ?: return@mapNotNull null
-                    if (content.isEmpty()) null else TodoItem(content, status)
-                }
+                readTodoEvent(data["todos"], seq)
             }
             "plan/mode" -> {
                 if (seq >= planProjectionSeq) {

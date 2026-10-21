@@ -42,13 +42,11 @@ import androidx.compose.ui.window.DialogProperties
 import dev.dsh.pocket.protocol.PocketError
 import dev.dsh.pocket.protocol.Item
 import dev.dsh.pocket.protocol.ToolStatus
-import dev.dsh.pocket.protocol.arr
 import dev.dsh.pocket.protocol.get
 import dev.dsh.pocket.protocol.str
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.flow.collect
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
@@ -390,107 +388,6 @@ private fun TodoStatusIndicator(status: String) {
 
 
 
-@Composable
-fun JobsSheet(sessionId: String, onDismiss: () -> Unit) {
-    val active by Pocket.active.collectAsState()
-    val status by Pocket.status.collectAsState()
-    val online = status[active] == Dot.Online
-    var jobs by remember(sessionId) { mutableStateOf<List<JsonObject>>(emptyList()) }
-    var err by remember { mutableStateOf<String?>(null) }
-    var loading by remember { mutableStateOf(true) }
-    var attempt by remember { mutableIntStateOf(0) }
-    var selected by remember { mutableStateOf<JsonObject?>(null) }
-    var stopping by remember { mutableStateOf<JsonObject?>(null) }
-    var busy by remember { mutableStateOf(false) }
-    LaunchedEffect(sessionId, attempt, online) {
-        if (!online) { loading = false; return@LaunchedEffect }
-        loading = true; err = null
-        try { jobs = Pocket.listJobs(sessionId)["jobs"].arr().orEmpty().filterIsInstance<JsonObject>() }
-        catch (e: CancellationException) { throw e }
-        catch (e: Exception) { err = e.message ?: "任务加载失败" }
-        finally { loading = false }
-    }
-    val detail = selected
-    val output = remember(detail?.get("id")) { mutableStateListOf<String>() }
-    var detailStatus by remember(detail) { mutableStateOf(detail?.get("status").str().orEmpty()) }
-    var detailError by remember(detail) { mutableStateOf<String?>(null) }
-    var followAttempt by remember { mutableIntStateOf(0) }
-    LaunchedEffect(detail, followAttempt, online) {
-        if (!online) return@LaunchedEffect
-        val job = detail ?: return@LaunchedEffect
-        val id = job["id"].str() ?: job["jobId"].str() ?: return@LaunchedEffect
-        output.clear(); detailError = null
-        fun appendOutput(text: String) {
-            if (text.isEmpty()) return
-            if (output.isEmpty()) output.add("")
-            val lines = text.split('\n')
-            output[output.lastIndex] = output.last() + lines.first()
-            for (index in 1 until lines.size) output.add(lines[index])
-        }
-        try {
-            Pocket.followJob(sessionId, id).collect { frame ->
-                when (frame["type"].str()) {
-                    "opened", "status" -> detailStatus = frame["job"]["status"].str().orEmpty()
-                    "output" -> {
-                        val chunks = frame["chunks"].arr().orEmpty()
-                        if (frame["lossy"].toString() == "true") appendOutput("\n[部分历史输出已过期]\n")
-                        chunks.forEach {
-                            if (it["gapBefore"].toString() == "true") appendOutput("\n[此处输出存在缺失]\n")
-                            appendOutput(it["text"].str().orEmpty())
-                        }
-                    }
-                }
-            }
-        } catch (e: CancellationException) { throw e }
-        catch (e: Exception) { detailError = e.message ?: "输出读取失败" }
-    }
-    androidx.activity.compose.BackHandler(enabled = detail != null) { selected = null }
-    PocketSheet(onDismiss) {
-        if (detail != null) {
-            TextButton({ selected = null }) { Text("返回后台任务") }
-            SheetTitle(detail["label"].str() ?: detail["name"].str() ?: detail["id"].str().orEmpty())
-            SectionLabel(detailStatus)
-            detail["detail"].str()?.let { CodeBox(it) }
-            detailError?.let { Text(it, color = T.Err, modifier = Modifier.padding(22.dp)); TextButton({ followAttempt++ }, enabled = online) { Text("重试") } }
-            if (output.isEmpty() && detailError == null) Text("等待任务输出…", color = T.Text3, modifier = Modifier.padding(22.dp))
-            else SelectableOutput {
-                LazyColumn(Modifier.fillMaxWidth().heightIn(min = 160.dp, max = 420.dp).padding(horizontal = 22.dp)) {
-                    items(output.size) { index ->
-                        Text(output[index], style = T.Mono, color = T.Text2, modifier = Modifier.fillMaxWidth())
-                    }
-                }
-            }
-        } else {
-            SheetTitle("后台任务")
-            TextButton({ attempt++ }, enabled = online && !loading) { Text("刷新") }
-            if (loading) LinearProgressIndicator(Modifier.fillMaxWidth())
-            err?.let { Text(it, color = T.Err, modifier = Modifier.padding(22.dp)) }
-            if (!loading && jobs.isEmpty() && err == null) Text("0 个后台任务", color = T.Text3, modifier = Modifier.padding(22.dp))
-            jobs.forEach { job ->
-                val id = job["id"].str() ?: job["jobId"].str() ?: return@forEach
-                val status = job["status"].str() ?: job["state"].str().orEmpty()
-                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                    Box(Modifier.weight(1f)) { OptionRow(job["label"].str() ?: job["command"].str() ?: job["name"].str() ?: id, status, D.clock) { selected = job } }
-                    if (status == "running" || status == "pending") TextButton({ stopping = job }, enabled = online && !busy) { Text("终止", color = if (online && !busy) T.Err else T.Caption) }
-                }
-            }
-        }
-    }
-    stopping?.let { job ->
-        AlertDialog(onDismissRequest = { if (!busy) stopping = null }, title = { Text("终止后台任务？") },
-            text = { Text(job["label"].str() ?: job["id"].str().orEmpty()) },
-            dismissButton = { TextButton({ stopping = null }, enabled = !busy) { Text("取消") } },
-            confirmButton = { TextButton({
-                if (online && !busy) {
-                    busy = true
-                    Pocket.killJob(sessionId, job["id"].str() ?: job["jobId"].str().orEmpty()) { success ->
-                        busy = false
-                        if (success) { stopping = null; attempt++ } else err = "终止失败，请重试"
-                    }
-                }
-            }, enabled = online && !busy) { Text("终止", color = if (online && !busy) T.Err else T.Caption) } })
-    }
-}
 
 
 /** The shared desktop command source: both the + launcher and slash typing use this menu. */

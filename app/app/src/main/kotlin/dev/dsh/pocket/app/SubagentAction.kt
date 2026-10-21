@@ -32,12 +32,12 @@ internal fun SubagentAction(sessionId: String) {
     val label = teamText("${entries.size} 个子智能体", "${entries.size} subagents")
     Box {
         Row(Modifier.heightIn(min = 28.dp).clip(T.R8).clickable { open = true }
-            .semantics { contentDescription = label }, verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(5.dp)) {
+            .semantics { contentDescription = label }.padding(horizontal = 2.dp, vertical = 3.dp),
+            verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
             if (entries.any { it.status == "running" }) Box(Modifier.size(6.dp)
                 .clip(androidx.compose.foundation.shape.CircleShape).background(T.Accent))
-            Text(teamText("子智能体 ${entries.size}", "Subagents ${entries.size}"), color = T.Text2, fontSize = 14.sp, maxLines = 1)
-            Icon(D.chevronDown, null, tint = T.Text2, modifier = Modifier.size(12.dp).rotate(if (open) 180f else 0f))
+            Text(label, color = T.Text3, fontSize = 12.sp, lineHeight = 18.sp, maxLines = 1)
+            Icon(D.chevronDown, null, tint = T.Text3, modifier = Modifier.size(14.dp).rotate(if (open) 180f else 0f))
         }
         if (open) HeaderPopup(336, 560, { open = false }) {
             SubagentPanel(entries, online, { address -> Pocket.openSession(address); open = false })

@@ -84,3 +84,74 @@ body[data-plain='false'] code { white-space: normal; counter-reset: source-line;
 }
 body[data-wrap='true'] pre { width: 100%; white-space: pre-wrap; overflow-wrap: anywhere; }
 body[data-wrap='true'] .line { white-space: pre-wrap; }
+/* Comparison uses the same font, spacing, token theme and wrapping as source. */
+body[data-mode='comparison'] code { white-space: normal; }
+.comparison-hunk, .comparison-header, .comparison-note { display: block; }
+.comparison-header, .comparison-note {
+  color: var(--dsw-alias-label-tertiary);
+  white-space: pre-wrap;
+  padding-block: 4px;
+}
+.comparison-hunk + .comparison-hunk { margin-block-start: 12px; }
+.comparison-line {
+  position: relative;
+  display: block;
+  min-height: 1lh;
+  padding-inline-start: calc(var(--number-width) * 2 + 36px);
+  white-space: pre;
+}
+.comparison-line::before, .comparison-line::after {
+  position: absolute;
+  width: var(--number-width);
+  color: var(--dsw-alias-label-tertiary);
+  text-align: end;
+  user-select: none;
+  -webkit-user-select: none;
+}
+.comparison-line::before { inset-inline-start: 0; content: attr(data-old); }
+.comparison-line::after { inset-inline-start: calc(var(--number-width) + 12px); content: attr(data-new); }
+.comparison-text::before {
+  position: absolute;
+  inset-inline-start: calc(var(--number-width) * 2 + 24px);
+  width: 1ch;
+  content: ' ';
+  user-select: none;
+  -webkit-user-select: none;
+}
+/* Official FileDiff design-platform aliases; source tokens still come from Shiki. */
+:root {
+  --dsw-alias-file-diff-added-bg: rgb(230, 244, 231);
+  --dsw-alias-file-diff-added-gutter: rgb(237, 247, 237);
+  --dsw-alias-file-diff-added-marker: rgb(1, 162, 65);
+  --dsw-alias-file-diff-deleted-bg: rgb(252, 230, 226);
+  --dsw-alias-file-diff-deleted-gutter: rgb(253, 236, 233);
+  --dsw-alias-file-diff-deleted-marker: rgb(186, 39, 35);
+}
+body[data-ds-dark-theme] {
+  --dsw-alias-file-diff-added-bg: rgb(31, 49, 36);
+  --dsw-alias-file-diff-added-gutter: rgb(19, 32, 22);
+  --dsw-alias-file-diff-added-marker: rgb(65, 201, 119);
+  --dsw-alias-file-diff-deleted-bg: rgb(60, 31, 27);
+  --dsw-alias-file-diff-deleted-gutter: rgb(40, 19, 14);
+  --dsw-alias-file-diff-deleted-marker: rgb(250, 66, 62);
+}
+.comparison-line[data-diff-line='add'] { --diff-gutter: var(--dsw-alias-file-diff-added-gutter); --diff-marker: var(--dsw-alias-file-diff-added-marker); background: var(--dsw-alias-file-diff-added-bg); }
+.comparison-line[data-diff-line='del'] { --diff-gutter: var(--dsw-alias-file-diff-deleted-gutter); --diff-marker: var(--dsw-alias-file-diff-deleted-marker); background: var(--dsw-alias-file-diff-deleted-bg); }
+.comparison-line:not([data-diff-line='context'])::before, .comparison-line:not([data-diff-line='context'])::after { background: var(--diff-gutter); color: var(--diff-marker); }
+.comparison-line[data-diff-line='add'] > .comparison-text::before { content: '+'; color: var(--diff-marker); }
+.comparison-line[data-diff-line='del'] > .comparison-text::before { content: '-'; color: var(--diff-marker); }
+body[data-one-sided='true'] .comparison-line { padding-inline-start: calc(var(--number-width) + 24px); }
+body[data-one-sided='true'] .comparison-line::before { content: attr(data-numbers); }
+body[data-one-sided='true'] .comparison-line::after { content: none; }
+body[data-one-sided='true'] .comparison-text::before { inset-inline-start: calc(var(--number-width) + 12px); }
+body[data-wrap='true'] .comparison-line { white-space: pre-wrap; }
+/* A complete created/deleted snapshot reads like an ordinary file; the native bar owns its counts. */
+body[data-full-file='true'] .comparison-line {
+  padding-inline-start: calc(var(--number-width) + 12px);
+  background: transparent;
+}
+body[data-full-file='true'] .comparison-line::before {
+  color: var(--dsw-alias-label-tertiary);
+  background: transparent;
+}
+body[data-full-file='true'] .comparison-line > .comparison-text::before { content: none; }

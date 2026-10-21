@@ -15,6 +15,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material3.*
+import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.saveable.rememberSaveableStateHolder
@@ -95,7 +96,7 @@ data class PendingAttach(
 
 enum class Sheet {
     None, Model, Permission, PermissionRisk, Preset, Plus, More, Panel, Workspace, Goal, Feedback,
-    Files, Jobs, Terminal, Browser, SessionInspector, Commands, Mentions, FeedbackCategory, FilePreview,
+    Files, Terminal, Browser, SessionInspector, Commands, Mentions, FeedbackCategory, FilePreview,
 }
 
 /** Themed handshake hint — warn tint matching approval cards. */
@@ -420,7 +421,7 @@ fun ChatRoot(
             }
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                 Box(Modifier.weight(1f)) { Tabs(tab) { tab = it } }
-                if (chat != null) JobsAction(active, st.sessionId, dot == Dot.Online && "jobs.list" in ops) { sheet = Sheet.Jobs }
+                if (chat != null) JobsAction(active, st.sessionId, dot == Dot.Online && "jobs.list" in ops)
             }
             HorizontalDivider(color = T.Fill)
             Box(Modifier.weight(1f).fillMaxWidth()) {
@@ -664,7 +665,6 @@ fun ChatRoot(
         )
         Sheet.Mentions -> Unit // Anchored above the composer without taking input focus.
         Sheet.Files -> sid?.let { FilesSheet(it, onDismiss = { sheet = Sheet.None }, onBack = { sheet = Sheet.Panel }) }
-        Sheet.Jobs -> sid?.let { JobsSheet(it, onDismiss = { sheet = Sheet.None }) } ?: run { sheet = Sheet.None }
         Sheet.Terminal -> sid?.let { TerminalSheet(it, onDismiss = { sheet = Sheet.None }, onBack = { sheet = Sheet.Panel }) }
         Sheet.Browser -> BrowserSheet(
             sessionKey = "${active.orEmpty()}:${sid.orEmpty()}",
@@ -774,6 +774,7 @@ fun EmptyState(icon: androidx.compose.ui.graphics.vector.ImageVector, title: Str
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 internal fun Transcript(
     st: ChatState,
@@ -893,6 +894,20 @@ internal fun Transcript(
     }
     if (st.loaded && st.items.isEmpty() && !st.running && !st.hasMore) { EmptyState(D.chat, "开始对话", "发送第一条消息"); return }
     if (!st.loaded && st.items.isEmpty()) { Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator(color = T.Accent, strokeWidth = 2.dp, modifier = Modifier.size(24.dp)) }; return }
+    key(st.sessionId) {
+    PullToRefreshBox(
+        isRefreshing = st.loadingOlder,
+        onRefresh = {
+            if (!inspection && st.loaded &&
+                dev.dsh.pocket.protocol.HistoryPagingPolicy.canLoadOlder(st.hasMore, st.loadingOlder, st.firstSeq)) {
+                requestedBefore = st.firstSeq
+                historyArmed = true
+                followBottom = false
+                onLoadOlder()
+            }
+        },
+        modifier = Modifier.fillMaxSize(),
+    ) {
     LazyColumn(state = list, modifier = Modifier.fillMaxSize().testTag("transcriptHistory"), contentPadding = PaddingValues(16.dp)) {
         itemsIndexed(rows, key = { _, row -> row.key }) { index, row ->
             val previous = rows.getOrNull(index - 1)
@@ -1002,6 +1017,8 @@ internal fun Transcript(
             }
         }
         item(key = "bottom") { Spacer(Modifier.height(1.dp)) }
+    }
+    }
     }
 }
 

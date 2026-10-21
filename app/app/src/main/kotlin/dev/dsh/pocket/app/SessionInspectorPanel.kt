@@ -21,6 +21,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
@@ -48,6 +49,7 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Popup
 import androidx.compose.ui.window.PopupProperties
 import kotlinx.serialization.json.*
+import kotlinx.coroutines.flow.distinctUntilChanged
 
 private fun inspectorText(zh: String, en: String) = if (Pocket.prefs.language == AppLanguage.En) en else zh
 
@@ -73,7 +75,12 @@ private class InspectorViewState {
 /** The same table controls and copy as session-inspector; inspection never sends a prompt. */
 @OptIn(ExperimentalComposeUiApi::class)
 @Composable
-fun SessionInspectorSheet(sessionId: String, onDismiss: () -> Unit, onBack: (() -> Unit)? = null) {
+fun SessionInspectorSheet(
+    sessionId: String,
+    onDismiss: () -> Unit,
+    onBack: (() -> Unit)? = null,
+    onLoadOlder: () -> Unit = { Pocket.loadOlderHistory() },
+) {
     val current by Pocket.chat.collectAsState()
     val st = current?.takeIf { sessionId.isNotBlank() && it.sessionId == sessionId } ?: return
     key(sessionId) {
@@ -84,7 +91,7 @@ fun SessionInspectorSheet(sessionId: String, onDismiss: () -> Unit, onBack: (() 
                 BoxWithConstraints(Modifier.fillMaxSize().semantics { testTagsAsResourceId = true }.testTag("sessionInspectorPanel")) {
                     val availableHeight = maxHeight
                     key(state.grouped) {
-                        Column(Modifier.fillMaxSize()) { SessionInspectorContent(st, state, availableHeight) }
+                        Column(Modifier.fillMaxSize()) { SessionInspectorContent(st, state, availableHeight, onLoadOlder) }
                     }
                 }
             }
@@ -92,8 +99,9 @@ fun SessionInspectorSheet(sessionId: String, onDismiss: () -> Unit, onBack: (() 
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun ColumnScope.SessionInspectorContent(st: ChatState, state: InspectorViewState, availableHeight: Dp) {
+private fun ColumnScope.SessionInspectorContent(st: ChatState, state: InspectorViewState, availableHeight: Dp, onLoadOlder: () -> Unit) {
     val grouped = state.grouped
     val policy = presentationPolicyFor(Pocket.prefs.transcriptView, Pocket.prefs.collapseTiming)
     val rows = remember(grouped, st.inspectorRecords, st.items, st.turns, st.running, policy) {
@@ -110,6 +118,37 @@ private fun ColumnScope.SessionInspectorContent(st: ChatState, state: InspectorV
     val dragged by list.interactionSource.collectIsDraggedAsState()
     val skipMotion = LocalInspectionMode.current || !ValueAnimator.areAnimatorsEnabled()
     LaunchedEffect(dragged) { if (dragged) state.follow = false }
+    var requestedBefore by remember(st.sessionId, grouped, state.filter) { mutableStateOf<Long?>(null) }
+    var attemptedInDrag by remember(st.sessionId, grouped, state.filter) { mutableStateOf(false) }
+    LaunchedEffect(dragged) { if (dragged) attemptedInDrag = false }
+    fun loadEarlier(pull: Boolean) {
+        if (!st.loaded || !dev.dsh.pocket.protocol.HistoryPagingPolicy.canLoadOlder(st.hasMore, st.loadingOlder, st.firstSeq)) return
+        if (pull && attemptedInDrag || !pull && requestedBefore == st.firstSeq) return
+        requestedBefore = st.firstSeq
+        attemptedInDrag = true
+        state.follow = false
+        onLoadOlder()
+    }
+    val loadAtBoundary by rememberUpdatedState({ loadEarlier(false) })
+    LaunchedEffect(list, state.filter) {
+        var previous = list.firstVisibleItemIndex to list.firstVisibleItemScrollOffset
+        var movingEarlier = false
+        snapshotFlow {
+            Triple(list.firstVisibleItemIndex to list.firstVisibleItemScrollOffset, list.isScrollInProgress, dragged)
+        }.distinctUntilChanged().collect { (position, scrolling, dragging) ->
+            val (index, offset) = position
+            if (position != previous) {
+                if (dragging || movingEarlier) {
+                    movingEarlier = index < previous.first || index == previous.first && offset < previous.second
+                }
+                previous = position
+            }
+            if (!scrolling && movingEarlier && !state.follow && index == 0 && offset < 48) {
+                movingEarlier = false
+                loadAtBoundary()
+            }
+        }
+    }
     LaunchedEffect(visible.lastOrNull()?.row, visible.size, state.follow, state.scrollRequest, skipMotion) {
         if (state.follow && visible.isNotEmpty()) {
             if (skipMotion) list.requestScrollToItem(visible.lastIndex) else list.scrollToItem(visible.lastIndex)
@@ -128,7 +167,7 @@ private fun ColumnScope.SessionInspectorContent(st: ChatState, state: InspectorV
         state.selectedKey = row.key; state.follow = false
         InspectorNavigation.pickedItemKey = null
     }
-    LaunchedEffect(state.selectedKey, visible.size, skipMotion) {
+    LaunchedEffect(state.selectedKey, skipMotion) {
         val index = visible.indexOfFirst { it.row.key == state.selectedKey }
         if (index >= 0 && list.layoutInfo.visibleItemsInfo.none { it.index == index }) {
             if (skipMotion) list.requestScrollToItem(index) else list.scrollToItem(index)
@@ -164,11 +203,6 @@ private fun ColumnScope.SessionInspectorContent(st: ChatState, state: InspectorV
             InspectorText("· " + if (state.filter.isNotEmpty()) "$matchingCount / ${all.size}" else "${all.size}",
                 Modifier.testTag("inspectorRowCount"))
         }
-        if (st.hasMore) InspectorAction(if (st.loadingOlder) inspectorText("加载中…", "Loading…") else inspectorText("加载更早", "Load earlier"),
-            Modifier.testTag("inspectorLoadEarlier"), enabled = !st.loadingOlder) {
-            state.follow = false
-            if (Pocket.chat.value?.sessionId == st.sessionId) Pocket.loadOlderHistory()
-        }
         InspectorAction(inspectorText("跟踪最新", "Follow Latest"), Modifier.testTag("inspectorFollowLatest")) {
             state.follow = true; state.scrollRequest++
         }
@@ -189,10 +223,17 @@ private fun ColumnScope.SessionInspectorContent(st: ChatState, state: InspectorV
                 InspectorCell(inspectorText("数据", "Data"), tableWidth - if (grouped) 319.dp else 419.dp, header = true)
             }
             HorizontalDivider(color = T.Border, thickness = .5.dp)
-            if (visible.isEmpty()) {
-                InspectorText(inspectorText("暂无记录", "No records"), Modifier.padding(12.dp), muted = true)
-            } else {
+            PullToRefreshBox(
+                isRefreshing = st.loadingOlder,
+                onRefresh = { loadEarlier(true) },
+                modifier = Modifier.fillMaxSize().testTag("inspectorHistoryPull"),
+            ) {
                 LazyColumn(state = list, modifier = Modifier.fillMaxSize().testTag("inspectorRows")) {
+                    if (visible.isEmpty()) {
+                        item(key = "inspector-empty") {
+                            InspectorText(inspectorText("暂无记录", "No records"), Modifier.padding(12.dp), muted = true)
+                        }
+                    }
                     items(visible, key = { it.row.key }) { entry ->
                         val row = entry.row
                         val collapsed = row.key in state.collapsed || (state.filter.isEmpty() && row.defaultCollapsed && row.key !in state.expanded)

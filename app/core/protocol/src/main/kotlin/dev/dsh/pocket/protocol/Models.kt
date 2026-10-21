@@ -18,6 +18,7 @@ data class SessionSummary(
     val pinned: Boolean? = null,
     val origin: String? = null,
     val searchSnippet: String? = null,
+    val agentPreset: String? = null,
 ) {
     companion object {
         fun parse(e: JsonElement?): SessionSummary? {
@@ -34,6 +35,7 @@ data class SessionSummary(
                 pinned = e["pinned"].bool(),
                 origin = e["origin"].str(),
                 searchSnippet = e["snippet"].str(),
+                agentPreset = e["projections"]["values"]["agentPreset"].str(),
             )
         }
     }

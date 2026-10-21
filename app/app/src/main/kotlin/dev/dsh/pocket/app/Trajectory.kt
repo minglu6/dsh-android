@@ -5,6 +5,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.interaction.collectIsDraggedAsState
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
@@ -15,6 +16,8 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -487,7 +490,13 @@ fun trajectorySearchMatches(turns: List<TrajTurn>, query: String): Set<String>? 
 }
 
 @Composable
-fun TrajectoryView(st: ChatState) {
+fun TrajectoryView(st: ChatState, onLoadOlder: () -> Unit = { Pocket.loadOlderHistory() }) {
+    key(st.sessionId) { TrajectoryContent(st, onLoadOlder) }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun TrajectoryContent(st: ChatState, onLoadOlder: () -> Unit) {
     val turns = remember(st.items, st.steps) { buildTrajectory(st.items, st.steps) }
     val requests = remember(st.items, st.steps) { buildTrajectoryRequests(st.items, st.steps) }
     val boundaryByRow = remember(requests, turns) {
@@ -527,29 +536,42 @@ fun TrajectoryView(st: ChatState) {
         selectedTurn = turn
     }
 
-    // Same arming as Chat: avoid auto-fetch on first composition when the list starts at top.
-    var historyArmed by remember(st.sessionId) { mutableStateOf(false) }
-    LaunchedEffect(listState) {
-        snapshotFlow {
-            listState.firstVisibleItemIndex to listState.firstVisibleItemScrollOffset
-        }
-            .distinctUntilChanged()
-            .collect { (index, offset) ->
-                if (index > 0 || offset > 0) historyArmed = true
-            }
+    var requestedBefore by remember(searchQuery, turnsCollapsed, callsCollapsed) { mutableStateOf<Long?>(null) }
+    var attemptedInDrag by remember { mutableStateOf(false) }
+    val dragged by listState.interactionSource.collectIsDraggedAsState()
+    LaunchedEffect(dragged) { if (dragged) attemptedInDrag = false }
+    fun loadEarlier(pull: Boolean) {
+        if (!st.loaded || !dev.dsh.pocket.protocol.HistoryPagingPolicy.canLoadOlder(st.hasMore, st.loadingOlder, st.firstSeq)) return
+        if (pull && attemptedInDrag || !pull && requestedBefore == st.firstSeq) return
+        requestedBefore = st.firstSeq
+        attemptedInDrag = true
+        onLoadOlder()
     }
-    // Desktop: near-top scroll loads one earlier page; phone reuses Pocket.loadOlderHistory (history.page).
-    LaunchedEffect(listState, st.hasMore, st.loadingOlder, st.loaded, historyArmed) {
+    val loadAtBoundary by rememberUpdatedState({ loadEarlier(false) })
+    LaunchedEffect(listState, searchQuery, turnsCollapsed, callsCollapsed) {
+        var previous = listState.firstVisibleItemIndex to listState.firstVisibleItemScrollOffset
+        var movingEarlier = false
         snapshotFlow {
-            listState.firstVisibleItemIndex to listState.firstVisibleItemScrollOffset
-        }
-            .distinctUntilChanged()
-            .collect { (index, offset) ->
-                if (historyArmed && st.loaded && st.hasMore && !st.loadingOlder && index == 0 && offset < 48) {
-                    historyArmed = false
-                    Pocket.loadOlderHistory()
-                }
+            Triple(listState.firstVisibleItemIndex, listState.firstVisibleItemScrollOffset, listState.isScrollInProgress)
+        }.distinctUntilChanged().collect { (index, offset, scrolling) ->
+            val position = index to offset
+            if (position != previous) {
+                movingEarlier = index < previous.first || index == previous.first && offset < previous.second
+                previous = position
             }
+            if (!scrolling && movingEarlier && index == 0 && offset < 48) {
+                movingEarlier = false
+                loadAtBoundary()
+            }
+        }
+    }
+    val shortWindow by remember {
+        derivedStateOf { listState.layoutInfo.visibleItemsInfo.isNotEmpty() && !listState.canScrollBackward && !listState.canScrollForward }
+    }
+    val laidOutItems by remember { derivedStateOf { listState.layoutInfo.totalItemsCount } }
+    // Fill an initially unscrollable window, including pages containing no rendered events.
+    LaunchedEffect(shortWindow, laidOutItems, cells.size, st.loaded, st.hasMore, st.loadingOlder, st.firstSeq, searchQuery, turnsCollapsed, callsCollapsed) {
+        if (shortWindow && laidOutItems == maxOf(1, cells.size) && searchQuery.isBlank() && !turnsCollapsed && !callsCollapsed) loadEarlier(false)
     }
 
     BoxWithConstraints(Modifier.fillMaxSize()) {
@@ -571,16 +593,12 @@ fun TrajectoryView(st: ChatState) {
             }
         }
         HorizontalDivider(color = T.Fill)
-        LazyColumn(Modifier.weight(1f), state = listState) {
-            if (st.hasMore || st.loadingOlder) {
-                item(key = "history-load-earlier") {
-                    HistoryLoadEarlierRow(
-                        loading = st.loadingOlder,
-                        enabled = st.hasMore && !st.loadingOlder,
-                        onClick = { Pocket.loadOlderHistory() },
-                    )
-                }
-            }
+        PullToRefreshBox(
+            isRefreshing = st.loadingOlder,
+            onRefresh = { loadEarlier(true) },
+            modifier = Modifier.weight(1f).fillMaxWidth().testTag("trajectoryHistoryPull"),
+        ) {
+        LazyColumn(Modifier.fillMaxSize().testTag("trajectoryHistory"), state = listState) {
             if (turns.isEmpty()) {
                 item(key = "empty-after-load") {
                     Text(
@@ -629,6 +647,7 @@ fun TrajectoryView(st: ChatState) {
             }
         }
         }
+        }
     }
     selected?.let { row ->
         val toolCalls = remember(row.toolCallIds, rowByKey) {
@@ -669,32 +688,6 @@ fun TrajectoryView(st: ChatState) {
     }
 }
 
-/** Desktop history load-earlier control at the top of the loaded ledger window. */
-@Composable
-private fun HistoryLoadEarlierRow(loading: Boolean, enabled: Boolean, onClick: () -> Unit) {
-    Row(
-        Modifier
-            .fillMaxWidth()
-            .heightIn(min = 48.dp)
-            .clickable(enabled = enabled, onClick = onClick)
-            .padding(horizontal = 12.dp, vertical = 10.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.Center,
-    ) {
-        if (loading) {
-            CircularProgressIndicator(
-                color = T.Accent,
-                strokeWidth = 2.dp,
-                modifier = Modifier.size(14.dp),
-            )
-            Spacer(Modifier.width(8.dp))
-            Text(TrajL.historyLoadingEarlier, fontSize = 12.sp, color = T.Text2)
-        } else {
-            Text(TrajL.historyLoadEarlier, fontSize = 12.sp, color = T.Accent)
-        }
-    }
-    HorizontalDivider(color = T.Fill.copy(alpha = 0.8f))
-}
 
 @Composable
 private fun TrajectoryToolbar(

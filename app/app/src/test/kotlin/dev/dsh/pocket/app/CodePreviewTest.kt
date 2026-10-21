@@ -1,5 +1,7 @@
 package dev.dsh.pocket.app
 
+import dev.dsh.pocket.protocol.WorkspaceDiffHunk
+import dev.dsh.pocket.protocol.WorkspaceFileDiff
 import org.json.JSONObject
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -51,6 +53,40 @@ class CodePreviewTest {
         assertEquals("groovy", previewCodeLanguage("build.gradle"))
         listOf("Makefile", "Dockerfile", ".gitignore", "README", "dir.py/unknown", "file.constructor", "file.lock")
             .forEach { assertNull(previewCodeLanguage(it), it) }
+    }
+
+    @Test fun comparisonArgumentPreservesSnapshotHunksAndEscapesScriptPayloads() {
+        val path = "src/</script>\\\"file.json"
+        val lines = listOf("-\\\"old\\\": 1,", "+\\\"new\\\": 2,\u2028\u2029", "+<img src=x onerror=alert(1)>", "+")
+        val diff = WorkspaceFileDiff("text", path, path, before = false, coarse = true,
+            hunks = listOf(WorkspaceDiffHunk(4, 8, lines)))
+        val script = codeComparisonDocumentScript(diff)
+        val value = JSONObject(script.removePrefix("window.codePreview.setComparison(").removeSuffix(");"))
+        assertEquals(path, value.getString("path"))
+        assertFalse(value.getBoolean("before"))
+        assertEquals(true, value.getBoolean("coarse"))
+        val hunk = value.getJSONArray("hunks").getJSONObject(0)
+        assertEquals(4, hunk.getInt("oldStart"))
+        assertEquals(8, hunk.getInt("newStart"))
+        assertEquals(lines, (0 until lines.size).map { hunk.getJSONArray("lines").getString(it) })
+        assertFalse(script.contains('\u2028'))
+        assertFalse(script.contains('\u2029'))
+    }
+
+    @Test fun oneSidedCopyIsSourceButMixedCopyIsARealMultiHunkPatch() {
+        val additions = WorkspaceFileDiff("text", "src/a.ts", "a.ts", before = false,
+            hunks = listOf(WorkspaceDiffHunk(0, 1, listOf("+const a = 1;", "+", "+const b = 2;"))))
+        assertEquals("const a = 1;\n\nconst b = 2;", codeComparisonCopyText(additions))
+        val deletions = additions.copy(before = true, after = false,
+            hunks = listOf(WorkspaceDiffHunk(8, 0, listOf("-old", "-"))))
+        assertEquals("old\n", codeComparisonCopyText(deletions))
+        val mixed = additions.copy(before = true, hunks = listOf(
+            WorkspaceDiffHunk(4, 8, listOf(" context", "-old", "+new", " next")),
+            WorkspaceDiffHunk(20, 24, listOf("-gone", "+replacement")),
+        ))
+        assertEquals("--- a/src/a.ts\n+++ b/src/a.ts\n@@ -4,3 +8,3 @@\n context\n-old\n+new\n next\n@@ -20,1 +24,1 @@\n-gone\n+replacement\n",
+            codeComparisonCopyText(mixed))
+        assertEquals("", codeComparisonCopyText(mixed.copy(hunks = emptyList())))
     }
 
 }
