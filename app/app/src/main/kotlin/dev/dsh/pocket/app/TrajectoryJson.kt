@@ -236,23 +236,79 @@ private fun trajectoryJsonColors(error: Boolean): TrajectoryJsonColors = when {
     else -> TrajectoryJsonColors(Color(0xFF881391), Color(0xFFC41A16), Color(0xFF1C00CF), Color(0xFF202124))
 }
 
-private val jsonDisplayToken = Regex("\"(?:[^\"\\\\]|\\\\.)*\"|(?<![\\w$])(?:true|false|null|-?\\d+(?:\\.\\d+)?(?:[eE][+-]?\\d+)?)(?![\\w$])")
-
+// Linear scan: Regex.findAll on long escaped strings StackOverflows the JVM matcher.
 private fun trajectoryJsonStyledRow(row: TrajectoryJsonRow, expanded: Boolean, colors: TrajectoryJsonColors): AnnotatedString {
     val text = trajectoryJsonRowText(row.copy(label = null), expanded)
     return buildAnnotatedString {
         row.label?.let { withStyle(SpanStyle(color = colors.property)) { append("$it: ") } }
-        var offset = 0
-        jsonDisplayToken.findAll(text).forEach { token ->
-            append(text.substring(offset, token.range.first))
-            withStyle(SpanStyle(color = if (token.value.startsWith('"')) colors.string else colors.keyword)) {
-                append(token.value)
+        var i = 0
+        while (i < text.length) {
+            val ch = text[i]
+            if (ch == '"') {
+                val startIdx = i
+                i++
+                while (i < text.length) {
+                    when (text[i]) {
+                        '\\' -> i = (i + 2).coerceAtMost(text.length)
+                        '"' -> { i++; break }
+                        else -> i++
+                    }
+                }
+                withStyle(SpanStyle(color = colors.string)) { append(text.substring(startIdx, i)) }
+                continue
             }
-            offset = token.range.last + 1
+            if (ch.isDigit() || ch == '-' || ch == 't' || ch == 'f' || ch == 'n') {
+                val boundaryOk = i == 0 || !isJsonTokenChar(text[i - 1])
+                val keyword = when {
+                    text.startsWith("true", i) -> "true"
+                    text.startsWith("false", i) -> "false"
+                    text.startsWith("null", i) -> "null"
+                    else -> null
+                }
+                if (boundaryOk && keyword != null) {
+                    val endIdx = i + keyword.length
+                    if (endIdx >= text.length || !isJsonTokenChar(text[endIdx])) {
+                        withStyle(SpanStyle(color = colors.keyword)) { append(keyword) }
+                        i = endIdx
+                        continue
+                    }
+                }
+                if (boundaryOk && (ch == '-' || ch.isDigit())) {
+                    var endIdx = i
+                    if (text[endIdx] == '-') endIdx++
+                    if (endIdx < text.length && text[endIdx].isDigit()) {
+                        while (endIdx < text.length && text[endIdx].isDigit()) endIdx++
+                        if (endIdx < text.length && text[endIdx] == '.') {
+                            val frac = endIdx + 1
+                            if (frac < text.length && text[frac].isDigit()) {
+                                endIdx = frac
+                                while (endIdx < text.length && text[endIdx].isDigit()) endIdx++
+                            }
+                        }
+                        if (endIdx < text.length && (text[endIdx] == 'e' || text[endIdx] == 'E')) {
+                            var exp = endIdx + 1
+                            if (exp < text.length && (text[exp] == '+' || text[exp] == '-')) exp++
+                            if (exp < text.length && text[exp].isDigit()) {
+                                endIdx = exp
+                                while (endIdx < text.length && text[endIdx].isDigit()) endIdx++
+                            }
+                        }
+                        if (endIdx >= text.length || !isJsonTokenChar(text[endIdx])) {
+                            withStyle(SpanStyle(color = colors.keyword)) { append(text.substring(i, endIdx)) }
+                            i = endIdx
+                            continue
+                        }
+                    }
+                }
+            }
+            append(ch)
+            i++
         }
-        append(text.substring(offset))
     }
 }
+
+private fun isJsonTokenChar(ch: Char): Boolean =
+    ch.isLetterOrDigit() || ch == '_' || ch == '$'
 
 /** Collapsed JSON stays escaped; expansion shows the original, independently scrollable string. */
 @Composable
