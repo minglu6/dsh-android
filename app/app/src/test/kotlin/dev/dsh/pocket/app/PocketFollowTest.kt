@@ -139,6 +139,136 @@ class PocketFollowTest {
     private fun open(session: String) = Pocket.openSession(session).also { jobs += it }
     private suspend fun finish(job: Job) = withTimeout(5000) { job.join() }
 
+    @Test fun delayedOpeningAndBufferedProjectionsStayLoadingUntilSnapshot() = runBlocking {
+        Pocket.catalog.value = modelCatalog()
+        Pocket.model.value = mapOf("B" to ModelChoice("p", "desktop", "Desktop", "max"))
+        Pocket.permission.value = mapOf("B" to "stale-permission")
+        val opening = open("B")
+        val old = request("unfollow")
+        assertFalse(Pocket.chat.value!!.loaded)
+        assertNull(Pocket.model.value["B"])
+        assertNull(Pocket.permission.value["B"])
+        reply(old, "{}")
+        val follow = request("follow")
+        modelProjection("sub-B", "B", 3, """{"provider":"p","model":"next","reasoningEffort":"low"}""")
+        projection("sub-B", "B", 3, "read-only")
+        assertFalse(Pocket.chat.value!!.loaded)
+        reply(follow, """{"subId":"sub-B"}""")
+        finish(opening)
+        assertFalse(Pocket.chat.value!!.loaded)
+        assertEquals("next", Pocket.model.value["B"]?.model)
+        assertEquals("read-only", Pocket.permission.value["B"])
+        push("sub-B", """{"type":"snapshot","sessionId":"B","cursor":4,"records":[],"projections":{"asOfSeq":4,"values":{"modelSelection":{"next":{"provider":"p","model":"desktop","reasoningEffort":"max"}},"permissions":{"currentValue":"workspace-write"}}}}""")
+        assertTrue(Pocket.chat.value!!.loaded)
+        assertEquals("desktop", Pocket.model.value["B"]?.model)
+        assertEquals("workspace-write", Pocket.permission.value["B"])
+    }
+
+    @Test fun lifecycleEventsAndStreamPaintsCannotCompleteOpeningButResumeCan() = runBlocking {
+        onActor {
+            val status = jsonOf("ev" to "session", "kind" to "status", "sessionId" to "A", "running" to true)
+            Pocket.javaClass.getDeclaredMethod("onPush", JsonObject::class.java).apply { isAccessible = true }.invoke(Pocket, status)
+            assertFalse(Pocket.chat.value!!.loaded)
+            projection("sub-A", "A", 1, "read-only")
+            push("sub-A", """{"type":"event","event":{"seq":1,"time":100,"type":"turn/start","data":{"turn":1}}}""")
+            streamStart()
+            push("sub-A", """{"type":"assistant-stream","frame":{"type":"chunk","attemptId":"attempt","revision":2,"index":0,"time":150,"chunk":{"type":"text-delta","index":0,"text":"live while opening"}}}""")
+            (get("transcriptPublisher") as TranscriptPublisher).flush()
+            assertEquals("live while opening", Pocket.chat.value!!.items.filterIsInstance<Item.Text>().single().text)
+            assertFalse(Pocket.chat.value!!.loaded)
+            push("sub-A", """{"type":"resume","sessionId":"A","cursor":1,"records":[],"projections":{"asOfSeq":1,"values":{"permissions":{"currentValue":"workspace-write"}}}}""")
+            assertTrue(Pocket.chat.value!!.loaded)
+            assertEquals("workspace-write", Pocket.permission.value["A"])
+        }
+        reply(request("sessions.list"), """{"items":[]}""")
+        onActor {}
+    }
+
+    @Test fun reopeningDiscardsCachedChoicesAndMissingModelSelectionIsNotDefault() = runBlocking {
+        Pocket.catalog.value = modelCatalog()
+        Pocket.model.value = mapOf("A" to ModelChoice("p", "desktop", "Desktop", "max"))
+        Pocket.permission.value = mapOf("A" to "stale-permission")
+        val opening = open("A")
+        val old = request("unfollow")
+        assertNull(Pocket.model.value["A"])
+        assertNull(Pocket.permission.value["A"])
+        reply(old, "{}")
+        reply(request("follow"), """{"subId":"reopened-A"}""")
+        finish(opening)
+        push("reopened-A", """{"type":"snapshot","cursor":10,"records":[],"projections":{"asOfSeq":10,"values":{}}}""")
+        assertTrue(Pocket.chat.value!!.loaded)
+        assertNull(Pocket.model.value["A"])
+        assertNull(Pocket.permission.value["A"])
+        assertFalse(get("modelUsesDefault") as Boolean)
+        modelProjection("reopened-A", "A", 11, "null")
+        assertEquals("default", Pocket.model.value["A"]?.model)
+        assertTrue(get("modelUsesDefault") as Boolean)
+        push("reopened-A", """{"type":"projection","sessionId":"A","seq":12,"key":"modelSelection","value":{"lastUsed":{"provider":"p","model":"desktop"}}}""")
+        assertNull(Pocket.model.value["A"])
+        assertFalse(get("modelUsesDefault") as Boolean)
+    }
+
+    @Test fun snapshotTitleRepairsListSummaryAndMissingTitleDoesNotDeleteIt() {
+        Pocket.sessions.value = listOf(SessionSummary("A", "问候", null, false, false, 1, null))
+        push("sub-A", """{"type":"snapshot","sessionId":"A","cursor":1,"records":[],"projections":{"asOfSeq":1,"values":{"title":"托业考试听力练习方法"}}}""")
+        assertEquals("托业考试听力练习方法", Pocket.chat.value!!.title)
+        assertEquals("托业考试听力练习方法", Pocket.sessions.value.single().title)
+        push("sub-A", """{"type":"snapshot","sessionId":"A","cursor":2,"records":[],"projections":{"asOfSeq":2,"values":{}}}""")
+        assertEquals("托业考试听力练习方法", Pocket.chat.value!!.title)
+        assertEquals("托业考试听力练习方法", Pocket.sessions.value.single().title)
+    }
+
+    @Test fun failedInitialFollowStopsSpinnerWithoutPretendingToKnowSelections() = runBlocking {
+        val opening = open("B")
+        reply(request("unfollow"), "{}")
+        reject(request("follow"), "cannot synchronize")
+        finish(opening)
+        assertTrue(Pocket.chat.value!!.loaded)
+        assertNull(Pocket.model.value["B"])
+        assertNull(Pocket.permission.value["B"])
+        assertNull(get("completionReadySession"))
+    }
+
+    @Test fun latePermissionReadCannotRestoreCacheOrReadyAReopenedSession() = runBlocking {
+        Pocket.ops.value = setOf("permissions.get")
+        val first = open("A")
+        reply(request("unfollow"), "{}")
+        reply(request("follow"), """{"subId":"first-A"}""")
+        val oldPermission = request("permissions.get")
+        val second = open("A")
+        reply(request("unfollow"), "{}")
+        reply(request("follow"), """{"subId":"second-A"}""")
+        val currentPermission = request("permissions.get")
+        reply(oldPermission, """{"current":"obsolete-mode"}""")
+        finish(first)
+        assertFalse(Pocket.chat.value!!.loaded)
+        assertNull(Pocket.permission.value["A"])
+        push("first-A", """{"type":"snapshot","sessionId":"A","cursor":100,"records":[],"projections":{"asOfSeq":100,"values":{"title":"Obsolete title","modelSelection":{"next":{"provider":"p","model":"desktop"}}}}}""")
+        assertFalse(Pocket.chat.value!!.loaded)
+        assertNull(Pocket.chat.value!!.title)
+        assertNull(Pocket.model.value["A"])
+        reply(currentPermission, """{"current":"current-mode"}""")
+        finish(second)
+        assertFalse(Pocket.chat.value!!.loaded)
+        push("second-A", """{"type":"resume","sessionId":"A","cursor":1,"records":[],"projections":{"asOfSeq":1,"values":{}}}""")
+        assertTrue(Pocket.chat.value!!.loaded)
+        assertEquals("current-mode", Pocket.permission.value["A"])
+    }
+
+    @Test fun obsoleteFollowFailureCannotStopTheNewOpeningsSpinner() = runBlocking {
+        val first = open("A")
+        reply(request("unfollow"), "{}")
+        val oldFollow = request("follow")
+        val second = open("A")
+        reply(request("follow"), """{"subId":"second-A"}""")
+        finish(second)
+        reject(oldFollow, "obsolete follow failed")
+        finish(first)
+        assertFalse(Pocket.chat.value!!.loaded)
+        snapshot("second-A")
+        assertTrue(Pocket.chat.value!!.loaded)
+    }
+
     @Test fun summaryPresetIsAvailableBeforeFollowAndSnapshotRemainsAuthoritative() = runBlocking {
         Pocket.sessions.value = listOf(SessionSummary.parse(PocketJson.parseToJsonElement(
             """{"sessionId":"A","projections":{"values":{"title":"Existing","agentPreset":"custom-review"}}}"""))!!)
@@ -828,9 +958,13 @@ class PocketFollowTest {
         assertTrue(requests.tryReceive().isFailure)
         assertEquals("next", Pocket.model.value["new-session"]?.model)
         reply(permission, """{"current":"team"}""")
-        reply(request("follow"), """{"subId":"sub-new"}""")
+        val follow = request("follow")
+        push("sub-new", """{"type":"snapshot","cursor":0,"records":[],"projections":{"asOfSeq":0,"values":{}}}""")
+        reply(follow, """{"subId":"sub-new"}""")
         val prompt = request("prompt")
         assertEquals("team", Pocket.permission.value["new-session"])
+        assertEquals("next", Pocket.model.value["new-session"]?.model)
+        assertTrue(Pocket.chat.value!!.loaded)
         assertEquals(Pocket.firstPrompt.value!!.requestId, prompt["args"]["requestId"].str())
         reply(prompt, "{}")
         finish(creating)
@@ -888,6 +1022,31 @@ class PocketFollowTest {
         assertTrue(requests.tryReceive().isFailure)
     }
 
+    @Test fun sidebarPreparationRetainsConfirmedDraftChoicesWhenBaselineOmitsThem() = runBlocking {
+        Pocket.chat.value = null
+        put("subId", null)
+        val preparing = async {
+            Pocket.prepareSidebarSession(
+                pendingModel = ModelChoice("p", "next", "Next", "low"),
+                pendingPermission = "team",
+            )
+        }.also { jobs += it }
+        reply(request("sessions.create"), """{"sessionId":"blank-sidebar"}""")
+        reply(request("models.select"), """{"selected":{"provider":"p","model":"next","reasoningEffort":"low"}}""")
+        reply(request("permissions.set"), """{"current":"team"}""")
+        val follow = request("follow")
+        assertEquals("next", Pocket.model.value["blank-sidebar"]?.model)
+        assertEquals("team", Pocket.permission.value["blank-sidebar"])
+        assertFalse(Pocket.chat.value!!.loaded)
+        push("sub-blank", """{"type":"snapshot","cursor":0,"records":[],"projections":{"asOfSeq":0,"values":{}}}""")
+        reply(follow, """{"subId":"sub-blank"}""")
+        assertEquals("blank-sidebar", withTimeout(5000) { preparing.await() })
+        assertTrue(Pocket.chat.value!!.loaded)
+        assertEquals("next", Pocket.model.value["blank-sidebar"]?.model)
+        assertEquals("team", Pocket.permission.value["blank-sidebar"])
+        assertTrue(requests.tryReceive().isFailure)
+    }
+
     @Test fun cancelledSidebarCreationCannotStealASelectedSession() = runBlocking {
         Pocket.chat.value = null
         put("subId", null)
@@ -940,9 +1099,11 @@ class PocketFollowTest {
         val opening = open("B")
         val unsubscribe = request("unfollow")
         assertEquals("B", Pocket.chat.value?.sessionId)
+        assertFalse(Pocket.chat.value!!.loaded)
         projection("sub-A", "A", 1000, "auto")
         push("sub-A", """{"type":"event","event":{"type":"user/message","seq":1001,"time":1,"data":{"content":[{"type":"text","text":"old A message"}],"source":{"kind":"user"}}}}""")
         assertNull(Pocket.permission.value["B"])
+        assertFalse(Pocket.chat.value!!.loaded)
         assertEquals(emptyList(), Pocket.chat.value?.items)
         reply(unsubscribe, "{\"stopped\":true}")
         val follow = request("follow")
@@ -952,6 +1113,7 @@ class PocketFollowTest {
         reply(follow, "{\"subId\":\"sub-B\"}")
         finish(opening)
         assertEquals("workspace-write", Pocket.permission.value["B"])
+        assertTrue(Pocket.chat.value!!.loaded)
         projection("sub-B", "A", 2000, "auto") // Misrouted owner on the accepted subscription is also rejected.
         projection("sub-B", "B", 11, "read-only")
         assertEquals("read-only", Pocket.permission.value["B"])
@@ -972,6 +1134,9 @@ class PocketFollowTest {
         reply(staleUnsubscribe, "{\"stopped\":true}")
         finish(openingB)
         projection("sub-B", "B", 1000, "auto")
+        push("sub-B", """{"type":"snapshot","sessionId":"B","cursor":1001,"records":[],"projections":{"asOfSeq":1001,"values":{"title":"Obsolete B","modelSelection":{"next":{"provider":"p","model":"desktop"}}}}}""")
+        assertNull(Pocket.model.value["C"])
+        assertNull(Pocket.chat.value!!.title)
         projection("sub-C", "C", 11, "read-only")
         assertEquals("C", Pocket.chat.value?.sessionId)
         assertEquals("read-only", Pocket.permission.value["C"])

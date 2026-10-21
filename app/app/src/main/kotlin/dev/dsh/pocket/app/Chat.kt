@@ -326,10 +326,21 @@ fun ChatRoot(
             }
         }
     }
-    val defaultModel = catalog?.let { c -> c.find(c.defaultProvider, c.defaultModel) }
-        ?.let { ModelChoice(it.provider, it.id, it.name, catalog?.defaultEffort ?: it.defaultEffort) }
-    val curModel = (if (sid != null) models[sid] else draftModel) ?: defaultModel
-    val curPerm = if (sid != null) perms[sid].orEmpty() else if ("permissions.catalog" in ops) draftPerm else ""
+    val sessionSyncing = chat?.loaded == false
+    val curModel = when {
+        sid == null -> draftModel ?: remember(catalog) {
+            catalog?.let { directory ->
+                directory.find(directory.defaultProvider, directory.defaultModel)?.let {
+                    ModelChoice(it.provider, it.id, it.name, directory.defaultEffort ?: it.defaultEffort)
+                }
+            }
+        }
+        sessionSyncing -> null
+        else -> models[sid]
+    }
+    val curPerm = if (sid != null) {
+        if (sessionSyncing) "" else perms[sid].orEmpty()
+    } else if ("permissions.catalog" in ops) draftPerm else ""
     val currentPermissionLabel = permissionLabel(curPerm, permissionDirectory?.find(curPerm))
     val summary = sessions.firstOrNull { it.sessionId == sid }
     val dot = status[active]
@@ -338,7 +349,7 @@ fun ChatRoot(
             ModelPicker(
                 catalog, curModel, onDismiss = { sheet = Sheet.None },
                 loading = modelLoading, error = modelError, pending = modelPending,
-                enabled = dot == Dot.Online, openModels = modelDirect,
+                enabled = dot == Dot.Online && !sessionSyncing, openModels = modelDirect,
                 onReload = { Pocket.reloadModelCatalog() },
                 onPick = { choice, complete ->
                     if (sid == null) {
@@ -365,7 +376,7 @@ fun ChatRoot(
         }
     }
     fun selectPermission(value: String) {
-        if (Pocket.permissionCatalog.value?.find(value) == null || dot != Dot.Online) return
+        if (sessionSyncing || Pocket.permissionCatalog.value?.find(value) == null || dot != Dot.Online) return
         if (sid == null) {
             draftPermissionOverride = value
             riskPermission = null
@@ -397,11 +408,11 @@ fun ChatRoot(
             }
         }) {
         TopBar(
-            summary?.title ?: chat?.title, sid != null,
+            chat?.title ?: summary?.title, sid != null,
             onMenu = if (showMenuButton) onMenu else null,
             onMore = { if (firstPrompt == null) sheet = Sheet.More },
             onPanel = { if (firstPrompt == null) sheet = Sheet.Panel },
-            preset = presetLabel(chat?.agentPreset, presetRoster), onNew = { Pocket.closeChat() },
+            preset = presetLabel(chat?.agentPreset, presetRoster), onNew = { Pocket.closeChat() }, loading = sessionSyncing,
         )
         CompatibilityBanner(compatibility)
         val question = questions.firstOrNull { chat != null && (it.sessionId == null || it.sessionId == sid) }
@@ -500,8 +511,8 @@ fun ChatRoot(
             }) {
             Composer(
                 if (visibleChat == null) "描述你想要构建的内容, / 调用指令, @ 文件或对话" else "发消息或创建任务, / 调用指令, @ 文件或对话",
-                visibleChat?.running == true, curPerm, curModel,
-                enabled = dot == Dot.Online && !inspectorPicking && firstPrompt == null &&
+                visibleChat?.running == true && !sessionSyncing, curPerm, curModel,
+                enabled = dot == Dot.Online && !sessionSyncing && !inspectorPicking && firstPrompt == null &&
                     (chat != null || curPerm.isEmpty() || (!permissionLoading && permissionDirectory?.find(curPerm) != null)),
                 draft = composerDraft, onDraftChange = ::updateDraft,
                 planMode = visibleChat?.planMode == true,
@@ -509,11 +520,12 @@ fun ChatRoot(
                 pendingImages = pendingImages, pendingFiles = pendingFiles,
                 permissionName = currentPermissionLabel,
                 onPlus = { if (firstPrompt == null) sheet = Sheet.Plus },
-                onPerm = { if (firstPrompt == null && dot == Dot.Online) sheet = Sheet.Permission },
-                onModel = { if (firstPrompt == null && dot == Dot.Online) { modelDirect = false; sheet = Sheet.Model } },
-                modelEnabled = dot == Dot.Online, permissionEnabled = dot == Dot.Online,
+                onPerm = { if (firstPrompt == null && dot == Dot.Online && !sessionSyncing) sheet = Sheet.Permission },
+                onModel = { if (firstPrompt == null && dot == Dot.Online && !sessionSyncing) { modelDirect = false; sheet = Sheet.Model } },
+                modelEnabled = dot == Dot.Online && !sessionSyncing, permissionEnabled = dot == Dot.Online && !sessionSyncing,
                 modelMenu = modelMenu, modelEffort = modelEffortLabel(catalog, curModel),
                 modelBusy = modelPending != null, modelExpanded = sheet == Sheet.Model,
+                sessionSyncing = sessionSyncing,
                 onRemoveImage = { i -> pendingImages = pendingImages.toMutableList().also { it.removeAt(i) } },
                 onRemoveFile = { i -> pendingFiles = pendingFiles.toMutableList().also { it.removeAt(i) } },
                 onRetryFile = { i ->
@@ -538,7 +550,7 @@ fun ChatRoot(
                 onMentionKey = { event -> sheet == Sheet.Mentions && composerDraft.composition == null && mentionKeyHandler(event) },
                 onExitPlan = { Pocket.executeCommand("/plan off") },
                 onSend = { text ->
-                    if (InspectorNavigation.picking || firstPrompt != null) return@Composer
+                    if (InspectorNavigation.picking || firstPrompt != null || sessionSyncing) return@Composer
                     val ready = pendingFiles.filter { it.status == AttachStatus.Ready && it.receiptId != null }
                     val imgs = pendingImages
                     when {
@@ -610,7 +622,7 @@ fun ChatRoot(
             PermissionPickerSheet(
                 current = curPerm, catalog = permissionDirectory, loading = permissionLoading, error = permissionError,
                 onRefresh = { Pocket.reloadPermissionCatalog() }, onDismiss = { sheet = Sheet.None },
-                enabled = dot == Dot.Online, busy = permissionChanging,
+                enabled = dot == Dot.Online && !sessionSyncing, busy = permissionChanging,
                 onPick = { value ->
                     if (value == "danger-full-access" || value == "auto") {
                         riskPermission = value
@@ -623,7 +635,7 @@ fun ChatRoot(
             PermissionRiskSheet(
                 preset = value, onDismiss = { riskPermission = null; sheet = Sheet.None },
                 onConfirm = { selectPermission(value) },
-                enabled = dot == Dot.Online && !permissionChanging && !permissionLoading &&
+                enabled = dot == Dot.Online && !sessionSyncing && !permissionChanging && !permissionLoading &&
                     permissionDirectory?.find(value) != null,
             )
         }
@@ -691,7 +703,7 @@ fun ChatRoot(
 }
 
 @Composable
-private fun TopBar(title: String?, inChat: Boolean, onMenu: (() -> Unit)?, onMore: () -> Unit, onPanel: (() -> Unit)?, preset: String?, onNew: () -> Unit = {}) {
+private fun TopBar(title: String?, inChat: Boolean, onMenu: (() -> Unit)?, onMore: () -> Unit, onPanel: (() -> Unit)?, preset: String?, onNew: () -> Unit = {}, loading: Boolean = false) {
     val chat by Pocket.chat.collectAsState()
     val subagents by Pocket.subagents.collectAsState()
     val sessions by Pocket.sessions.collectAsState()
@@ -708,6 +720,10 @@ private fun TopBar(title: String?, inChat: Boolean, onMenu: (() -> Unit)?, onMor
                     if (parent != null) IconButton({ Pocket.openSession(parent) }, Modifier.size(32.dp)) {
                         Icon(D.chevronLeft, teamText("返回父会话", "Return to parent conversation"), tint = T.Text3, modifier = Modifier.size(16.dp))
                     }
+                    if (loading) Text(navText("同步会话…", "Syncing conversation…"),
+                        style = MaterialTheme.typography.titleMedium, color = T.Text3,
+                        maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+                    else
                     SessionTitleAction(
                         sessionId = chat?.sessionId.orEmpty(),
                         title = childLabel ?: title ?: navText("新会话", "New session"),
@@ -718,7 +734,7 @@ private fun TopBar(title: String?, inChat: Boolean, onMenu: (() -> Unit)?, onMor
                     )
                 }
             }
-            if (inChat) Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+            if (inChat && !loading) Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
                 chat?.sessionId?.let { TeamAction(it) }
                 preset?.let { SessionPresetLabel(it) }
                 chat?.sessionId?.let { SubagentAction(it) }
@@ -1797,6 +1813,7 @@ private fun Composer(
     modelMenu: @Composable () -> Unit = {},
     modelEffort: String? = null,
     modelBusy: Boolean = false,
+    sessionSyncing: Boolean = false,
     modelExpanded: Boolean = false,
     onRemoveImage: (Int) -> Unit = {},
     onRemoveFile: (Int) -> Unit = {},
@@ -1822,6 +1839,7 @@ private fun Composer(
     val hasPending = pendingImages.isNotEmpty() || pendingFiles.isNotEmpty()
     val filesReady = pendingFiles.none { it.status == AttachStatus.Uploading || it.status == AttachStatus.Failed || it.status == AttachStatus.Pending }
     val sendLabel = composerSendLabel(running)
+    val displayedModel = if (sessionSyncing) navText("同步中…", "Syncing…") else model?.name ?: navText("选择模型", "Select model")
     Column(Modifier.padding(start = 14.dp, end = 14.dp, top = if (queueAttached) 0.dp else 4.dp, bottom = 4.dp).fillMaxWidth().clip(T.R20).border(1.dp, T.Border, T.R20).padding(start = 16.dp, end = 10.dp, top = 14.dp, bottom = 10.dp)) {
         if (hasPending) {
             Text(L.pendingFiles(), fontSize = 12.sp, color = T.Text3)
@@ -1873,13 +1891,13 @@ private fun Composer(
             Row(Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically) {
                 val danger = perm == "danger-full-access"
                 // Keep the current mode accessible without taking width from the model name.
-                if (perm.isNotEmpty()) IconButton(
+                if (perm.isNotEmpty() || sessionSyncing) IconButton(
                     onClick = onPerm,
-                    enabled = permissionEnabled,
+                    enabled = permissionEnabled && !sessionSyncing,
                     modifier = Modifier.size(48.dp).testTag("composerPermission")
-                        .semantics { contentDescription = permissionName },
+                        .semantics { contentDescription = if (sessionSyncing) navText("正在同步权限", "Syncing permissions") else permissionName },
                 ) {
-                    val icon = D.permission(perm)
+                    val icon = if (sessionSyncing) D.shield else D.permission(perm)
                     if (icon != null) {
                         Icon(icon, null, tint = if (danger) T.WarnText else T.Text2, modifier = Modifier.size(18.dp))
                     } else {
@@ -1891,19 +1909,19 @@ private fun Composer(
                     Row(
                         Modifier.heightIn(min = 48.dp).clip(T.R8)
                             .clickable(enabled = modelEnabled, onClick = onModel).testTag("composerModel")
-                            .semantics { contentDescription = listOfNotNull(model?.name ?: "选择模型", modelEffort).joinToString(" · ") }
+                            .semantics { contentDescription = listOfNotNull(displayedModel, modelEffort).joinToString(" · ") }
                             .padding(horizontal = 6.dp, vertical = 6.dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
                         ModelLabel(
-                            model?.name ?: "选择模型",
+                            displayedModel,
                             modelReleaseBadge(model?.provider, model?.model, model?.name),
                             modifier = Modifier.weight(1f, fill = false),
                             color = T.Text2.copy(alpha = modelAlpha),
                             nameModifier = Modifier.testTag("composerModelName"),
                         )
                         modelEffort?.let { Spacer(Modifier.width(4.dp)); Text(it, fontSize = 12.sp, color = T.Caption.copy(alpha = modelAlpha), maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.widthIn(max = 48.dp)) }
-                        if (modelBusy) CircularProgressIndicator(Modifier.padding(start = 4.dp).size(14.dp), strokeWidth = 1.5.dp, color = T.Text3)
+                        if (modelBusy || sessionSyncing) CircularProgressIndicator(Modifier.padding(start = 4.dp).size(14.dp), strokeWidth = 1.5.dp, color = T.Text3)
                         else Icon(D.chevronDown, null, tint = T.Text2.copy(alpha = modelAlpha), modifier = Modifier.size(16.dp).rotate(if (modelExpanded) 180f else 0f))
                     }
                     modelMenu()

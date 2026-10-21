@@ -198,6 +198,8 @@ Pocket delivers raw pushes serially through bounded queues; overflow fails the c
 
 `TranscriptPublisher` coalesces only presentation requests for ordinary chunks in fixed 50ms windows, never the underlying events. Structural/terminal/error updates flush pending text immediately; subscription/session replacement cancels stale publication. Follow repair is bounded and never replays prompts or invents a successful terminal state.
 
+Opening an existing conversation keeps metadata unknown until its first valid snapshot/resume. Lifecycle, projection, or stream paints alone do not complete that opening. Chat shows neutral syncing labels, masks stale model/permission/preset data, and pauses model/permission changes and sending while preserving editable text. A baseline applies the selections before publishing ready; its explicit title also corrects the sidebar summary. A missing model selection stays unknown; only an explicit `modelSelection.next: null` adopts the Host default. Welcome-page defaults and Host-confirmed first-prompt/sidebar drafts remain intact. Existing failure exits still end the spinner without claiming that synchronization or model selection succeeded.
+
 Transcript history backfills a folded/empty window that cannot fill the viewport. Once paging starts, reaching or remaining at the top advances through successive older boundaries, including pages merged into the same process row. Prepending pauses follow-bottom; failed or non-advancing pages are not retried merely because live output changes. Scrolling away and back permits another attempt at the same boundary. Paging remains read-only and uses the existing `history.page` contract.
 
 ### 1.12 Turn navigation and return to bottom

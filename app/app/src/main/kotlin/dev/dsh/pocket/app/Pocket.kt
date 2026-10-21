@@ -514,10 +514,14 @@ object Pocket {
     private fun applyModelProjection(sessionId: String, seq: Long, value: kotlinx.serialization.json.JsonElement?) {
         if (seq < modelProjectionSeq) return
         modelProjectionSeq = seq
-        val next = modelChoice(value["next"])
-        modelUsesDefault = next == null
-        if (next == null) applyDefaultModel(sessionId)
-        else model.value = model.value + (sessionId to next)
+        val nextValue = value["next"]
+        val next = modelChoice(nextValue)
+        modelUsesDefault = nextValue is JsonNull
+        when {
+            modelUsesDefault -> applyDefaultModel(sessionId)
+            next != null -> model.value = model.value + (sessionId to next)
+            else -> model.value = model.value - sessionId
+        }
     }
 
     private fun invalidatePermissionCatalog() {
@@ -765,7 +769,12 @@ object Pocket {
             if ((projection["values"] as? JsonObject)?.containsKey("modelSelection") == true) {
                 applyModelProjection(st.sessionId, seq, projection["values"]["modelSelection"])
             }
-            if (seq >= permissionProjectionSeq) {
+            projection["values"]["title"].str()?.let { title ->
+                sessions.value = sessions.value.map {
+                    if (it.sessionId == st.sessionId && it.title != title) it.copy(title = title) else it
+                }
+            }
+            if ((projection["values"] as? JsonObject)?.containsKey("permissions") == true && seq >= permissionProjectionSeq) {
                 permissionProjectionSeq = seq
                 val current = projection["values"]["permissions"]["currentValue"].str()
                 permission.value = if (current == null) permission.value - st.sessionId
@@ -801,7 +810,7 @@ object Pocket {
             }
         }
         transcriptPublisher.cancel()
-        publishTranscript(goal, preset)
+        publishTranscript(goal, preset, ready = frameType == "snapshot" || frameType == "resume")
         if (frameType == "snapshot" || frameType == "resume") {
             completionReadySession = st.sessionId
             syncCompletionView()
@@ -811,6 +820,7 @@ object Pocket {
     private fun publishTranscript(
         goal: JsonObject? = chat.value?.goal,
         preset: String? = chat.value?.agentPreset,
+        ready: Boolean = false,
     ) {
         val st = chat.value ?: return
         val turns = reducer.turnRecords()
@@ -826,7 +836,7 @@ object Pocket {
             running = reducer.running,
             usage = reducer.usage,
             composerMetrics = reducer.composerMetrics,
-            loaded = true,
+            loaded = st.loaded || ready,
             hasMore = reducer.hasMore,
             firstSeq = reducer.firstSeq,
             runStartedAt = if (reducer.running) turns.lastOrNull { !it.closed }?.startedAt else null,
@@ -847,6 +857,7 @@ object Pocket {
             followEpoch.incrementAndGet()
             val old = detachFollow()
             errors.tryEmit("会话事件连续性校验失败，请重新打开会话")
+            chat.value = chat.value?.copy(loaded = true)
             if (old != null) main.launch {
                 try { c.unfollow(old) }
                 catch (e: CancellationException) { throw e }
@@ -860,6 +871,7 @@ object Pocket {
             catch (e: Exception) {
                 if (currentFollow(c, address, expectedEpoch)) {
                     errors.tryEmit(e.message ?: "会话重新同步失败，请重新打开会话")
+                    chat.value = chat.value?.copy(loaded = true)
                 }
             }
         }
@@ -969,7 +981,12 @@ object Pocket {
         }
     }
 
-    private fun initializeChat(sessionId: String, seed: FirstPrompt? = null, address: SessionAddress = SessionAddress(sessionId)) {
+    private fun initializeChat(
+        sessionId: String,
+        seed: FirstPrompt? = null,
+        address: SessionAddress = SessionAddress(sessionId),
+        preserveSelection: Boolean = false,
+    ) {
         transcriptPublisher.cancel()
         continuityRepairAttempts = 0
         followAttempts.remove(sessionId)
@@ -980,6 +997,10 @@ object Pocket {
         permissionProjectionSeq = -1L
         modelProjectionSeq = -1L
         modelUsesDefault = false
+        if (!preserveSelection) {
+            model.value = model.value - sessionId
+            permission.value = permission.value - sessionId
+        }
         resetFeedback()
         seed?.let { reducer.echo(it.text, it.requestId) }
         chat.value = ChatState(sessionId, items = reducer.items(), running = reducer.running,
@@ -1005,25 +1026,30 @@ object Pocket {
         if (member.canOpen) member.address?.let { openSession(it).join() }
     }
 
-    fun openSession(address: SessionAddress) = main.launch {
+    fun openSession(address: SessionAddress) = openSession(address, preserveSelection = false)
+
+    private fun openSession(address: SessionAddress, preserveSelection: Boolean) = main.launch {
         val sessionId = address.sessionId
         clearFirstPrompt()
-        initializeChat(sessionId, address = address)
+        initializeChat(sessionId, address = address, preserveSelection = preserveSelection)
         val c = client ?: return@launch
+        val openingReducer = reducer
+        fun currentOpening() = client === c && reducer === openingReducer && chat.value?.sessionId == sessionId
         runCatching { refollow(c, address, null) }
             .onFailure {
                 if (it is CancellationException) throw it
-                if (client === c && chat.value?.address == address) {
+                if (currentOpening()) {
                     errors.tryEmit(it.message ?: "follow failed")
                     chat.value = chat.value?.copy(loaded = true)
                 }
             }
-        if (client !== c || chat.value?.address != address) return@launch
+        if (!currentOpening()) return@launch
         refreshParentProjections(c, address)
         if (!address.isSubagent && "permissions.get" in ops.value) runCatching {
             val current = c.permission(sessionId)
-            if (client === c && chat.value?.sessionId == sessionId) permission.value = permission.value + (sessionId to current)
+            if (currentOpening()) permission.value = permission.value + (sessionId to current)
         }
+        if (!currentOpening()) return@launch
         if (!address.isSubagent && "feedback.get" in ops.value) loadFeedback(sessionId)
     }
 
@@ -1158,7 +1184,7 @@ object Pocket {
             permission.value = permission.value + (id to selected)
         }
         ensureActive()
-        openSession(id).join()
+        openSession(SessionAddress(id), preserveSelection = true).join()
         id.takeIf { client === c && chat.value?.sessionId == id }
     }
 
@@ -1290,7 +1316,7 @@ object Pocket {
         }
     }
 
-    /** dsh titles a session asynchronously after the first turn; the list is the source of truth. */
+    /** dsh may title a session asynchronously after the first turn, outside its follow frames. */
     private suspend fun refreshTitles(c: PocketClient) = runCatching {
         sessions.value = c.listSessions().sortedByDescending { it.updatedAt }
         publishTeam()
