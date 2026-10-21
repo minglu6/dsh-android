@@ -75,6 +75,45 @@ async function authed() {
   return c
 }
 
+test('invalid WebSocket close frames disconnect only the offending peer and release subscriptions', async () => {
+  let release
+  const aborted = new Promise((resolve) => { release = resolve })
+  sc.follow = (_req, signal) => (async function* () {
+    yield { type: 'snapshot', cursor: 0, records: [], hasMore: false }
+    await new Promise((resolve) => signal.addEventListener('abort', () => { release(); resolve() }, { once: true }))
+  })()
+  const healthy = await authed()
+  const broken = await authed()
+  try {
+    await broken.call('follow', { sessionId: 's1' })
+    await broken.next((frame) => frame.ev === 'follow')
+    // Masked close frame carrying 1006, which is reserved and forbidden on the wire.
+    broken.ws._socket.write(Buffer.from([0x88, 0x82, 0x01, 0x02, 0x03, 0x04, 0x02, 0xec]))
+    assert.equal(await broken.closed, 1002)
+    await aborted
+    assert.equal(server.hasDevices(), true)
+    assert.deepEqual((await healthy.call('sessions.list')).result.items, [{ sessionId: 's1', running: false }])
+    const disconnected = new Promise((resolve) => {
+      const unsubscribe = server.onDevicePresence(() => {
+        if (!server.hasDevices()) { unsubscribe(); resolve() }
+      })
+    })
+    healthy.ws.close()
+    await healthy.closed
+    await disconnected
+    assert.equal(server.hasDevices(), false)
+    const reconnected = await authed()
+    try {
+      assert.deepEqual((await reconnected.call('sessions.list')).result.items, [{ sessionId: 's1', running: false }])
+    } finally {
+      reconnected.ws.close()
+    }
+  } finally {
+    broken.ws.terminate()
+    healthy.ws.terminate()
+  }
+})
+
 test('feedback wire replies contain values on success and complete business failures on rejection', async () => {
   const item = {
     messageId: 'm1', rating: 'positive', note: 'another client', category: 'task-result',
@@ -379,8 +418,10 @@ test('offline timed offers do not claim, and each reconnect attaches a fresh bou
   const first = await authed()
   await first.next(m => m.ev === 'user-question')
   assert.equal(claims.length, 1)
+  const released = new Promise(resolve => claims[0].addEventListener('abort', resolve, { once: true }))
   first.ws.close()
   await first.closed
+  await released
   assert.equal(claims[0].aborted, true)
   const second = await authed()
   await second.next(m => m.ev === 'user-question')

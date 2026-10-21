@@ -428,6 +428,10 @@ export function createPocketServer(opts) {
       terminate: () => ws.terminate(),
       meta: { transport: 'ws', uiOrigin: uiRequestOrigin(req) },
     })
+    ws.on('error', (error) => {
+      console.warn('[pocket] WebSocket connection failed:', error.message)
+      bound.onRemoteClose()
+    })
     ws.on('close', () => bound.onRemoteClose())
     ws.on('message', (raw, isBinary) => {
       if (isBinary) { bound.client.close(1003, 'text only'); return }
