@@ -425,18 +425,21 @@ class TranscriptReducer {
     private var planActive: Boolean = false
     private var planProjectionSeq = -1L
     private val composerProjections = ComposerProjectionStore()
+    private val turnOutlineProjection = TurnOutlineProjectionStore()
 
     val composerMetrics: ComposerMetrics get() = composerProjections.metrics(settledSteps, toolTimings.values)
 
     /** Connection generations have incomparable Host projection watermarks. */
     fun clearComposerProjections() {
         composerProjections.clear()
+        turnOutlineProjection.clear()
         todoProjectionSeq = todoEventSeq
     }
 
     val usage get() = Usage(turns, steps, inputTokens, cacheRead, outputTokens)
     fun stepRecords(): List<StepRecord> = settledSteps.toList()
     fun turnRecords(): List<TurnRecord> = turnFacts.values.sortedBy { it.turn }
+    fun turnOutline(): List<TurnOutlineEntry> = turnOutlineProjection.entries
     fun turnTokenUsage(): Map<Int, TurnTokenUsage> = turnUsageLedger.snapshot()
     fun requestHeaders(): List<RequestHeaderFact> = headerFacts.toList()
     fun todos(): List<TodoItem> = todos
@@ -525,6 +528,8 @@ class TranscriptReducer {
                     return readInbox(frame["value"], seq)
                 } else if (key == "todos") {
                     return readTodoProjection(frame["value"], seq)
+                } else if (key == "turnOutline") {
+                    return turnOutlineProjection.apply(frame["value"], seq)
                 } else return composerProjections.apply(key, frame["value"], seq)
             }
             "assistant-stream" -> return stream(frame["frame"])
@@ -660,6 +665,7 @@ class TranscriptReducer {
 
     private fun readProjections(p: JsonElement?, atSeq: Long) {
         composerProjections.baseline(p, atSeq)
+        turnOutlineProjection.baseline(p, atSeq)
         val values = p["values"]
         values["title"].str()?.let { title = it }
         values["inbox"]?.let { readInbox(it, p["asOfSeq"].long() ?: atSeq, baseline = true) }

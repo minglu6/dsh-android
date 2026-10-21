@@ -429,26 +429,10 @@ private fun TrajPayload(value: String?, missing: String, error: Boolean = false,
         }
         return
     }
-    val paths = remember(value) { extractWorkspacePaths(value) }
-    if (paths.isNotEmpty()) {
-        Column(Modifier.padding(horizontal = if (inset) 14.dp else 0.dp, vertical = 4.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-            paths.forEach { FileLinkChip(it) }
-        }
-    }
-    TrajectoryJsonValue(value, modifier = Modifier.padding(horizontal = if (inset) 14.dp else 0.dp), error = error)
+    TrajectoryJsonValue(value, modifier = Modifier.padding(horizontal = if (inset) 14.dp else 0.dp),
+        error = error, collapsedStringLines = if (inset) 12 else 3)
 }
 
-/** Pull likely workspace file paths from tool JSON / previews for preview chips. */
-internal fun extractWorkspacePaths(source: String): List<String> {
-    val keys = Regex(""""(?:path|file_path|filePath|target_file|targetFile|filename)"\s*:\s*"([^"]+)"""")
-    val fromKeys = keys.findAll(source).map { it.groupValues[1] }.toList()
-    val bare = Regex("""(?<![\\w./-])((?:[.]{0,2}/)?[\w./-]+\.[A-Za-z0-9]{1,12})""")
-        .findAll(source)
-        .map { it.groupValues[1] }
-        .filter { it.contains('/') || it.contains('.') }
-        .toList()
-    return (fromKeys + bare).distinct().filter { parseFileLink(it) != null || it.contains('/') }.take(8)
-}
 
 @Composable
 private fun TrajSchema(schemaDetail: String?) {

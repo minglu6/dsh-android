@@ -238,6 +238,9 @@ class AppPrefs(ctx: Context) {
     var codeWordWrap: Boolean
         get() = p.getBoolean("codeWordWrap", false)
         set(v) = p.edit().putBoolean("codeWordWrap", v).apply()
+    var trajectoryJsonStringWrapping: Boolean
+        get() = p.getBoolean("trajectoryJsonStringWrapping", false)
+        set(v) = p.edit().putBoolean("trajectoryJsonStringWrapping", v).apply()
     var transcriptView: TranscriptView
         get() = when (hostSettings.value(SharedSetting.Transcript).str()) {
             "compact" -> TranscriptView.Compact

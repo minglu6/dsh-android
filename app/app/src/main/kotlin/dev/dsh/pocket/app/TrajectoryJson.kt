@@ -4,6 +4,9 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.material3.Icon
 import androidx.compose.material3.DropdownMenu
@@ -13,12 +16,18 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.withStyle
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.delay
@@ -163,10 +172,16 @@ internal fun trajectoryJsonCopyText(value: JsonElement, path: String, mode: Traj
 
 /** Shared by tool overview/payload/result/schema and request overview/options. */
 @Composable
-internal fun TrajectoryJsonValue(source: String, modifier: Modifier = Modifier, error: Boolean = false) {
+internal fun TrajectoryJsonValue(
+    source: String,
+    modifier: Modifier = Modifier,
+    error: Boolean = false,
+    collapsedStringLines: Int = 3,
+) {
     val document = remember(source) { trajectoryJsonDocument(source) }
     var expanded by remember(source) { mutableStateOf(setOf("")) }
     val rows = remember(document, expanded) { document.root?.let { trajectoryJsonRows(it, expanded) } }
+    val colors = trajectoryJsonColors(error)
     Column(modifier.fillMaxWidth().clip(T.R12)
         .background(if (error) T.Err.copy(alpha = 0.06f) else T.Fill2).padding(8.dp)) {
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
@@ -180,7 +195,11 @@ internal fun TrajectoryJsonValue(source: String, modifier: Modifier = Modifier, 
                 } else rows.forEach { row ->
                     key(row.path, row.closing) {
                         val open = row.path in expanded
-                        Row(Modifier.fillMaxWidth().padding(start = (row.depth.coerceAtMost(10) * 10).dp),
+                        val string = (row.value as? JsonPrimitive)?.takeIf { it.isString }
+                        if (string != null) {
+                            TrajectoryJsonStringField(row, string.content, collapsedStringLines, colors,
+                                Modifier.padding(start = (row.depth.coerceAtMost(10) * 10).dp))
+                        } else Row(Modifier.fillMaxWidth().padding(start = (row.depth.coerceAtMost(10) * 10).dp),
                             verticalAlignment = Alignment.Top) {
                             if (row.expandable && !row.closing) {
                                 Box(Modifier.size(28.dp).testTag("trajectory-json-toggle:${row.path}")
@@ -191,8 +210,10 @@ internal fun TrajectoryJsonValue(source: String, modifier: Modifier = Modifier, 
                                     Icon(if (open) D.chevronDown else D.chevronRight, null, Modifier.size(12.dp), tint = T.Text3)
                                 }
                             } else Spacer(Modifier.width(28.dp))
-                            Text(trajectoryJsonRowText(row, open),
-                                style = T.Mono.copy(fontSize = 12.sp, lineHeight = 20.sp, color = if (error) T.Err else T.Ink),
+                            Text(trajectoryJsonStyledRow(row, open, colors),
+                                style = T.Mono.copy(fontSize = 12.sp, lineHeight = 20.sp, color = colors.punctuation),
+                                maxLines = if (row.expandable && !open) 1 else Int.MAX_VALUE,
+                                overflow = TextOverflow.Ellipsis,
                                 modifier = Modifier.weight(1f).padding(vertical = 4.dp)
                                     .testTag("trajectory-json-${if (row.closing) "close" else "row"}:${row.path}"))
                             if (!row.closing && row.path.isNotEmpty()) {
@@ -201,6 +222,91 @@ internal fun TrajectoryJsonValue(source: String, modifier: Modifier = Modifier, 
                         }
                     }
                 }
+            }
+        }
+    }
+}
+
+private data class TrajectoryJsonColors(val property: Color, val string: Color, val keyword: Color, val punctuation: Color)
+
+@Composable
+private fun trajectoryJsonColors(error: Boolean): TrajectoryJsonColors = when {
+    error -> TrajectoryJsonColors(T.Err, T.Err, T.Err, T.Err)
+    ThemeState.dark -> TrajectoryJsonColors(Color(0xFF5DB0D7), Color(0xFFF28B82), Color(0xFF99C8FF), Color(0xFFE8EAED))
+    else -> TrajectoryJsonColors(Color(0xFF881391), Color(0xFFC41A16), Color(0xFF1C00CF), Color(0xFF202124))
+}
+
+private val jsonDisplayToken = Regex("\"(?:[^\"\\\\]|\\\\.)*\"|(?<![\\w$])(?:true|false|null|-?\\d+(?:\\.\\d+)?(?:[eE][+-]?\\d+)?)(?![\\w$])")
+
+private fun trajectoryJsonStyledRow(row: TrajectoryJsonRow, expanded: Boolean, colors: TrajectoryJsonColors): AnnotatedString {
+    val text = trajectoryJsonRowText(row.copy(label = null), expanded)
+    return buildAnnotatedString {
+        row.label?.let { withStyle(SpanStyle(color = colors.property)) { append("$it: ") } }
+        var offset = 0
+        jsonDisplayToken.findAll(text).forEach { token ->
+            append(text.substring(offset, token.range.first))
+            withStyle(SpanStyle(color = if (token.value.startsWith('"')) colors.string else colors.keyword)) {
+                append(token.value)
+            }
+            offset = token.range.last + 1
+        }
+        append(text.substring(offset))
+    }
+}
+
+/** Collapsed JSON stays escaped; expansion shows the original, independently scrollable string. */
+@Composable
+private fun TrajectoryJsonStringField(
+    row: TrajectoryJsonRow,
+    value: String,
+    collapsedStringLines: Int,
+    colors: TrajectoryJsonColors,
+    modifier: Modifier = Modifier,
+) {
+    var expanded by remember(value) { mutableStateOf(false) }
+    var truncated by remember(value, collapsedStringLines) { mutableStateOf(false) }
+    var wrapped by remember(value) { mutableStateOf(false) }
+    val style = T.Mono.copy(fontSize = 12.sp, lineHeight = 20.sp, color = colors.punctuation)
+    Column(modifier.fillMaxWidth().padding(vertical = 4.dp)) {
+        if (expanded) {
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Text(row.label?.let { "$it:" }.orEmpty(), style = style.copy(color = colors.property),
+                    modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Box(Modifier.size(28.dp).testTag("trajectory-json-string-wrap:${row.path}")
+                    .semantics { contentDescription = if (wrapped) L.unwrapLines() else L.wrapLines() }
+                    .clickable(role = Role.Button) {
+                        wrapped = !wrapped
+                        Pocket.prefs.trajectoryJsonStringWrapping = wrapped
+                    }, contentAlignment = Alignment.Center) {
+                    Icon(D.wrapLines, null, Modifier.size(14.dp), tint = if (wrapped) T.Link else T.Text3)
+                }
+                Box(Modifier.size(28.dp).testTag("trajectory-json-string-collapse:${row.path}")
+                    .semantics { contentDescription = "收起" }
+                    .clickable(role = Role.Button) { expanded = false }, contentAlignment = Alignment.Center) {
+                    Icon(D.chevronDown, null, Modifier.size(14.dp).rotate(180f), tint = T.Text3)
+                }
+                TrajectoryCopyButton(value, "trajectory-json-copy:${row.path}", row.value, row.copyPath)
+            }
+            Box(Modifier.fillMaxWidth().heightIn(max = 320.dp).verticalScroll(rememberScrollState())) {
+                Text(value, style = style, softWrap = wrapped,
+                    modifier = Modifier.testTag("trajectory-json-string-raw:${row.path}")
+                        .then(if (wrapped) Modifier.fillMaxWidth() else Modifier.horizontalScroll(rememberScrollState())))
+            }
+        } else {
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.Top) {
+                Text(trajectoryJsonStyledRow(row, false, colors), style = style,
+                    maxLines = collapsedStringLines, overflow = TextOverflow.Ellipsis,
+                    onTextLayout = { truncated = it.hasVisualOverflow },
+                    modifier = Modifier.weight(1f).testTag("trajectory-json-row:${row.path}"))
+                TrajectoryCopyButton(value, "trajectory-json-copy:${row.path}", row.value, row.copyPath)
+            }
+            if (truncated) {
+                Text("… 展开", style = style.copy(color = T.Text3),
+                    modifier = Modifier.testTag("trajectory-json-string-expand:${row.path}")
+                        .clickable(role = Role.Button) {
+                            wrapped = Pocket.prefs.trajectoryJsonStringWrapping
+                            expanded = true
+                        }.padding(vertical = 4.dp))
             }
         }
     }

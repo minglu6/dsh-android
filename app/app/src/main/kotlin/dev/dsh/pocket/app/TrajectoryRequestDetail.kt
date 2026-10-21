@@ -158,7 +158,7 @@ private fun RequestOptions(configJson: String?) {
     }
     Column {
         Text(TrajL.optionsJson, fontSize = 12.sp, color = T.Text3, modifier = Modifier.padding(bottom = 6.dp))
-        TrajectoryJsonValue(configJson)
+        TrajectoryJsonValue(configJson, collapsedStringLines = 12)
     }
 }
 

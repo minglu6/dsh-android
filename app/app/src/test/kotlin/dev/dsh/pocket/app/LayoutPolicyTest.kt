@@ -18,10 +18,4 @@ class LayoutPolicyTest {
         assertEquals(PreviewKind.Pdf, previewKindFor("/tmp/doc.pdf"))
         assertEquals(PreviewKind.Text, previewKindFor("src/Main.kt"))
     }
-
-    @Test fun extractWorkspacePathsFromToolJson() {
-        val paths = extractWorkspacePaths("""{"path":"bridge/a.mjs","file_path":"docs/x.md"}""")
-        assertTrue(paths.contains("bridge/a.mjs"))
-        assertTrue(paths.contains("docs/x.md"))
-    }
 }

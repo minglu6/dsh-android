@@ -44,6 +44,7 @@ data class ChatState(
     val goal: JsonObject? = null,
     val agentPreset: String? = null,
     val turns: List<TurnRecord> = emptyList(),
+    val turnOutline: List<TurnOutlineEntry> = emptyList(),
     val turnTokenUsage: Map<Int, TurnTokenUsage> = emptyMap(),
     /** Original Host events in the loaded history window; never inferred from rendered items. */
     val inspectorRecords: List<JsonObject> = emptyList(),
@@ -818,6 +819,7 @@ object Pocket {
             steps = reducer.stepRecords(),
             queuedPrompts = reducer.queueMessages(),
             turns = turns,
+            turnOutline = reducer.turnOutline(),
             turnTokenUsage = reducer.turnTokenUsage(),
             inspectorRecords = inspectorLog.snapshot(),
             title = reducer.title ?: st.title,

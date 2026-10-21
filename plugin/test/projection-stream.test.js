@@ -41,13 +41,13 @@ async function connect(url) {
   }
 }
 
-async function start(t, beforeSnapshot = async () => {}) {
+async function start(t, beforeSnapshot = async () => {}, projections = { asOfSeq: 10, values: {} }) {
   const controller = {
     list: async () => ({ items: [] }),
     async *follow(request, signal) {
       await beforeSnapshot(request.address.sessionId)
       if (signal.aborted) return
-      yield { type: 'snapshot', records: [], cursor: 10, projections: { asOfSeq: 10, values: {} } }
+      yield { type: 'snapshot', records: [], cursor: 10, projections }
       if (!signal.aborted) await new Promise(resolve => signal.addEventListener('abort', resolve, { once: true }))
     },
   }
@@ -189,4 +189,85 @@ test('a todo withdrawal queued before the opening cut cannot restore another ses
     type: 'projection', sessionId: 'a', key: 'todos', value: null, seq: 11,
   })
   assert.equal(b.frames.length, 1)
+})
+
+test('whole-log turn outline stays an array in the opening snapshot and live replacements', { timeout: 10000 }, async t => {
+  const initial = [
+    { turn: 0, seq: 0, prompt: 'unloaded first turn', response: 'settled answer' },
+    { turn: 2, seq: 8, prompt: 'loaded tail', response: '' },
+  ]
+  const { server, url } = await start(t, undefined, { asOfSeq: 10, values: { turnOutline: initial } })
+  const a = await connect(url)
+  const b = await connect(url)
+  t.after(() => { a.ws.terminate(); b.ws.terminate() })
+  await a.call('follow', { sessionId: 'a' })
+  await b.call('follow', { sessionId: 'b' })
+  await Promise.all([a.frameCount(1), b.frameCount(1)])
+  assert.deepEqual(a.frames[0].frame.projections.values.turnOutline, initial)
+  const settled = initial.map(entry => entry.turn === 2 ? { ...entry, response: 'final response' } : entry)
+  const next = [...settled, { turn: 3, seq: 12, prompt: '', response: '' }]
+  server.broadcastProjection('a', 'turnOutline', settled, 11)
+  server.broadcastProjection('a', 'turnOutline', next, 12)
+  await Promise.all([a.barrier(), b.barrier()])
+  assert.deepEqual(a.frames.slice(1).map(({ frame }) => [frame.key, frame.value, frame.seq]), [
+    ['turnOutline', settled, 11], ['turnOutline', next, 12],
+  ])
+  assert.equal(b.frames.length, 1)
+  server.broadcastProjection('a', 'turnOutline', undefined, 13)
+  await a.barrier()
+  assert.equal(a.frames[3].frame.value, null)
+})
+
+test('newest buffered outline follows the snapshot cut without flattening its full array', { timeout: 10000 }, async t => {
+  let release
+  const gate = new Promise(resolve => { release = resolve })
+  t.after(() => release())
+  const initial = [{ turn: 0, seq: 0, prompt: 'first', response: '' }]
+  const newest = [...initial, { turn: 1, seq: 11, prompt: 'second', response: 'done' }]
+  const { server, url } = await start(t, () => gate, { asOfSeq: 10, values: { turnOutline: initial } })
+  const c = await connect(url)
+  t.after(() => c.ws.terminate())
+  await c.call('follow', { sessionId: 'selected' })
+  server.broadcastProjection('selected', 'turnOutline', [], 9)
+  server.broadcastProjection('selected', 'turnOutline', [...initial, { turn: 1, seq: 11, prompt: '', response: '' }], 11)
+  server.broadcastProjection('selected', 'turnOutline', newest, 12)
+  server.broadcastProjection('selected', 'turnOutline', null, 11)
+  server.broadcastProjection('other', 'turnOutline', [], 20)
+  await c.barrier()
+  assert.equal(c.frames.length, 0)
+  release()
+  await c.frameCount(2)
+  await c.barrier()
+  assert.equal(c.frames.length, 2)
+  assert.deepEqual(c.frames[0].frame.projections.values.turnOutline, initial)
+  assert.deepEqual(c.frames[1].frame, {
+    type: 'projection', sessionId: 'selected', key: 'turnOutline', value: newest, seq: 12,
+  })
+})
+
+test('resume conversion preserves the whole-log outline and drops buffered updates covered by its cut', { timeout: 10000 }, async t => {
+  let release
+  const gate = new Promise(resolve => { release = resolve })
+  t.after(() => release())
+  const outline = [
+    { turn: 0, seq: 0, prompt: 'outside resumed event range', response: 'complete' },
+    { turn: 1, seq: 8, prompt: 'tail', response: '' },
+  ]
+  const { server, url } = await start(t, () => gate, { asOfSeq: 10, values: { turnOutline: outline } })
+  const c = await connect(url)
+  t.after(() => c.ws.terminate())
+  await c.call('follow', { sessionId: 'selected', afterSeq: 10 })
+  server.broadcastProjection('selected', 'turnOutline', null, 9)
+  server.broadcastProjection('selected', 'turnOutline', [], 10)
+  release()
+  await c.frameCount(1)
+  await c.barrier()
+  assert.equal(c.frames.length, 1)
+  assert.equal(c.frames[0].frame.type, 'resume')
+  assert.deepEqual(c.frames[0].frame.records, [])
+  assert.deepEqual(c.frames[0].frame.projections, { asOfSeq: 10, values: { turnOutline: outline } })
+  server.broadcastProjection('selected', 'turnOutline', [...outline, { turn: 2, seq: 11 }], 11)
+  await c.barrier()
+  assert.equal(c.frames[1].frame.key, 'turnOutline')
+  assert.equal(c.frames[1].frame.value.length, 3)
 })

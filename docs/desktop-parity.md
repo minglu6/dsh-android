@@ -200,6 +200,18 @@ Pocket delivers raw pushes serially through bounded queues; overflow fails the c
 
 Transcript history backfills a folded/empty window that cannot fill the viewport. Once paging starts, reaching or remaining at the top advances through successive older boundaries, including pages merged into the same process row. Prepending pauses follow-bottom; failed or non-advancing pages are not retried merely because live output changes. Scrolling away and back permits another attempt at the same boundary. Paging remains read-only and uses the existing `history.page` contract.
 
+### 1.12 Turn navigation and return to bottom
+
+The Android Chat transcript exposes the desktop's neutral turn rail and floating chevron-down control. Marks use the whole-log `turnOutline` projection merged with visible row anchors; they never use local row numbers as turn identities. A loaded turn prefers its first human prompt; a partial or unloaded turn pages through its real opening sequence before landing. Long-press previews the prompt and latest response, and overflow scrolls within the rail instead of compressing the marks.
+
+Reader scrolling pauses tail following. The bottom control restores it; selecting another turn, scrolling, returning to the bottom, or switching sessions cancels an outstanding navigation landing without cancelling shared history I/O. Failed/non-advancing pages stop rather than loop. Touch adaptation uses a wide transparent lane and compact fixed-pitch ticks.
+
+### 1.13 Full conversation title and selected history marquee
+
+The conversation's top-left truncated title is clickable. Its anchored card uses the desktop `SessionHoverContent` dark palette in either theme, with the full selectable title, real relative update time when known, and the current activity state. Back/outside dismissal and session replacement close it; it is not a sidebar-title interaction.
+
+Only the currently selected history row may marquee an overflowing title. It reveals once at desktop speed and holds at the far edge; leaving selection restores the original opening text and ellipsis immediately. Unselected rows never retain a prior scroll offset. Short titles do not move, reduced motion reveals the end without animation, and offscreen/background rows do not keep animating.
+
 ---
 
 ## 2. Session header

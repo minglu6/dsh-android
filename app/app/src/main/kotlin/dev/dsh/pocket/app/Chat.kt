@@ -3,6 +3,7 @@ package dev.dsh.pocket.app
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.*
+import androidx.compose.foundation.interaction.collectIsDraggedAsState
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.waitForUpOrCancellation
@@ -42,6 +43,9 @@ import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.key.KeyEvent
 import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
+import androidx.compose.ui.input.nestedscroll.NestedScrollSource
+import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalInspectionMode
 import androidx.compose.ui.platform.testTag
@@ -690,6 +694,9 @@ fun ChatRoot(
 private fun TopBar(title: String?, inChat: Boolean, onMenu: (() -> Unit)?, onMore: () -> Unit, onPanel: (() -> Unit)?, preset: String?, onNew: () -> Unit = {}) {
     val chat by Pocket.chat.collectAsState()
     val subagents by Pocket.subagents.collectAsState()
+    val sessions by Pocket.sessions.collectAsState()
+    val activities = rememberSidebarActivities()
+    val summary = sessions.firstOrNull { it.sessionId == chat?.sessionId }
     val parent = chat?.address?.parentSessionId
     val childLabel = subagents?.firstOrNull { it.id == chat?.sessionId }?.label
     Column(Modifier.fillMaxWidth()) {
@@ -701,8 +708,14 @@ private fun TopBar(title: String?, inChat: Boolean, onMenu: (() -> Unit)?, onMor
                     if (parent != null) IconButton({ Pocket.openSession(parent) }, Modifier.size(32.dp)) {
                         Icon(D.chevronLeft, teamText("返回父会话", "Return to parent conversation"), tint = T.Text3, modifier = Modifier.size(16.dp))
                     }
-                    Text(childLabel ?: title ?: "新会话", style = MaterialTheme.typography.titleMedium, color = T.Ink,
-                        maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    SessionTitleAction(
+                        sessionId = chat?.sessionId.orEmpty(),
+                        title = childLabel ?: title ?: navText("新会话", "New session"),
+                        updatedAt = summary?.updatedAt,
+                        blank = summary?.blank == true,
+                        activity = activities[chat?.sessionId] ?: if (chat?.running == true) SidebarActivity.Running else SidebarActivity.Idle,
+                        modifier = Modifier.weight(1f),
+                    )
                 }
             }
             if (inChat) Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -787,6 +800,10 @@ internal fun Transcript(
     onLoadOlder: () -> Unit = { Pocket.loadOlderHistory() },
 ) {
     var followBottom by remember(st.sessionId) { mutableStateOf(true) }
+    var pendingTurn by remember(st.sessionId) { mutableStateOf<Int?>(null) }
+    var jumpRequestedBefore by remember(st.sessionId) { mutableStateOf<Long?>(null) }
+    var bottomRequest by remember(st.sessionId) { mutableIntStateOf(0) }
+    var handledBottomRequest by remember(st.sessionId) { mutableIntStateOf(0) }
     val revealItemKey = InspectorNavigation.revealItemKey.takeIf { InspectorNavigation.sessionId == st.sessionId }
     var highlightedRow by remember(st.sessionId) { mutableStateOf<String?>(null) }
     // Shared presentation preferences are read from the connected Host.
@@ -810,8 +827,17 @@ internal fun Transcript(
     val changesByTurn = remember(allRows) {
         allRows.filterIsInstance<ChatRow.Changes>().associate { it.item.turn to it.item }
     }
-    val rows = visibleChatRows(allRows, openTurns).filterNot {
-        it is ChatRow.Changes && it.item.turn in lastAnswers
+    val rows by remember(allRows, openTurns, lastAnswers) {
+        derivedStateOf {
+            visibleChatRows(allRows, openTurns).filterNot {
+                it is ChatRow.Changes && it.item.turn in lastAnswers
+            }
+        }
+    }
+    val turnMarks = remember(rows, st.turns, st.turnOutline) { transcriptTurnMarks(rows, st.turns, st.turnOutline) }
+    val rowIndexes = remember(rows) { rows.withIndex().associate { it.value.key to it.index } }
+    val turnAnchors = remember(turnMarks, rowIndexes) {
+        turnMarks.mapNotNull { mark -> mark.anchorKey?.let(rowIndexes::get)?.let { it to mark.turn } }.sortedBy { it.first }
     }
     val revealIndex = remember(rows, revealItemKey, changesByTurn, lastAnswers) {
         val target = revealItemKey ?: return@remember -1
@@ -819,7 +845,6 @@ internal fun Transcript(
         inspectorRowIndex(rows, attachedTurn?.let { lastAnswers[it] } ?: target)
     }
     val n = rows.size
-    val lastLen = (st.items.lastOrNull() as? Item.Text)?.text?.length ?: 0
     val inspection = LocalInspectionMode.current
     val skipMotion = inspection || !ValueAnimator.areAnimatorsEnabled()
     // Inspection/tests: pin a new LazyListState at the target. scrollToItem and
@@ -834,10 +859,53 @@ internal fun Transcript(
     val list = remember(st.sessionId, if (inspection) snapIndex else 0) {
         LazyListState(firstVisibleItemIndex = if (inspection) snapIndex else 0)
     }
-    InspectorTranscriptScroll { delta -> followBottom = false; list.dispatchRawDelta(delta) }
+    val density = LocalDensity.current
+    val followThreshold = with(density) { 24.dp.toPx() }
+    val readingInset = with(density) { 96.dp.toPx() }
+    val jumpInset = with(density) { 24.dp.roundToPx() }
+    val dragged by list.interactionSource.collectIsDraggedAsState()
+    val nearBottom by remember(list, followThreshold) {
+        derivedStateOf {
+            val layout = list.layoutInfo
+            val last = layout.visibleItemsInfo.lastOrNull()
+            last != null && last.index == layout.totalItemsCount - 1 &&
+                last.offset + last.size + layout.afterContentPadding - layout.viewportEndOffset <= followThreshold
+        }
+    }
+    val activeTurn by remember(list, turnAnchors, turnMarks, followBottom, readingInset) {
+        derivedStateOf {
+            if (followBottom) turnMarks.lastOrNull()?.turn else {
+                val layout = list.layoutInfo
+                val line = layout.viewportStartOffset + minOf(readingInset,
+                    (layout.viewportEndOffset - layout.viewportStartOffset) * 0.2f)
+                val reading = layout.visibleItemsInfo.lastOrNull { it.offset <= line }?.index
+                    ?: layout.visibleItemsInfo.firstOrNull()?.index ?: 0
+                turnAnchors.lastOrNull { it.first <= reading }?.second ?: turnAnchors.firstOrNull()?.second
+            }
+        }
+    }
+    val readerScroll = remember(st.sessionId, list) {
+        object : NestedScrollConnection {
+            override fun onPreScroll(available: Offset, source: NestedScrollSource): Offset {
+                if (source == NestedScrollSource.UserInput && available.y != 0f) {
+                    followBottom = false
+                    pendingTurn = null
+                }
+                return Offset.Zero
+            }
+        }
+    }
+    LaunchedEffect(dragged) {
+        if (dragged) {
+            followBottom = false
+            pendingTurn = null
+        }
+    }
+    InspectorTranscriptScroll { delta -> followBottom = false; pendingTurn = null; list.dispatchRawDelta(delta) }
     LaunchedEffect(revealItemKey, revealIndex, st.loaded, st.loadingOlder, st.hasMore, skipMotion, inspection) {
         highlightedRow = null
         val target = revealItemKey ?: return@LaunchedEffect
+        pendingTurn = null
         followBottom = false
         val index = revealIndex
         if (index < 0) {
@@ -859,9 +927,15 @@ internal fun Transcript(
             InspectorNavigation.revealItemKey = null
         }
     }
-    LaunchedEffect(n, lastLen, st.running, skipMotion, inspection) {
+    val viewportEnd by remember(list) { derivedStateOf { list.layoutInfo.viewportEndOffset } }
+    LaunchedEffect(st.sessionId, rows, st.running, st.loadingOlder, viewportEnd, skipMotion, inspection, bottomRequest) {
         if (inspection || !followBottom || n == 0 || st.loadingOlder) return@LaunchedEffect
-        if (skipMotion) list.requestScrollToItem(n) else list.animateScrollToItem(n)
+        val animate = bottomRequest != handledBottomRequest && !skipMotion
+        handledBottomRequest = bottomRequest
+        val tail = n + if (st.running) 1 else 0
+        if (skipMotion) list.requestScrollToItem(tail)
+        else if (animate) list.animateScrollToItem(tail)
+        else list.scrollToItem(tail)
     }
     // Folded process rows can leave the latest window shorter than the viewport.
     // Fill that window without requiring a scroll gesture that cannot happen.
@@ -870,6 +944,25 @@ internal fun Transcript(
     val atTop by remember(list) { derivedStateOf { !list.canScrollBackward } }
     val shortWindow by remember(list) { derivedStateOf { !list.canScrollBackward && !list.canScrollForward } }
     val laidOutItems by remember(list) { derivedStateOf { list.layoutInfo.totalItemsCount } }
+    LaunchedEffect(st.sessionId, pendingTurn, turnMarks, st.firstSeq, st.loadingOlder, st.hasMore, st.loaded) {
+        val target = pendingTurn ?: return@LaunchedEffect
+        if (!st.loaded || st.loadingOlder) return@LaunchedEffect
+        val mark = turnMarks.firstOrNull { it.turn == target }
+        val index = mark?.anchorKey?.let(rowIndexes::get)
+        val openingUnloaded = mark?.seq?.let { st.hasMore && st.firstSeq > it } == true
+        if (index != null && !openingUnloaded) {
+            requestedBefore = st.firstSeq
+            if (skipMotion) list.requestScrollToItem(index, -jumpInset) else list.scrollToItem(index, -jumpInset)
+            pendingTurn = null
+        } else if (mark != null && st.hasMore && st.firstSeq >= 0 && jumpRequestedBefore != st.firstSeq) {
+            jumpRequestedBefore = st.firstSeq
+            requestedBefore = st.firstSeq
+            onLoadOlder()
+        } else {
+            pendingTurn = null
+            Pocket.errors.tryEmit(if (en) "Unable to locate turn $target. Try again." else "无法定位第 $target 轮，请重试")
+        }
+    }
     LaunchedEffect(atTop) {
         if (!atTop) {
             historyArmed = true
@@ -878,7 +971,7 @@ internal fun Transcript(
     }
     LaunchedEffect(atTop, shortWindow, laidOutItems, historyArmed, st.hasMore, st.loadingOlder, st.loaded, st.firstSeq, n, st.running) {
         val expectedItems = n + if (st.running) 2 else 1
-        if (!inspection && st.loaded && laidOutItems == expectedItems && atTop &&
+        if (!inspection && pendingTurn == null && st.loaded && laidOutItems == expectedItems && atTop &&
             dev.dsh.pocket.protocol.HistoryPagingPolicy.canLoadOlder(st.hasMore, st.loadingOlder, st.firstSeq) &&
             (historyArmed || shortWindow) && requestedBefore != st.firstSeq
         ) {
@@ -888,9 +981,8 @@ internal fun Transcript(
             onLoadOlder()
         }
     }
-    LaunchedEffect(list.isScrollInProgress, skipMotion) {
-        if (skipMotion) return@LaunchedEffect
-        if (!list.isScrollInProgress) followBottom = !list.canScrollForward
+    LaunchedEffect(dragged, list.isScrollInProgress, nearBottom) {
+        if (!dragged && !list.isScrollInProgress && pendingTurn == null && nearBottom) followBottom = true
     }
     if (st.loaded && st.items.isEmpty() && !st.running && !st.hasMore) { EmptyState(D.chat, "开始对话", "发送第一条消息"); return }
     if (!st.loaded && st.items.isEmpty()) { Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator(color = T.Accent, strokeWidth = 2.dp, modifier = Modifier.size(24.dp)) }; return }
@@ -908,7 +1000,8 @@ internal fun Transcript(
         },
         modifier = Modifier.fillMaxSize(),
     ) {
-    LazyColumn(state = list, modifier = Modifier.fillMaxSize().testTag("transcriptHistory"), contentPadding = PaddingValues(16.dp)) {
+    LazyColumn(state = list, modifier = Modifier.fillMaxSize().nestedScroll(readerScroll).testTag("transcriptHistory"),
+        contentPadding = PaddingValues(start = 16.dp, end = if (turnMarks.size >= 2) 44.dp else 16.dp, top = 16.dp, bottom = 16.dp)) {
         itemsIndexed(rows, key = { _, row -> row.key }) { index, row ->
             val previous = rows.getOrNull(index - 1)
             val gap = when {
@@ -1017,6 +1110,34 @@ internal fun Transcript(
             }
         }
         item(key = "bottom") { Spacer(Modifier.height(1.dp)) }
+    }
+    TranscriptTurnNavigator(
+        turnMarks, activeTurn, pendingTurn,
+        onNavigate = { mark ->
+            followBottom = false
+            jumpRequestedBefore = null
+            requestedBefore = st.firstSeq
+            pendingTurn = mark.turn
+            if (InspectorNavigation.sessionId == st.sessionId) InspectorNavigation.revealItemKey = null
+        },
+        modifier = Modifier.align(Alignment.CenterEnd).padding(end = 4.dp),
+    )
+    if (!followBottom) {
+        Box(Modifier.align(Alignment.BottomEnd).padding(end = 16.dp, bottom = 16.dp).size(48.dp)
+            .testTag("transcriptToBottom")
+            .semantics { contentDescription = if (en) "Scroll to bottom" else "回到底部" }
+            .clickable(role = Role.Button) {
+                pendingTurn = null
+                followBottom = true
+                bottomRequest++
+                if (InspectorNavigation.sessionId == st.sessionId) InspectorNavigation.revealItemKey = null
+            }, contentAlignment = Alignment.Center) {
+            Surface(shape = CircleShape, color = T.Surface, border = BorderStroke(0.5.dp, T.Border), shadowElevation = 3.dp) {
+                Box(Modifier.size(34.dp), contentAlignment = Alignment.Center) {
+                    Icon(D.chevronDown, null, Modifier.size(20.dp), tint = T.Ink)
+                }
+            }
+        }
     }
     }
     }

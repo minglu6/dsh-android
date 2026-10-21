@@ -7,6 +7,8 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.test.*
+import androidx.compose.ui.semantics.SemanticsActions
+import androidx.compose.ui.text.TextLayoutResult
 import kotlinx.serialization.json.*
 import org.junit.Assert.*
 import org.junit.Before
@@ -109,6 +111,7 @@ class TrajectoryJsonInteractionTest {
     @Before fun setUp() {
         Pocket.init(RuntimeEnvironment.getApplication())
         installHostSettingsFixture()
+        Pocket.prefs.trajectoryJsonStringWrapping = false
     }
 
     private fun copiedText(): String {
@@ -191,6 +194,56 @@ class TrajectoryJsonInteractionTest {
         rule.onNodeWithTag("trajectory-json-row:/queries/0").assertIsDisplayed()
         rule.onNodeWithTag("trajectory-json-copy").performClick()
         rule.runOnIdle { assertEquals(Json.parseToJsonElement(source), Json.parseToJsonElement(copiedText())) }
+    }
+
+    private fun layout(tag: String): TextLayoutResult {
+        val results = mutableListOf<TextLayoutResult>()
+        rule.onNodeWithTag(tag).performSemanticsAction(SemanticsActions.GetTextLayoutResult) { it(results) }
+        return results.single()
+    }
+
+    @Test fun longArgumentExpandsToRawTextWrapsAndCopiesWithoutEscapes() {
+        val raw = "# 规则\n" + "one-long-line/".repeat(100) + "\nquote\"slash\\\t中文🙂\n末尾"
+        val payload = buildJsonObject { put("content", raw); put("path", "writing-rules.md") }.toString()
+        rule.setContent { PocketTheme { TrajectoryJsonValue(payload, collapsedStringLines = 12) } }
+        val collapsed = layout("trajectory-json-row:/content")
+        assertEquals(12, collapsed.lineCount)
+        assertTrue(collapsed.hasVisualOverflow)
+        rule.onNodeWithTag("trajectory-json-string-expand:/content").performClick()
+        rule.onNodeWithTag("trajectory-json-string-raw:/content").assertTextEquals(raw)
+        val unwrapped = layout("trajectory-json-string-raw:/content").lineCount
+        assertEquals(4, unwrapped)
+        rule.onNodeWithTag("trajectory-json-string-wrap:/content").performClick()
+        assertTrue(layout("trajectory-json-string-raw:/content").lineCount > unwrapped)
+        rule.onNodeWithTag("trajectory-json-copy:/content").performClick()
+        rule.runOnIdle { assertEquals(raw, copiedText()) }
+        rule.onNodeWithTag("trajectory-json-string-collapse:/content").performClick()
+        rule.onNodeWithTag("trajectory-json-string-raw:/content").assertDoesNotExist()
+        rule.onNodeWithTag("trajectory-json-row:/path").assertIsDisplayed()
+        rule.onNodeWithTag("trajectory-json-string-expand:/content").performClick()
+        assertTrue(layout("trajectory-json-string-raw:/content").lineCount > unwrapped)
+        rule.runOnIdle { Pocket.prefs.trajectoryJsonStringWrapping = false }
+    }
+
+    @Test fun payloadDoesNotInventFileLinksFromContentOrChapterNumbers() {
+        val raw = "参见 `writing-rules.md`、references/system-prompt.md，第 2.2、5.1 节。\n" + "正文".repeat(1000)
+        val payload = buildJsonObject { put("content", raw); put("path", "docs/x.md") }.toString()
+        val row = TrajRow("file", 0, TrajL.kindTool, "write_file", inputDetail = payload)
+        rule.setContent {
+            PocketTheme { Box(Modifier.fillMaxSize()) { TrajectoryDetailSheet(row, 1, onDismiss = {}) } }
+        }
+        assertEquals(3, layout("trajectory-json-row:/content").lineCount)
+        listOf("writing-rules.md", "system-prompt.md", "2.2", "5.1", "x.md").forEach {
+            rule.onNodeWithText(it, substring = false).assertDoesNotExist()
+        }
+        rule.onNode(hasText(TrajL.tabPayload) and SemanticsMatcher.expectValue(
+            androidx.compose.ui.semantics.SemanticsProperties.Role, androidx.compose.ui.semantics.Role.Tab,
+        )).performClick()
+        assertEquals(12, layout("trajectory-json-row:/content").lineCount)
+        rule.onNodeWithTag("trajectory-json-string-expand:/content").performClick()
+        rule.onNodeWithTag("trajectory-json-string-raw:/content").assertTextEquals(raw)
+        rule.onNodeWithTag("trajectory-json-copy:/path").performClick()
+        rule.runOnIdle { assertEquals("docs/x.md", copiedText()) }
     }
 
     @Test fun nonJsonErrorIsReadableAndCopiesUnmodifiedText() {

@@ -573,7 +573,12 @@ private fun SessionRow(
                         }
                     }
                     Spacer(Modifier.width(6.dp))
-                    Text(s.title ?: navText("新会话", "New session"), fontSize = 15.sp, color = if (isArchived) T.Caption else T.Ink, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    SessionRecordTitle(
+                        s.title ?: navText("新会话", "New session"),
+                        color = if (isArchived) T.Caption else T.Ink,
+                        enabled = selected && !menuOpen && !s.blank,
+                        modifier = Modifier.weight(1f).testTag("sessionRecordTitle:${s.sessionId}"),
+                    )
                 }
                 s.searchSnippet?.let { Text(it, color = T.Text2, fontSize = 12.sp, maxLines = 2, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(start = 22.dp)) }
             }
