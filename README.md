@@ -83,6 +83,8 @@ Requirements:
 - Node.js: `^22.19.0 || >=24.0.0` (22.19.0+ on 22.x, or 24.0.0+). 23.x is not included. `dsh plugin` requires `pnpm` on `PATH`; CI uses `pnpm@10`.
 - Network: a reachable LAN, or the same Tailscale tailnet. The firewall must allow the bridge port (default TCP `7690`).
 
+Version 1.0.0: [Release notes](https://github.com/minglu6/dsh-android/releases/tag/v1.0.0) · [Release APK](https://github.com/minglu6/dsh-android/releases/download/v1.0.0/dsh-android-v1.0.0.apk).
+
 Latest release APK (R8 minify and resource shrinking):
 
 https://github.com/minglu6/dsh-android/releases/download/dsh-android-latest/dsh-android.apk

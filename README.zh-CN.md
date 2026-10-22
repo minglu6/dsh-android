@@ -83,6 +83,8 @@ Android 客户端只使用 **host:port WebSocket**。APK 不包含 `libpocket_ir
 - Node.js：`^22.19.0 || >=24.0.0`，即 22.x 的 22.19.0 及以上，或 24.0.0 及以上；不包含 23.x。`dsh plugin` 需要 PATH 中有 pnpm，CI 使用 `pnpm@10`。
 - 网络：手机与电脑处于可互访的局域网，或同一可互访的 Tailscale 网络。防火墙需允许桥接端口（默认 TCP `7690`）。
 
+1.0.0 正式版：[发布说明](https://github.com/minglu6/dsh-android/releases/tag/v1.0.0) · [Release APK](https://github.com/minglu6/dsh-android/releases/download/v1.0.0/dsh-android-v1.0.0.apk)。
+
 最新 release APK（开启 R8 与资源压缩）：
 
 https://github.com/minglu6/dsh-android/releases/download/dsh-android-latest/dsh-android.apk

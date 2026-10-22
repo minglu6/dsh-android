@@ -24,9 +24,9 @@ val releaseSigningConfigured = listOf(
     releaseKeyPassword,
 ).all { it.isPresent && it.get().isNotBlank() }
 
-val appVersionName = "0.1.0"
-// Above the last rolling-latest GITHUB_RUN_NUMBER (206). Bump with each tagged release.
-val appVersionCode = 210
+val appVersionName = "1.0.0"
+// Increase with each tagged release so installed builds can upgrade.
+val appVersionCode = 211
 
 val unitTestShard = run {
     val countValue = providers.gradleProperty("dsh.testShardCount").orNull
